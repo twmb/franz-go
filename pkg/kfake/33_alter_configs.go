@@ -12,6 +12,7 @@ import (
 // Supported resource types:
 // * TOPIC (2)
 // * BROKER (4)
+// * CLIENT_METRICS (16)
 // * GROUP (32)
 //
 // Behavior:
@@ -154,6 +155,28 @@ outer:
 				c.data.setTopicConfig(rr.ResourceName, rc.Name, rc.Value, false)
 			}
 			c.persistTopicsState()
+
+		case kmsg.ConfigResourceTypeClientMetrics:
+			if e := c.denyCluster(creq, kmsg.ACLOperationAlterConfigs, faultKey{resource: rr.ResourceName}); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				answered[resource{rr.ResourceName, rr.ResourceType}] = true
+				if creq.skipsWork(e) { // a timed-out alter still applies
+					continue
+				}
+			}
+			if rr.ResourceName == "" {
+				doner(rr.ResourceName, rr.ResourceType, kerr.InvalidRequest.Code)
+				continue
+			}
+			sub := make(map[string]*string) // the configs replace the subscription
+			if e := alterClientMetrics(sub, setOps(rr.Configs)); e != nil {
+				doner(rr.ResourceName, rr.ResourceType, e.Code)
+				continue
+			}
+			doner(rr.ResourceName, rr.ResourceType, 0)
+			if !req.ValidateOnly {
+				c.setClientMetrics(rr.ResourceName, sub)
+			}
 
 		case kmsg.ConfigResourceTypeGroupConfig:
 			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationAlterConfigs, faultKey{group: rr.ResourceName, resource: rr.ResourceName}); e != nil {

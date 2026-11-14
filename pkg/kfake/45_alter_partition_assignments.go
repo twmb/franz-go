@@ -63,6 +63,7 @@ func (c *Cluster) handleAlterPartitionAssignments(creq *clientReq) (kmsg.Respons
 		return errResp(kerr.RequestTimedOut.Code)
 	}
 	resp.AllowReplicationFactorChange = req.AllowReplicationFactorChange
+	defer c.persistTopicsState() // the leaders and epochs we move
 
 	for _, rt := range req.Topics {
 		st := kmsg.NewAlterPartitionAssignmentsResponseTopic()

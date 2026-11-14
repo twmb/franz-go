@@ -107,6 +107,7 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				acquireEnd: rp.StartOffset,
 				records:    make(map[int64]shareRecord),
 			}
+			sg.persistPartition(rt.Topic, rp.Partition)
 			rst.Partitions = append(rst.Partitions, rsp)
 		}
 		resp.Topics = append(resp.Topics, rst)

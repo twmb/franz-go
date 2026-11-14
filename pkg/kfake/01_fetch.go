@@ -264,8 +264,8 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				continue // UnknownTopicOrPartition
 			}
 			readable = true
-			if fp.staleID {
-				returnEarly = true // InconsistentTopicID or NotLeaderForPartition
+			if fp.staleID || pd.failed {
+				returnEarly = true // InconsistentTopicID, NotLeaderForPartition, or KafkaStorageError
 				break out
 			}
 			if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
@@ -411,6 +411,10 @@ full:
 			} else {
 				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownTopicOrPartition.Code)
 			}
+			continue
+		}
+		if pd.failed {
+			donep(fp.topic, fp.topicID, fp.partition, kerr.KafkaStorageError.Code)
 			continue
 		}
 		if fp.staleID {

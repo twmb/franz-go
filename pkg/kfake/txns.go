@@ -22,17 +22,19 @@ import (
 // bumps the epoch on each commit/abort and returns the new epoch.
 // Produce v12+ implicitly adds partitions to the transaction.
 //
-// kfake completes transactions synchronously, so the PREPARE_COMMIT,
-// PREPARE_ABORT, and pendingTransitionInProgress states are not needed;
-// with DataDir, only a restart sees the prepare entry that pids.log
-// keeps for a crash during EndTxn. Where a real broker returns
-// CONCURRENT_TRANSACTIONS for in-progress transitions, kfake simply
-// completes the operation immediately.
+// kfake completes a transaction synchronously unless a marker fails to
+// write. The transaction then stays open with its decision in ending,
+// DescribeTransactions shows PrepareCommit or PrepareAbort, and EndTxn,
+// InitProducerID, AddPartitionsToTxn, and AddOffsetsToTxn answer
+// CONCURRENT_TRANSACTIONS until a retry writes the rest. With DataDir, a
+// restart also sees the prepare entry that pids.log keeps for a crash
+// during EndTxn.
 //
 // State tracking: instead of the full transaction state machine
 // (Empty, Ongoing, PrepareCommit, PrepareAbort, CompleteCommit,
 // CompleteAbort, Dead, PrepareEpochFence), kfake uses:
 //   - inTx (bool): true = Ongoing
+//   - ending (*bool): non-nil = PrepareCommit or PrepareAbort
 //   - ended (bool): false = Empty (no transaction ended since the
 //     last InitProducerID), true = CompleteCommit or CompleteAbort
 //   - lastWasCommit (bool): which of the two Complete states
@@ -79,6 +81,13 @@ type (
 		txStart    time.Time // start of the current or last transaction, zero after InitProducerID
 		lastActive time.Time // last time this transactional ID was used
 		inTx       bool
+
+		// The decision of an end whose markers are not all written, and
+		// their epoch. The transaction stays open until a retry of the
+		// end, an InitProducerID, or the transaction timer writes the
+		// rest.
+		ending   *bool
+		endEpoch int16
 
 		// Whether a transaction ended since the last InitProducerID,
 		// and if so, whether it was a commit. EndTxn accepts a retry
@@ -162,7 +171,7 @@ func (pids *pids) updateTimer() {
 		var minPid *pidinfo
 		var minExpire time.Time
 		for pidinf := range pids.txs {
-			expire := pidinf.txStart.Add(time.Duration(pidinf.txTimeout) * time.Millisecond)
+			expire := pidinf.txExpire()
 			if minPid == nil || expire.Before(minExpire) {
 				minPid = pidinf
 				minExpire = expire
@@ -171,22 +180,28 @@ func (pids *pids) updateTimer() {
 		if minPid == nil || now.Before(minExpire) {
 			break
 		}
+		if minPid.ending != nil {
+			if p, ok := minPid.endTx(*minPid.ending, minPid.endEpoch); ok {
+				p.persist()
+			}
+			continue
+		}
 		elapsed := now.Sub(minPid.txStart)
 		pids.c.cfg.logger.Logf(LogLevelWarn,
 			"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
 			minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
-		// End before bumping: a bump at an exhausted epoch returns a
-		// new pidinfo with no transaction, which would leave this one
-		// in txs forever.
-		minPid.endTx(false)
-		pids.bumpEpoch(minPid).persist()
+		// The abort fences the producer, and Kafka writes its markers
+		// at the bumped epoch.
+		if p, ok := minPid.endTx(false, minPid.epoch+1); ok {
+			p.persist()
+		}
 	}
 
 	// Schedule timer for the next future expiry.
 	var nextExpire time.Time
 	var found bool
 	for pidinf := range pids.txs {
-		expire := pidinf.txStart.Add(time.Duration(pidinf.txTimeout) * time.Millisecond)
+		expire := pidinf.txExpire()
 		if !found || expire.Before(nextExpire) {
 			nextExpire = expire
 			found = true
@@ -318,12 +333,21 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 		}
 	}
 
-	// Abort any in-flight transaction before bumping. A real broker
-	// returns CONCURRENT_TRANSACTIONS and aborts async, but kfake is
-	// synchronous so we abort inline. Leaving the old epoch's writes
-	// pending lets the next commit swallow them into its own range.
+	// Abort any in-flight transaction before bumping. Kafka fences the
+	// producer at E+1 and answers CONCURRENT_TRANSACTIONS, and the
+	// client's retry gets E+2; we abort at once and answer E+2 in one
+	// response. Leaving the old epoch's writes pending lets the next
+	// commit swallow them into its own range.
 	if pidinf.inTx {
-		pidinf.endTx(false)
+		commit, epoch := false, pidinf.epoch+1
+		if pidinf.ending != nil {
+			commit, epoch = *pidinf.ending, pidinf.endEpoch
+		}
+		var ended bool
+		if pidinf, ended = pidinf.endTx(commit, epoch); !ended {
+			resp.ErrorCode = kerr.ConcurrentTransactions.Code
+			return resp
+		}
 	}
 	pidinf = pids.bumpEpoch(pidinf)
 	pidinf.txTimeout = req.TransactionTimeoutMillis
@@ -476,6 +500,8 @@ func (pids *pids) doAddPartitions(creq *clientReq, t *kmsg.AddPartitionsToTxnReq
 	pidinf, code := pids.txnPid(txnID, t.ProducerID)
 	if code == 0 && pidinf.epoch != t.ProducerEpoch {
 		code = kerr.ProducerFenced.Code
+	} else if code == 0 && pidinf.ending != nil {
+		code = kerr.ConcurrentTransactions.Code
 	}
 	if code != 0 {
 		doneall(code)
@@ -483,8 +509,6 @@ func (pids *pids) doAddPartitions(creq *clientReq, t *kmsg.AddPartitionsToTxnReq
 	}
 
 	if t.VerifyOnly {
-		// We commit and abort synchronously, so a transaction is never
-		// mid-prepare and we never answer CONCURRENT_TRANSACTIONS.
 		for _, rt := range t.Topics {
 			for _, p := range rt.Partitions {
 				code := kerr.TransactionAbortable.Code
@@ -521,6 +545,8 @@ func (pids *pids) doAddOffsets(creq *clientReq) kmsg.Response {
 	pidinf, code := pids.txnPid(req.TransactionalID, req.ProducerID)
 	if code == 0 && pidinf.epoch != req.ProducerEpoch {
 		code = kerr.ProducerFenced.Code
+	} else if code == 0 && pidinf.ending != nil {
+		code = kerr.ConcurrentTransactions.Code
 	}
 	if code != 0 {
 		resp.ErrorCode = code
@@ -714,6 +740,9 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 	case pidinf.epoch != req.ProducerEpoch:
 		resp.ErrorCode = kerr.ProducerFenced.Code
 		return resp
+	case pidinf.ending != nil && req.Commit != *pidinf.ending:
+		resp.ErrorCode = kerr.InvalidTxnState.Code
+		return resp
 	case !pidinf.inTx && req.Version < 5:
 		// Before KIP-890, only a retry of the last end succeeds.
 		if !pidinf.ended || req.Commit != pidinf.lastWasCommit {
@@ -726,26 +755,36 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 		pidinf.txStart = time.Now()
 	}
 
+	// A v5 end bumps the epoch, and Kafka writes its markers at the new
+	// epoch.
+	markerEpoch := pidinf.epoch
+	if req.Version >= 5 {
+		markerEpoch++
+	}
+
 	// The decision goes to disk before any marker or offset: a restart
 	// finishes an end that a crash cut off, as Kafka does from its
 	// prepare record. Kafka answers a failed write NOT_COORDINATOR, and
 	// the client retries.
-	if err := pids.c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Commit: &req.Commit, Offsets: persistTxOffsets(pidinf.txOffsets)}); err != nil {
+	if err := pids.c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Epoch: markerEpoch, Commit: &req.Commit, Offsets: persistTxOffsets(pidinf.txOffsets)}); err != nil {
 		resp.ErrorCode = kerr.NotCoordinator.Code
 		return resp
 	}
 
 	nBatches, nGroups := pidinf.txBatchCount, len(pidinf.txGroups)
 	endTxStart := time.Now()
-	pidinf.endTx(req.Commit)
+	pidinf, ended := pidinf.endTx(req.Commit, markerEpoch)
 	if elapsed := time.Since(endTxStart); elapsed > 5*time.Millisecond {
 		pids.c.cfg.logger.Logf(LogLevelWarn, "txn: EndTxn slow pid=%d epoch=%d elapsed=%dms batches=%d groups=%d",
 			req.ProducerID, req.ProducerEpoch, elapsed.Milliseconds(), nBatches, nGroups)
 	}
+	if !ended { // Kafka's answer while the markers are pending
+		resp.ErrorCode = kerr.ConcurrentTransactions.Code
+		return resp
+	}
 
-	// KIP-890: For v5+ clients, bump epoch and return new ID/epoch.
+	// KIP-890: For v5+ clients, return the bumped ID/epoch.
 	if req.Version >= 5 {
-		pidinf = pids.bumpEpoch(pidinf)
 		resp.ProducerID = pidinf.id
 		resp.ProducerEpoch = pidinf.epoch
 	}
@@ -913,13 +952,15 @@ func txnMarkerBatch(pid int64, epoch int16, commit bool, coordinatorEpoch int32)
 	return b, len(benc)
 }
 
-func (pidinf *pidinfo) endTx(commit bool) {
-	// kfake is its own coordinator and has no coordinator epoch, so the
-	// marker carries 0, the same epoch DescribeProducers reports.
-	b, nbytes := txnMarkerBatch(pidinf.id, pidinf.epoch, commit, 0)
-
+// endTx writes the transaction's markers at epoch. Once every marker is
+// written, it ends the transaction and moves the producer to epoch, and
+// returns the producer, which a bump at an exhausted epoch replaces.
+// Otherwise, the transaction stays open with the decision, without the
+// partitions whose markers were written.
+func (pidinf *pidinfo) endTx(commit bool, epoch int16) (*pidinfo, bool) {
+	c := pidinf.pids.c
+	written := true
 	pidinf.txParts.each(func(t string, p int32, _ *partData) {
-		c := pidinf.pids.c
 		// Markers resolve the partition by name at write time, like the
 		// coordinator's marker writes on a real broker: if the topic
 		// was deleted there is nowhere to write, and if it was deleted
@@ -927,43 +968,23 @@ func (pidinf *pidinfo) endTx(commit bool) {
 		// current log's offsets (where any post-recreation by-name
 		// writes of this transaction landed). Writing through the
 		// registration-time pointer would corrupt a recreated topic's
-		// fresh log via the shared on-disk path.
+		// fresh log on disk: partDir finds the directory by the name's
+		// current topic ID.
 		pd, ok := c.data.tps.getp(t, p)
-		if !ok {
-			return
-		}
-
-		firstUncommitted, hadUncommitted := pd.uncommittedPIDs[pidinf.id]
-		delete(pd.uncommittedPIDs, pidinf.id)
-
-		controlOffset := c.pushBatch(pd, nbytes, b, false) // control record is not itself transactional
-		if controlOffset < 0 {
+		// kfake is its own coordinator and has no coordinator epoch, so
+		// the marker carries 0, the same epoch DescribeProducers reports.
+		if ok && c.writeTxnMarker(pd, pidinf.id, epoch, commit, 0) < 0 {
 			c.cfg.logger.Logf(LogLevelError, "endTx: failed to persist control batch for %s p%d pid %d", t, p, pidinf.id)
-			pd.recalculateLSO()
+			written = false
 			return
 		}
-		// The aborted range comes from this log's own uncommitted
-		// bookkeeping, not the transaction's registration-time offsets,
-		// which can reference a dead incarnation.
-		if !commit && hadUncommitted {
-			pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
-				producerID:  pidinf.id,
-				firstOffset: firstUncommitted,
-				lastOffset:  controlOffset,
-			})
-		}
-		pd.recalculateLSO()
-		// Count the now-committed bytes for readCommitted watchers.
-		// These bytes were skipped in push() because inTx was true.
-		txnBytes, _ := pidinf.txPartBytes.getp(t, p)
-		if txnBytes != nil && *txnBytes > 0 {
-			for w := range pd.watch {
-				if w.readCommitted {
-					w.addBytes(pd, *txnBytes)
-				}
-			}
-		}
+		pidinf.txParts.delp(t, p)
 	})
+	if !written {
+		pidinf.ending, pidinf.endEpoch, pidinf.lastActive = &commit, epoch, time.Now()
+		pidinf.pids.txs[pidinf] = struct{}{}
+		return pidinf, false
+	}
 
 	// Apply pending offset commits to groups.
 	if commit {
@@ -991,6 +1012,19 @@ func (pidinf *pidinfo) endTx(commit bool) {
 	}
 
 	pidinf.resetTx(commit)
+	if epoch > pidinf.epoch {
+		return pidinf.pids.bumpEpoch(pidinf), true
+	}
+	return pidinf, true
+}
+
+// txExpire returns when the timer aborts the transaction, or writes the
+// rest of an end's markers.
+func (pidinf *pidinfo) txExpire() time.Time {
+	if pidinf.ending != nil {
+		return pidinf.lastActive.Add(time.Second)
+	}
+	return pidinf.txStart.Add(time.Duration(pidinf.txTimeout) * time.Millisecond)
 }
 
 func (pidinf *pidinfo) resetTx(wasCommit bool) {
@@ -1001,6 +1035,7 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.txPartFirstOffsets = nil
 	pidinf.txPartBytes = nil
 	pidinf.inTx = false
+	pidinf.ending = nil
 	pidinf.ended = true
 	pidinf.lastWasCommit = wasCommit
 	pidinf.lastActive = time.Now()
@@ -1057,6 +1092,15 @@ func (s *pidwindow) pushAndValidate(epoch int16, firstSeq, numRecs int32, baseOf
 
 	s.accept(epoch, firstSeq, numRecs, baseOffset, maxTimestamp)
 	return true, false, 0
+}
+
+// marker records a transaction marker at epoch. As in Kafka, a new epoch
+// starts the window over, at sequence 0.
+func (s *pidwindow) marker(epoch int16, ts int64) {
+	if epoch != s.epoch {
+		*s = pidwindow{seen: true, epoch: epoch}
+	}
+	s.lastTimestamp = ts
 }
 
 // accept stores a batch in the window and advances nextSeq. A new epoch
@@ -1137,6 +1181,10 @@ func (pids *pids) doDescribeTransactions(creq *clientReq) kmsg.Response {
 // state returns the Kafka name of the transaction state.
 func (pidinf *pidinfo) state() string {
 	switch {
+	case pidinf.ending != nil && *pidinf.ending:
+		return "PrepareCommit"
+	case pidinf.ending != nil:
+		return "PrepareAbort"
 	case pidinf.inTx:
 		return "Ongoing"
 	case !pidinf.ended:
@@ -1303,6 +1351,9 @@ func (pids *pids) txnProducers(topic string, partition int32) []kmsg.DescribePro
 		ap.ProducerID = pidinf.id
 		ap.ProducerEpoch = int32(pw.epoch)
 		ap.LastSequence = (pw.nextSeq - 1) & math.MaxInt32
+		if pw.count == 0 { // like Kafka, no batch at this epoch yet
+			ap.LastSequence = -1
+		}
 		ap.LastTimestamp = pw.lastTimestamp
 		ap.CoordinatorEpoch = 0
 		ap.CurrentTxnStartOffset = -1

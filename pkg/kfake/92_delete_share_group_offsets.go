@@ -73,7 +73,11 @@ func (c *Cluster) handleDeleteShareGroupOffsets(creq *clientReq) (kmsg.Response,
 			rst.ErrorCode = kerr.UnknownTopicOrPartition.Code
 			rst.ErrorMessage = kmsg.StringPtr("There is no offset information to delete.")
 		}
+		parts := sg.partitions[rt.Topic]
 		delete(sg.partitions, rt.Topic)
+		for p := range parts {
+			sg.persistPartition(rt.Topic, p)
+		}
 		resp.Topics = append(resp.Topics, rst)
 	}
 

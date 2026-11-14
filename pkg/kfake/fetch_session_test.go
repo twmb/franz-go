@@ -35,7 +35,8 @@ func fetchPartitionErr(t *testing.T, resp *kmsg.FetchResponse, id [16]byte) erro
 func TestFetchSessionUnknownID(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	mfs := newTestMemFS()
+	c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -93,6 +94,19 @@ func TestFetchSessionUnknownID(t *testing.T) {
 		if rt.TopicID == unknown {
 			t.Fatalf("the forgotten unknown ID is still answered: %+v", rt)
 		}
+	}
+
+	// After a clean restart, the session answers the ID of a partition
+	// it serves, and takes a new unknown ID.
+	c.Close()
+	c = newCluster(t, mfs.opt(), NumBrokers(1))
+	produceN(t, c, topic, 1)
+	incr, err = fetchByID(full.SessionID, 3, 100, unknown, 0).RequestWith(ctx, newPlainClient(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fetchPartitionErr(t, incr, known); err != nil {
+		t.Fatalf("restored session: got %v for the known partition", err)
 	}
 }
 

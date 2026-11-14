@@ -105,14 +105,15 @@ func (c *Cluster) handleWriteTxnMarkers(creq *clientReq) (kmsg.Response, error) 
 func (c *Cluster) writeTxnMarker(pd *partData, pid int64, epoch int16, commit bool, coordinatorEpoch int32) int64 {
 	b, nbytes := txnMarkerBatch(pid, epoch, commit, coordinatorEpoch)
 
-	firstOffset, hadTxn := pd.uncommittedPIDs[pid]
-	delete(pd.uncommittedPIDs, pid)
-
+	// Without its marker, the transaction stays open on the partition,
+	// and the LSO stays below its records, as Kafka keeps them until
+	// the marker is written.
 	controlOffset := c.pushBatch(pd, nbytes, b, false)
 	if controlOffset < 0 {
-		pd.recalculateLSO()
 		return -1
 	}
+	firstOffset, hadTxn := pd.uncommittedPIDs[pid]
+	delete(pd.uncommittedPIDs, pid)
 	if !commit && hadTxn {
 		pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
 			producerID:  pid,
@@ -139,7 +140,7 @@ func (c *Cluster) writeTxnMarker(pd *partData, pid int64, epoch int16, commit bo
 		pidinf.txPartFirstOffsets.delp(pd.t, pd.p)
 		pidinf.txPartBytes.delp(pd.t, pd.p)
 		if pw, ok := pidinf.windows.getp(pd.t, pd.p); ok {
-			pw.lastTimestamp = b.MaxTimestamp
+			pw.marker(epoch, b.MaxTimestamp)
 		}
 	}
 	return controlOffset

@@ -193,15 +193,14 @@ func (c *Cluster) handleDeleteTopics(creq *clientReq) (kmsg.Response, error) {
 	if len(byID)+len(nameDelete) > 0 {
 		c.notifyTopicChange()
 		c.refreshCompactTicker()
-		c.persistTopicsState()
 	}
 	return resp, nil
 }
 
 // deleteTopic wakes the topic's watching fetchers and tears the topic down:
 // its data, its files, and everything else keyed by the topic. The caller
-// runs notifyTopicChange, refreshCompactTicker and persistTopicsState once,
-// after its whole batch.
+// runs notifyTopicChange and refreshCompactTicker once, after its whole
+// batch.
 func (c *Cluster) deleteTopic(topic string, id uuid) {
 	t, ok := c.data.tps.gett(topic)
 	if !ok {
@@ -214,12 +213,10 @@ func (c *Cluster) deleteTopic(topic string, id uuid) {
 		pd.fireShareWatchers()
 	}
 	// Close active segment files before removing partition directories.
-	for p, pd := range t {
+	var pdirs []string
+	for _, pd := range t {
 		pd.closeAllFiles(false)
-		pdir := partDir(c.storageDir, topic, p)
-		if err := c.fs.RemoveAll(pdir); err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "delete topic %s partition %d dir: %v", topic, p, err)
-		}
+		pdirs = append(pdirs, c.partDir(pd))
 	}
 	delete(c.data.tps, topic)
 	delete(c.data.id2t, id)
@@ -227,6 +224,18 @@ func (c *Cluster) deleteTopic(topic string, id uuid) {
 	delete(c.data.treplicas, topic)
 	delete(c.data.tcfgs, topic)
 	c.data.dropNorm(topic)
+	// The commits go before the topic leaves topics.json: groups.log
+	// names a commit's topic only by name, so a commit a crash brought
+	// back would belong to the next topic of that name.
+	c.dropGroupCommits(topic)
+	// The topic leaves topics.json before its files go: a crash between
+	// the two leaves directories that the next load removes.
+	c.persistTopicsState()
+	for _, pdir := range pdirs {
+		if err := c.fs.RemoveAll(pdir); err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "delete topic %s dir %s: %v", topic, pdir, err)
+		}
+	}
 	// Producer state is per-log and dies with the topic: a recreated topic
 	// rehydrates empty state, and handleProduce decides what each version
 	// accepts from a producer it has no state for. Transactional
@@ -243,7 +252,10 @@ func (c *Cluster) deleteTopic(topic string, id uuid) {
 	// recreated topic starts share consumption fresh (SPSO per group
 	// config, no acquired records).
 	for _, sg := range c.shareGroups.gs {
+		ps := sg.partitions[topic]
 		delete(sg.partitions, topic)
+		for p := range ps {
+			sg.persistPartition(topic, p) // a delete, for groups.log
+		}
 	}
-	c.dropGroupCommits(topic)
 }

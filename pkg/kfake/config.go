@@ -285,17 +285,19 @@ func BrokerConfigs(configs map[string]string) Opt {
 
 // DataDir enables disk persistence: the cluster continuously writes state
 // to the given directory, and on NewCluster it reloads persisted state from
-// that directory if it exists. The directory is created if needed.
+// that directory if it exists. The directory is created if needed. Give the
+// cluster a directory of its own: we write files under fixed names, such as
+// topics.json and groups.log, and replace or truncate a file already there
+// under one of those names.
 func DataDir(dir string) Opt {
 	return opt{func(cfg *cfg) { cfg.dataDir = dir }}
 }
 
-// SyncWrites enables per-batch fsync for segment and index files.
-// Without this, writes rely on the OS page cache and are only explicitly
-// synced on segment roll and shutdown, matching real Kafka's default
-// (log.flush.interval.messages=MAX_VALUE). This is much faster but
-// in-flight batches can be lost on a crash. With SyncWrites, every
-// produce is durable immediately at the cost of throughput.
+// SyncWrites enables per-batch fsync for segment and index files, so every
+// produce is durable immediately, at the cost of throughput. Without this,
+// we fsync a segment when it rolls, when compaction rewrites it, and at
+// Close: a crash of the process keeps every write, and a power loss can lose
+// recent batches.
 func SyncWrites() Opt {
 	return opt{func(c *cfg) { c.syncWrites = true }}
 }

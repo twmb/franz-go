@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -88,6 +89,14 @@ type (
 		groupsLogSize      int64
 		pidsLogSize        int64
 		needsGroupsCompact bool
+		// The sizes the last compactions of groups.log and pids.log left,
+		// which compactAt doubles.
+		groupsLogCompacted int64
+		pidsLogCompacted   int64
+		// filesClosed stops the state log appends once Close has saved
+		// and closed every file. Until then, a request Close waits on
+		// is logged like any other.
+		filesClosed bool
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -160,6 +169,12 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	if cfg.injectFS != nil && cfg.dataDir == "" {
 		cfg.dataDir = "/kfake"
+	} else if cfg.injectFS == nil && cfg.dataDir != "" {
+		dir, err := filepath.Abs(cfg.dataDir) // a later chdir must not move it
+		if err != nil {
+			return nil, err
+		}
+		cfg.dataDir = dir
 	}
 	if cfg.synthetic != nil {
 		if err := cfg.synthetic.init(); err != nil {
@@ -198,7 +213,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		c.fs = cfg.injectFS
 		c.storageDir = cfg.dataDir
 	} else if cfg.dataDir != "" {
-		c.fs = osFS{}
+		c.fs = osFS{root: cfg.dataDir}
 		c.storageDir = cfg.dataDir
 	} else {
 		c.fs = newMemFS()
@@ -474,8 +489,8 @@ func (c *Cluster) run() {
 			tc.t.Stop()
 		}
 	}()
-	// A non-positive interval would panic NewTicker. AlterConfigs rejects
-	// one, but BrokerConfigs or an older data directory can still hold it.
+	// A non-positive interval would panic NewTicker. AlterConfigs and
+	// NewCluster refuse one, but an older data dir can still hold it.
 	c.offsetExpireTicker = time.NewTicker(time.Duration(max(c.offsetsRetentionCheckIntervalMs(), 1)) * time.Millisecond)
 	// Loading from disk can create share groups, and it also loads the
 	// broker configs the interval comes from.
@@ -1409,13 +1424,15 @@ func (c *Cluster) MoveTopicPartition(topic string, partition, nodeID int32) erro
 			return
 		}
 		c.setLeader(topic, partition, pd, br)
+		c.persistTopicsState()
 	})
 	return err
 }
 
 // setLeader moves a partition to leader and bumps its epoch. If the leader
 // changes, share groups drop their acquisitions on the partition, as a new
-// Kafka leader does: acquisitions are never persisted.
+// Kafka leader does: acquisitions are never persisted. The caller persists
+// the topics once it has moved every partition it moves.
 func (c *Cluster) setLeader(t string, p int32, pd *partData, leader *broker) {
 	moved := pd.leader != leader
 	pd.leader = leader
@@ -1570,6 +1587,7 @@ func (c *Cluster) shufflePartitions() {
 		}
 		c.setLeader(t, p, pd, leader)
 	})
+	c.persistTopicsState()
 }
 
 // SetFollowers sets the node IDs of brokers that can also serve fetch requests

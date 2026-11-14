@@ -191,22 +191,19 @@ func (sr shareRecord) release(maxDelivery int32, sp *sharePartition, offset int6
 }
 
 // releaseAcquiredBy releases all records acquired by memberID on this
-// partition. Returns true if any records became available. Advances SPSO
-// after releasing.
-func (sp *sharePartition) releaseAcquiredBy(memberID string, maxDelivery int32) bool {
-	released := false
+// partition, and returns whether any record became available and whether
+// any record changed. Advances SPSO after releasing.
+func (sp *sharePartition) releaseAcquiredBy(memberID string, maxDelivery int32) (released, changed bool) {
 	for offset, sr := range sp.records {
 		if sr.state == shareRecordAcquired && sr.acquiredBy == memberID {
 			var ok bool
 			sr, ok = sr.release(maxDelivery, sp, offset)
 			sp.records[offset] = sr
-			if ok {
-				released = true
-			}
+			released, changed = released || ok, true
 		}
 	}
 	sp.advanceSPSO()
-	return released
+	return released, changed
 }
 
 // dropAcquired makes every acquired record available again, undoing the
@@ -507,7 +504,8 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 	lockDuration := time.Duration(g.c.shareRecordLockDurationMs(g.name)) * time.Millisecond
 	maxDelivery := g.c.shareMaxDeliveryAttempts(g.name)
 	released := false
-	g.partitions.each(func(_ string, _ int32, sp *sharePartition) {
+	g.partitions.each(func(t string, p int32, sp *sharePartition) {
+		var expired bool
 		for offset, sr := range sp.records {
 			if sr.state != shareRecordAcquired {
 				continue
@@ -518,11 +516,15 @@ func (g *shareGroup) sweepExpiredAcquisitions() {
 			var ok bool
 			sr, ok = sr.release(maxDelivery, sp, offset)
 			sp.records[offset] = sr
+			expired = true
 			if ok {
 				released = true
 			}
 		}
 		sp.advanceSPSO()
+		if expired {
+			g.persistPartition(t, p)
+		}
 	})
 	if released {
 		g.fireAllShareWatchers()
@@ -566,7 +568,7 @@ func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRe
 		}
 		m.last = time.Now()
 		if subsChanged {
-			g.groupEpoch++
+			g.bumpEpoch()
 			g.recomputeAssignments()
 		}
 	} else {
@@ -584,7 +586,7 @@ func (g *shareGroup) handleJoin(creq *clientReq, req *kmsg.ShareGroupHeartbeatRe
 			last:             time.Now(),
 		}
 		g.members[memberID] = m
-		g.groupEpoch++
+		g.bumpEpoch()
 		g.recomputeAssignments()
 	}
 
@@ -606,7 +608,7 @@ func (g *shareGroup) handleLeave(req *kmsg.ShareGroupHeartbeatRequest, resp *kms
 		m.t.Stop()
 	}
 	delete(g.members, req.MemberID)
-	g.groupEpoch++
+	g.bumpEpoch()
 	g.recomputeAssignments()
 
 	// Like Kafka, leaving the group does not touch the member's share
@@ -652,7 +654,7 @@ func (g *shareGroup) handleRegularHeartbeat(creq *clientReq, req *kmsg.ShareGrou
 		sorted := sortedTopics(req.SubscribedTopicNames)
 		if !slices.Equal(m.subscribedTopics, sorted) {
 			m.subscribedTopics = sorted
-			g.groupEpoch++
+			g.bumpEpoch()
 			g.recomputeAssignments()
 		}
 	}
@@ -907,10 +909,10 @@ func (g *shareGroup) recomputeAssignments() bool {
 	}
 
 	// Like Kafka, initialize every subscribed partition we have no state
-	// for. A new partition of a topic we already know starts at 0, so
-	// records produced to it before its first fetch are not skipped. The
-	// partitions of a topic new to us get a start offset from
-	// share.auto.offset.reset at their first fetch.
+	// for, and persist it. A new partition of a topic we already know
+	// starts at 0, so records produced to it before its first fetch are
+	// not skipped. The partitions of a topic new to us get a start offset
+	// from share.auto.offset.reset at their first fetch.
 	for topic := range topicSubs {
 		_, nparts, ok := g.c.topicInfo(topic)
 		if !ok {
@@ -921,9 +923,11 @@ func (g *shareGroup) recomputeAssignments() bool {
 			start = 0
 		}
 		for p := range nparts {
-			g.partitions.mkp(topic, p, func() *sharePartition {
-				return &sharePartition{spso: start, scanOffset: start, acquireEnd: start, records: make(map[int64]shareRecord)}
-			})
+			if g.partitions.checkp(topic, p) {
+				continue
+			}
+			g.partitions.set(topic, p, sharePartition{spso: start, scanOffset: start, acquireEnd: start, records: make(map[int64]shareRecord)})
+			g.persistPartition(topic, p)
 		}
 	}
 
@@ -989,7 +993,7 @@ func (g *shareGroup) fenceMember(memberID string) {
 	delete(g.members, memberID)
 
 	// As in handleLeave, sessions and acquired records stay.
-	g.groupEpoch++
+	g.bumpEpoch()
 	g.recomputeAssignments()
 }
 
@@ -1006,6 +1010,7 @@ func (g *shareGroup) kill() {
 	}
 	delete(sgs.gs, g.name)
 	sgs.refreshSweepTicker()
+	g.c.persistGroupEntry(groupLogEntry{Type: "deleteGroup", Group: g.name})
 }
 
 // releaseRecordsForSession releases records acquired by memberID only for
@@ -1025,8 +1030,10 @@ func (g *shareGroup) releaseRecordsForSession(memberID string, session *shareSes
 			if !ok {
 				continue
 			}
-			if sp.releaseAcquiredBy(memberID, maxDelivery) {
-				released = true
+			ok, changed := sp.releaseAcquiredBy(memberID, maxDelivery)
+			released = released || ok
+			if changed {
+				g.persistPartition(topicName, partition)
 			}
 		}
 	}
@@ -1048,6 +1055,7 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 			spso = pd.logStartOffset
 		}
 		sp.spso, sp.scanOffset, sp.acquireEnd = spso, spso, spso
+		g.persistPartition(topic, partition)
 	}
 	if start := pd.logStartOffset; sp.spso < start {
 		for o := range sp.records {
@@ -1061,6 +1069,43 @@ func (g *shareGroup) getSharePartition(topic string, partition int32, pd *partDa
 		sp.advanceSPSO()
 	}
 	return sp
+}
+
+// partitionEntry returns the groups.log entry of what a restart keeps of a
+// share partition: the start offset and the records past it, without
+// acquisitions, as Kafka persists none. A record we leave out is available
+// and never delivered.
+func (g *shareGroup) partitionEntry(topic string, partition int32) groupLogEntry {
+	id := g.c.data.t2id[topic]
+	e := groupLogEntry{Type: "shareDelete", Group: g.name, Topic: topic, Part: partition, TopicID: &id}
+	if sp, ok := g.partitions.getp(topic, partition); ok {
+		dropped := sharePartition{records: maps.Clone(sp.records)}
+		dropped.dropAcquired()
+		e.Type, e.Offset, e.Records = "share", sp.spso, make(map[int64]shareLogRecord, len(dropped.records))
+		for o, sr := range dropped.records {
+			if sr.state != shareRecordAvailable || sr.deliveryCount > 0 {
+				e.Records[o] = shareLogRecord{int8(sr.state), sr.deliveryCount}
+			}
+		}
+	}
+	return e
+}
+
+// bumpEpoch moves the group's epoch, which groups.log keeps, so the group
+// and its epoch survive a crash.
+func (g *shareGroup) bumpEpoch() {
+	g.groupEpoch++
+	g.c.persistGroupEntry(g.metaEntry())
+}
+
+func (g *shareGroup) metaEntry() groupLogEntry {
+	return groupLogEntry{Type: "shareMeta", Group: g.name, GroupEpoch: g.groupEpoch}
+}
+
+func (g *shareGroup) persistPartition(topic string, partition int32) {
+	if g.c.persist() {
+		g.c.persistGroupEntry(g.partitionEntry(topic, partition))
+	}
 }
 
 type (
@@ -1227,6 +1272,7 @@ func (g *shareGroup) processShareAcks(
 				onPartition(at.topicID, ap.partition, ec)
 				continue
 			}
+			g.persistPartition(topicName, ap.partition)
 			onPartition(at.topicID, ap.partition, 0)
 			toFire = append(toFire, pd)
 		}

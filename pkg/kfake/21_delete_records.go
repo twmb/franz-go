@@ -113,7 +113,8 @@ func (c *Cluster) deleteRecords(pd *partData, offset int64) (int64, *kerr.Error)
 	if to <= pd.logStartOffset {
 		return pd.logStartOffset, nil
 	}
-	pd.logStartOffset = to
-	c.trimLeft(pd)
+	if !c.trimLeft(pd, to) {
+		return 0, kerr.KafkaStorageError
+	}
 	return to, nil
 }

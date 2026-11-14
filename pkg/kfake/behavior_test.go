@@ -1170,9 +1170,15 @@ func TestTxnInitProducerIDAbortOngoing(t *testing.T) {
 	// it must abort the in-flight transaction before returning a
 	// new PID.
 	resp := initProducerID(t, cl, "txid-abort-ongoing", -1, -1, 60000)
-	if resp.ErrorCode != 0 {
-		t.Fatalf("reinit error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	if resp.ErrorCode != 0 || resp.ProducerEpoch != 2 {
+		t.Fatalf("reinit: got %v epoch %d, want epoch 2", kerr.ErrorForCode(resp.ErrorCode), resp.ProducerEpoch)
 	}
+	// The abort fences the producer, which was at epoch 0.
+	c.admin(func() {
+		if pw, _ := c.pids.byTxid["txid-abort-ongoing"].windows.getp(topic, 0); pw == nil || pw.epoch != 1 {
+			t.Errorf("after the abort: got window %+v, want epoch 1", pw)
+		}
+	})
 
 	// The original txnCl's transaction should be aborted. Consume
 	// with read_committed and verify no records are visible.

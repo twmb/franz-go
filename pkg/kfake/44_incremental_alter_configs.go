@@ -232,20 +232,9 @@ outer:
 				continue
 			}
 			doner(rr.ResourceName, rr.ResourceType, 0)
-			if req.ValidateOnly {
-				continue
+			if !req.ValidateOnly {
+				c.setClientMetrics(rr.ResourceName, dup)
 			}
-			if _, ok := c.clientMetrics[rr.ResourceName]; ok || len(dup) > 0 {
-				c.telemVersion++
-			}
-			if len(dup) == 0 {
-				delete(c.clientMetrics, rr.ResourceName)
-				continue
-			}
-			if c.clientMetrics == nil {
-				c.clientMetrics = make(map[string]map[string]*string)
-			}
-			c.clientMetrics[rr.ResourceName] = dup
 
 		case kmsg.ConfigResourceTypeGroupConfig:
 			if e := c.deny(creq, rr.ResourceName, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationAlterConfigs, faultKey{group: rr.ResourceName, resource: rr.ResourceName}); e != nil {
@@ -332,7 +321,25 @@ func (c *Cluster) setGroupConfigs(group string, configs []kmsg.IncrementalAlterC
 	if len(gc) == 0 {
 		delete(c.groupConfigs, group)
 	}
+	c.persistDynamicConfigsState()
 	c.shareGroups.refreshSweepTicker()
+}
+
+// setClientMetrics stores sub as the client metrics subscription name, or
+// removes the subscription if sub is empty.
+func (c *Cluster) setClientMetrics(name string, sub map[string]*string) {
+	if _, ok := c.clientMetrics[name]; ok || len(sub) > 0 {
+		c.telemVersion++
+	}
+	if len(sub) == 0 {
+		delete(c.clientMetrics, name)
+	} else {
+		if c.clientMetrics == nil {
+			c.clientMetrics = make(map[string]map[string]*string)
+		}
+		c.clientMetrics[name] = sub
+	}
+	c.persistDynamicConfigsState()
 }
 
 // alterClientMetrics applies configs to a client metrics subscription and

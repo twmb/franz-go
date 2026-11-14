@@ -132,6 +132,19 @@ type (
 		leader    *broker
 		followers followers
 
+		// failed is set when a compaction swap leaves the partition's
+		// directories in a state we cannot settle. Like Kafka for a
+		// partition on an offline log dir, we then answer produce and
+		// fetch with KAFKA_STORAGE_ERROR, and we write nothing to it.
+		failed bool
+
+		// swapRetry is set when the next compaction tries to finish the
+		// swap that failed the partition. swapSegs and swapBytes are the
+		// new files' while they are still beside the live directory.
+		swapRetry bool
+		swapSegs  []segmentInfo
+		swapBytes int64
+
 		watch      map[*watchFetch]struct{}
 		shareWatch map[*watchShareFetch]struct{}
 
@@ -570,19 +583,26 @@ func (pd *partData) searchOffset(o int64) (segIdx, metaIdx int, found, atEnd boo
 	return si, mi, true, false
 }
 
-// trimLeft drops what lies below the log start offset after it moves. We
-// save the log start offset before we delete any segment file, so a crash
-// never restarts the log below it.
-func (c *Cluster) trimLeft(pd *partData) {
-	c.persistLogStart(pd)
+// trimLeft moves the log start offset to start and drops what lies below it,
+// and returns whether it did. We save the log start offset before we delete
+// any segment file, so a crash never restarts the log below it; if the save
+// fails, nothing moves.
+func (c *Cluster) trimLeft(pd *partData, start int64) bool {
+	prev := pd.logStartOffset
+	pd.logStartOffset = start
+	if !c.persistLogStart(pd) {
+		pd.logStartOffset = prev
+		return false
+	}
 	c.dropBelowLogStart(pd)
 	pd.recalculateLSO()
+	return true
 }
 
 // dropBelowLogStart drops the batches below the log start offset from the
 // index, and deletes the segment and index files left with none.
 func (c *Cluster) dropBelowLogStart(pd *partData) {
-	pdir := partDir(c.storageDir, pd.t, pd.p)
+	pdir := c.partDir(pd)
 outer:
 	for len(pd.segments) > 0 {
 		seg := &pd.segments[0]
@@ -1557,7 +1577,11 @@ func (pd *partData) isBatchAborted(batch *partBatch) bool {
 // Like Kafka, we never move the log start offset here: a fetch below the
 // first surviving batch reads from that batch.
 func (c *Cluster) compact(pd *partData, topic string) {
-	if !pd.hasNBatches(2) { // need at least 2 batches: compaction keeps the last batch unconditionally
+	if pd.swapRetry {
+		c.finishSwap(pd)
+		return
+	}
+	if pd.failed || !pd.hasNBatches(2) { // need at least 2 batches: compaction keeps the last batch unconditionally
 		return
 	}
 	total := pd.totalBatches()
@@ -1642,9 +1666,11 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	}
 
 	// Pass 2: stream batches again, filtering and keeping survivors.
-	// Also track which PIDs still have surviving data batches.
+	// Also track which PIDs still have surviving data batches, and
+	// whether we remove anything at all.
 	survivingPIDs := make(map[int64]bool)
 	var kept []*partBatch
+	var removed bool
 	n = 0
 	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
 		if n >= cleanableEnd {
@@ -1663,6 +1689,10 @@ func (c *Cluster) compact(pd *partData, topic string) {
 			return true
 		}
 		if pd.isBatchAborted(batch) {
+			removed = true
+			if isLastData(batch) {
+				kept = append(kept, rebuildBatch(batch, nil))
+			}
 			return true
 		}
 
@@ -1691,6 +1721,7 @@ func (c *Cluster) compact(pd *partData, topic string) {
 			return true
 		})
 
+		removed = removed || len(surviving) < int(batch.NumRecords)
 		if len(surviving) == 0 {
 			if isLastData(batch) {
 				kept = append(kept, rebuildBatch(batch, nil))
@@ -1718,11 +1749,15 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	for _, batch := range kept {
 		isControl := batch.Attributes&0x0020 != 0
 		if isControl && !survivingPIDs[batch.ProducerID] {
+			removed = true
 			continue
 		}
 		filtered = append(filtered, batch)
 	}
 	kept = filtered
+	if !removed {
+		return
+	}
 
 	// The batches past the cleanable range are kept as they are.
 	n = 0
@@ -1744,14 +1779,15 @@ func (c *Cluster) compact(pd *partData, topic string) {
 		return
 	}
 
-	// Rebuild partition metadata.
+	// Rebuild segments, batchMeta, and partition metadata from compacted
+	// batches.
+	if !c.rebuildSegments(pd, kept) {
+		return
+	}
 	pd.nbytes = 0
 	for _, b := range kept {
 		pd.nbytes += int64(b.nbytes)
 	}
-
-	// Rebuild segments and batchMeta from compacted batches.
-	c.rebuildSegments(pd, kept)
 
 	// Prune aborted txn entries that are now before logStartOffset.
 	pd.trimAbortedTxns()
@@ -1817,8 +1853,7 @@ func (c *Cluster) applyRetention(pd *partData, topic string) {
 	}
 
 	if newLogStart > pd.logStartOffset {
-		pd.logStartOffset = newLogStart
-		c.trimLeft(pd)
+		c.trimLeft(pd, newLogStart) // a failed save retries at the next pass
 	}
 }
 

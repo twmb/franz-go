@@ -86,6 +86,7 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 	}
 
 	dirs := c.logDirs()
+	var moved bool
 	for _, k := range order {
 		dir := dests[k]
 		pd, ok := c.data.tps.getp(k.t, k.p)
@@ -111,7 +112,11 @@ func (c *Cluster) handleAlterReplicaLogDirs(creq *clientReq) (kmsg.Response, err
 			}
 			pd.dirs[b.node] = dir
 			donep(k.t, k.p, 0)
+			moved = true
 		}
+	}
+	if moved {
+		c.persistTopicsState()
 	}
 
 	return resp, nil

@@ -244,7 +244,7 @@ func (c *Cluster) notifyTopicChange() {
 	// a topic it subscribes to, which always changes its assignment.
 	for _, sg := range c.shareGroups.gs {
 		if sg.recomputeAssignments() {
-			sg.groupEpoch++
+			sg.bumpEpoch()
 		}
 	}
 }
@@ -3326,20 +3326,16 @@ func (g *group) classicMetaEntry() groupLogEntry {
 func (g *group) persistClassicMeta() { g.c.persistGroupEntry(g.classicMetaEntry()) }
 
 func (g *group) commitEntry(topic string, part int32, oc offsetCommit) groupLogEntry {
-	entry := groupLogEntry{
-		Type:     "commit",
-		Group:    g.name,
-		Topic:    topic,
-		Part:     part,
-		Offset:   oc.offset,
-		Epoch:    oc.leaderEpoch,
-		Metadata: oc.metadata,
+	return groupLogEntry{
+		Type:       "commit",
+		Group:      g.name,
+		Topic:      topic,
+		Part:       part,
+		Offset:     oc.offset,
+		Epoch:      oc.leaderEpoch,
+		Metadata:   oc.metadata,
+		LastCommit: oc.lastCommit.UnixNano(),
 	}
-	if !oc.lastCommit.IsZero() {
-		ms := oc.lastCommit.UnixMilli()
-		entry.LastCommit = &ms
-	}
-	return entry
 }
 
 func (g *group) commitAndPersist(topic string, part int32, oc offsetCommit) {
@@ -3404,9 +3400,6 @@ func (g *group) expireOffsets(retentionMs int64, hasUnstableOffsets bool) bool {
 	g.commits.each(func(topic string, part int32, oc *offsetCommit) {
 		if _, ok := subscribed[topic]; ok {
 			return // subscribed - skip
-		}
-		if oc.lastCommit.IsZero() {
-			return // no timestamp (pre-KIP-211 data) - skip
 		}
 		base := oc.lastCommit
 		// For empty classic groups with protocolType, use max(emptyAt, commitTimestamp)
@@ -3851,7 +3844,7 @@ func (g *group) validateMemberGeneration(memberID string, instanceID *string, ge
 // session state. A member whose session expired while we were down leaves
 // as its session timeout would have made it: its instance ID is released and
 // the group rebalances.
-func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGroup) {
+func (g *group) restoreClassicMembers(sg sessionClassicGroup) {
 	// Provisionally set state to groupStable while restoring members;
 	// if the persisted sg.State was non-Stable we re-trigger the
 	// rebalance at the end of the function. See comment near the end.
@@ -3859,12 +3852,7 @@ func (g *group) restoreClassicMembers(shutdownAt time.Time, sg sessionClassicGro
 	g.leader = sg.Leader
 	var expired bool
 	for _, sm := range sg.Members {
-		// Use per-member last heartbeat time if available,
-		// falling back to shutdownAt for old session files.
 		lastHB := sm.LastHeartbeat
-		if lastHB.IsZero() {
-			lastHB = shutdownAt
-		}
 		remaining := time.Duration(sm.SessionTimeoutMs)*time.Millisecond - time.Since(lastHB)
 		if remaining <= 0 {
 			g.releaseStaticMember(sm.InstanceID, sm.ID)
@@ -3933,7 +3921,7 @@ func (g *group) atSessionTimeoutIn(m *groupMember, d time.Duration, fn func()) {
 // session state. A member whose session expired while we were down is
 // evicted as its session timeout would have: what it owned is freed and
 // the group epoch is bumped.
-func (g *group) restoreConsumerMembers(shutdownAt time.Time, sg sessionConsumerGroup) {
+func (g *group) restoreConsumerMembers(sg sessionConsumerGroup) {
 	sessionTimeout := time.Duration(g.c.consumerSessionTimeoutMsForGroup(g.name)) * time.Millisecond
 
 	g.partitionEpochs = sg.PartitionEpochs
@@ -3944,12 +3932,7 @@ func (g *group) restoreConsumerMembers(shutdownAt time.Time, sg sessionConsumerG
 
 	var expired bool
 	for _, sm := range sg.Members {
-		// Use per-member last heartbeat time if available,
-		// falling back to shutdownAt for old session files.
 		lastHB := sm.LastHeartbeat
-		if lastHB.IsZero() {
-			lastHB = shutdownAt
-		}
 		remaining := sessionTimeout - time.Since(lastHB)
 		if remaining <= 0 {
 			g.c.cfg.logger.Logf(LogLevelDebug, "restoreConsumerMembers: group=%s member=%s expired (lastHB=%v ago)",

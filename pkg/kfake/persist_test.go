@@ -53,7 +53,7 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 	}
 
 	// Verify snapshot was written during clean shutdown
-	snapPath := filepath.Join(dir, "partitions", "test-topic-0", "snapshot.json")
+	snapPath := filepath.Join(partPath(t, dir, "test-topic"), "snapshot.json")
 	if _, err := os.Stat(snapPath); err != nil {
 		t.Fatalf("expected snapshot.json after clean shutdown: %v", err)
 	}
@@ -356,11 +356,13 @@ func TestPersistACLsRestart(t *testing.T) {
 	}
 }
 
+// TestPersistBrokerConfigsRestart verifies that broker configs, a client
+// metrics subscription, and a feature level survive a crash.
 func TestPersistBrokerConfigsRestart(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir, crashed := t.TempDir(), t.TempDir()
 
-	// Phase 1: set broker configs, close
+	// Phase 1: set them, crash
 	{
 		c := newCluster(t,
 			DataDir(dir),
@@ -369,7 +371,6 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 				"log.retention.ms": "86400000",
 			}),
 		)
-		// A client metrics subscription is the only session state.
 		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
 		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
 		rr.ResourceType = kmsg.ConfigResourceTypeClientMetrics
@@ -386,13 +387,20 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 		if resp.Resources[0].ErrorCode != 0 {
 			t.Fatal(kerr.ErrorForCode(resp.Resources[0].ErrorCode))
 		}
-		c.Close()
+		ureq := kmsg.NewPtrUpdateFeaturesRequest()
+		f := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
+		f.Feature, f.MaxVersionLevel, f.UpgradeType = "transaction.version", 0, 2 // safe downgrade
+		ureq.FeatureUpdates = append(ureq.FeatureUpdates, f)
+		if uresp, err := ureq.RequestWith(context.Background(), newPlainClient(t, c)); err != nil || uresp.ErrorCode != 0 {
+			t.Fatalf("UpdateFeatures: %v %v", err, uresp)
+		}
+		copyDir(t, dir, crashed) // the cluster keeps writing to dir
 	}
 
 	// Phase 2: reopen, verify config persisted
 	{
 		c := newCluster(t,
-			DataDir(dir),
+			DataDir(crashed),
 			NumBrokers(1),
 		)
 
@@ -424,6 +432,11 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 		if names := listed.Names(); err != nil || len(names) != 1 || names[0] != "sub" {
 			t.Fatalf("client metrics after restart: got %v (%v), want [sub]", names, err)
 		}
+		c.admin(func() {
+			if level, ok := c.features["transaction.version"]; !ok || level != 0 || c.featuresEpoch != 1 {
+				t.Errorf("transaction.version after restart: got %d (set %v) at epoch %d, want 0 at epoch 1", level, ok, c.featuresEpoch)
+			}
+		})
 	}
 }
 
@@ -512,7 +525,7 @@ func TestPersistCRCCorruption(t *testing.T) {
 
 	// Delete snapshot.json so Phase 2 forces a full replay through
 	// the corrupted segment files (not the snapshot path).
-	partDir := filepath.Join(dir, "partitions", "crc-topic-0")
+	partDir := partPath(t, dir, "crc-topic")
 	os.Remove(filepath.Join(partDir, "snapshot.json"))
 
 	// Corrupt the last entry in a segment file.
@@ -595,7 +608,7 @@ func TestPersistSegmentRollover(t *testing.T) {
 	}
 
 	// Verify multiple segment files were created
-	partDir := filepath.Join(dir, "partitions", "seg-topic-0")
+	partDir := partPath(t, dir, "seg-topic")
 	entries, err := os.ReadDir(partDir)
 	if err != nil {
 		t.Fatal(err)
@@ -644,6 +657,56 @@ func TestPersistNoDataDir(t *testing.T) {
 	r := &kgo.Record{Topic: "no-persist", Value: []byte("test")}
 	if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPersistRelativeDataDir verifies that a chdir after NewCluster does not
+// move a relative DataDir. It cannot be parallel: it changes the process's
+// working directory.
+func TestPersistRelativeDataDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	c := newCluster(t, DataDir("data"), NumBrokers(1), SeedTopics(1, "t"))
+	t.Chdir(t.TempDir())
+	produceN(t, c, "t", 1)
+	c.Close()
+	if _, err := os.Stat("data"); !os.IsNotExist(err) {
+		t.Fatal("the cluster wrote to data in the directory we changed to")
+	}
+}
+
+// TestPersistTempSymlink verifies that we write only inside the data dir: a
+// symlink planted where we write a temporary file is replaced, not
+// followed, so its target keeps its contents, and a path outside the data
+// dir fails.
+func TestPersistTempSymlink(t *testing.T) {
+	t.Parallel()
+	dir, targets := t.TempDir(), t.TempDir()
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
+	names := []string{"topics.json.tmp", "pids.log.tmp", "groups.log.tmp"}
+	for _, name := range names {
+		target := filepath.Join(targets, name)
+		if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Skipf("cannot symlink: %v", err)
+		}
+	}
+	if err := c.CreateTopic("t", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.admin(func() {
+		c.compactPIDsLog()
+		c.compactGroupsLog()
+	})
+	for _, name := range names {
+		if data, _ := os.ReadFile(filepath.Join(targets, name)); string(data) != "keep" {
+			t.Errorf("the target of %s: got %q, want it untouched", name, data)
+		}
+	}
+	outside := filepath.Join(dir, "..", "outside")
+	if err := c.fs.MkdirAll(outside, 0o755); err == nil {
+		t.Errorf("MkdirAll(%s) outside the data dir: got no error", outside)
 	}
 }
 
@@ -949,11 +1012,17 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 	}
 }
 
-// TestPersistPIDsLogReplay verifies how a restart ends the transactions
-// that pids.log leaves open: a begin after a prepare is a new transaction,
-// which aborts; a pids.log compaction while the restart ends transactions
-// keeps the prepare entries of those it has yet to end; and an EndTxn whose
-// prepare write fails leaves its transaction open.
+// TestPersistPIDsLogReplay verifies that a producer's epoch and last
+// transaction outcome survive a restart, and how a restart ends the
+// transactions that pids.log leaves open: a begin after a prepare is a new
+// transaction, which aborts; a pids.log compaction while the restart ends
+// transactions keeps the prepare entries of those it has yet to end; and an
+// EndTxn whose prepare write fails leaves its transaction open. It also
+// verifies that an InitProducerID answered while Close waits is logged,
+// that state logs whose live state is past state.log.compact.bytes, or
+// whose compaction failed, do not compact at every append, and that a
+// regular commit made after a staged one in the same millisecond still wins
+// after a restart.
 func TestPersistPIDsLogReplay(t *testing.T) {
 	t.Parallel()
 	commit := new(true)
@@ -969,20 +1038,23 @@ func TestPersistPIDsLogReplay(t *testing.T) {
 		setup        func(*testing.T, *Cluster)
 		compactBytes string // state.log.compact.bytes at the restart
 		want         map[string]string
+		commit       int64 // if set, group g's offset for t-0 after the restart
 	}{
+		{"ended-commit", logged(pidLogEntry{Type: "init", PID: 1, TxID: "a", Epoch: 2, Timeout: 60000, Commit: commit}), "", map[string]string{"a": "CompleteCommit 2"}, 0},
+		{"ended-abort", logged(pidLogEntry{Type: "init", PID: 1, TxID: "a", Epoch: 2, Timeout: 30000, Commit: new(false)}), "", map[string]string{"a": "CompleteAbort 2"}, 0},
 		{"begin-after-prepare", logged(
 			pidLogEntry{Type: "init", PID: 1, TxID: "a", Timeout: 60000},
 			pidLogEntry{Type: "prepare", PID: 1, Commit: commit},
 			pidLogEntry{Type: "begin", PID: 1}, // the init after the prepare failed
-		), "", map[string]string{"a": "CompleteAbort"}},
+		), "", map[string]string{"a": "CompleteAbort 1"}, 0},
 		{"compact-while-ending", logged(append([]pidLogEntry{
 			{Type: "init", PID: 1, TxID: "a", Timeout: 60000},
 			{Type: "begin", PID: 1},
 			{Type: "prepare", PID: 1, Commit: commit},
 			{Type: "init", PID: 2, TxID: "b", Timeout: 60000},
 			{Type: "begin", PID: 2},
-			{Type: "prepare", PID: 2, Commit: commit},
-		}, slices.Repeat([]pidLogEntry{{Type: "expire", PID: 3}}, 10)...)...), "300", map[string]string{"a": "CompleteCommit", "b": "CompleteCommit"}},
+			{Type: "prepare", PID: 2, Epoch: 1, Commit: commit}, // a v5 end bumps
+		}, slices.Repeat([]pidLogEntry{{Type: "expire", PID: 3}}, 10)...)...), "300", map[string]string{"a": "CompleteCommit 0", "b": "CompleteCommit 1"}, 0},
 		{"failed-prepare", func(t *testing.T, c *Cluster) {
 			pidinf := c.pids.create(new("a"), 60000)
 			pidinf.persist()
@@ -993,7 +1065,72 @@ func TestPersistPIDsLogReplay(t *testing.T) {
 			if resp.ErrorCode != kerr.NotCoordinator.Code {
 				t.Errorf("EndTxn with a failed prepare write: got %v, want NOT_COORDINATOR", kerr.ErrorForCode(resp.ErrorCode))
 			}
-		}, "", map[string]string{"a": "CompleteAbort"}},
+		}, "", map[string]string{"a": "CompleteAbort 1"}, 0},
+		{"closing", func(_ *testing.T, c *Cluster) {
+			c.dead.Store(true) // Close is waiting for us
+			c.pids.create(new("a"), 60000).persist()
+			c.dead.Store(false)
+		}, "", map[string]string{"a": "Empty 0"}, 0},
+		{"compact-past-threshold", func(t *testing.T, c *Cluster) {
+			c.bcfgs["state.log.compact.bytes"] = new("100")
+			for _, txid := range []string{"a", "b", "c"} {
+				c.pids.create(new(txid), 60000).persist() // c compacts
+			}
+			mem := c.fs.(*memFS)
+			path := filepath.Join(c.cfg.dataDir, "pids.log")
+			mem.mu.Lock()
+			compacted := mem.files[path]
+			mem.mu.Unlock()
+			c.pids.create(new("d"), 60000).persist()
+			mem.mu.Lock()
+			again := mem.files[path] != compacted
+			mem.mu.Unlock()
+			if again {
+				t.Error("pids.log compacted again")
+			}
+			for p := range int32(4) {
+				c.persistGroupEntry(groupLogEntry{Type: "commit", Group: "g", Part: p})
+				if p == 2 {
+					c.compactGroupsLog()
+				}
+			}
+			if c.needsGroupsCompact {
+				t.Error("groups.log wants to compact again")
+			}
+		}, "", map[string]string{"d": "Empty 0"}, 0},
+		{"failed-compaction", func(t *testing.T, c *Cluster) {
+			c.bcfgs["state.log.compact.bytes"] = new("100")
+			var tries int
+			c.fs.(*memFS).failRename = func(oldpath, _ string) error {
+				if filepath.Base(oldpath) != "pids.log.tmp" {
+					return nil
+				}
+				tries++
+				return &testError{"injected"}
+			}
+			for _, txid := range []string{"a", "b", "c", "d"} {
+				c.pids.create(new(txid), 60000).persist() // c tries to compact
+			}
+			c.fs.(*memFS).failRename = nil
+			if tries != 1 {
+				t.Errorf("pids.log compaction tried %d times, want once until the log doubles", tries)
+			}
+		}, "", map[string]string{"d": "Empty 0"}, 0},
+		{"regular-commit-after-staged", func(_ *testing.T, c *Cluster) {
+			at := time.UnixMilli(1000).Add(100 * time.Microsecond)
+			pidinf := c.pids.create(new("a"), 60000)
+			pidinf.persist()
+			pidinf.maybeStart()
+			var staged tps[offsetCommit]
+			staged.set("t", 0, offsetCommit{offset: 1, lastCommit: at})
+			pidinf.txOffsets = map[string]tps[offsetCommit]{"g": staged}
+			g := c.groups.newGroup("g")
+			c.groups.gs["g"] = g
+			oc := offsetCommit{offset: 2, lastCommit: at.Add(time.Microsecond)} // later, in the same millisecond
+			g.commits.set("t", 0, oc)
+			c.persistGroupEntry(g.commitEntry("t", 0, oc))
+			c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Commit: commit, Offsets: persistTxOffsets(pidinf.txOffsets)})
+		}, "", map[string]string{"a": "CompleteCommit 0"}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1008,8 +1145,13 @@ func TestPersistPIDsLogReplay(t *testing.T) {
 			c = newCluster(t, opts...)
 			c.admin(func() {
 				for txid, state := range tc.want {
-					if got := c.pids.byTxid[txid].state(); got != state {
-						t.Errorf("%s after the restart: got %s, want %s", txid, got, state)
+					if p := c.pids.byTxid[txid]; p == nil || fmt.Sprintf("%s %d", p.state(), p.epoch) != state {
+						t.Errorf("%s after the restart: got %v, want %s", txid, p, state)
+					}
+				}
+				if g := c.groups.gs["g"]; tc.commit != 0 {
+					if oc, _ := g.commits.getp("t", 0); oc == nil || oc.offset != tc.commit {
+						t.Errorf("group g's commit after the restart: got %v, want offset %d", oc, tc.commit)
 					}
 				}
 				if tc.compactBytes == "" {
@@ -1351,7 +1493,7 @@ func TestPersistAbortedTxnsRestart(t *testing.T) {
 				c.Close()
 			}
 
-			snapPath := filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")
+			snapPath := filepath.Join(partPath(t, dir, topic), "snapshot.json")
 			if tc.deleteSnapshot {
 				if err := os.Remove(snapPath); err != nil {
 					t.Fatal(err)
@@ -1572,10 +1714,6 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		// SyncWrites ensures all data+PID entries are fsynced.
 	}
 
-	// Delete the partition snapshot to force full replay.
-	snapPath := filepath.Join(dir, "partitions", "inflight-txn-topic-0", "snapshot.json")
-	os.Remove(snapPath) // may not exist since we didn't close cleanly
-
 	// Phase 2: reopen (full replay), verify in-flight txn is implicitly aborted.
 	{
 		c := newCluster(t,
@@ -1596,6 +1734,12 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		if pi.HighWatermark != 7 {
 			t.Fatalf("expected an abort marker at offset 6, got HWM %d", pi.HighWatermark)
 		}
+		// The abort fences the producer, which was at epoch 1.
+		c.admin(func() {
+			if pw, _ := c.pids.byTxid["txn-inflight-test"].windows.getp(topic, 0); pw == nil || pw.epoch != 2 {
+				t.Errorf("after the abort: got window %+v, want epoch 2", pw)
+			}
+		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1875,8 +2019,7 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 
 		cl := newPlainClient(t, c,
 			kgo.TransactionalID("txn-expire"),
-			// Short timeout so it's expired by the time we restart.
-			kgo.TransactionTimeout(200*time.Millisecond),
+			kgo.TransactionTimeout(time.Minute),
 			kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		)
 		if err := cl.BeginTransaction(); err != nil {
@@ -1888,14 +2031,14 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		c.admin(func() { savedEpoch = c.pids.byTxid["txn-expire"].epoch })
-
 		cl.Close()
+		// The transaction started longer ago than its timeout.
+		c.admin(func() {
+			pidinf := c.pids.byTxid["txn-expire"]
+			savedEpoch, pidinf.txStart = pidinf.epoch, pidinf.txStart.Add(-time.Hour)
+		})
 		c.Close()
 	}
-
-	// Sleep to guarantee the 200ms timeout has elapsed.
-	time.Sleep(300 * time.Millisecond)
 
 	// Phase 2: reopen - the expired txn should be auto-aborted.
 	{
@@ -1916,14 +2059,15 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 
 		// The abort is a timeout, which fences the old epoch so that a
 		// produce at it cannot reopen the transaction.
-		var epoch int16
+		var epoch, markerEpoch int16
 		var state string
 		c.admin(func() {
 			pidinf := c.pids.byTxid["txn-expire"]
-			epoch, state = pidinf.epoch, pidinf.state()
+			pw, _ := pidinf.windows.getp(topic, 0)
+			epoch, markerEpoch, state = pidinf.epoch, pw.epoch, pidinf.state()
 		})
-		if epoch != savedEpoch+1 || state != "CompleteAbort" {
-			t.Fatalf("after the auto-abort: epoch %d state %s, want epoch %d CompleteAbort", epoch, state, savedEpoch+1)
+		if epoch != savedEpoch+1 || markerEpoch != epoch || state != "CompleteAbort" {
+			t.Fatalf("after the auto-abort: epoch %d marker epoch %d state %s, want epoch %d CompleteAbort", epoch, markerEpoch, state, savedEpoch+1)
 		}
 
 		// read_committed should see 0 records (all aborted).
@@ -2345,7 +2489,7 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 	// Truncate the segment file to roughly half its size, but keep
 	// the snapshot.json intact. This simulates a crash that lost the
 	// tail of the segment file.
-	partDir := filepath.Join(dir, "partitions", topic+"-0")
+	partDir := partPath(t, dir, topic)
 	entries, err := os.ReadDir(partDir)
 	if err != nil {
 		t.Fatal(err)
@@ -2487,6 +2631,7 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		keepTopic   = "keep-topic"
 		deleteTopic = "delete-topic"
 	)
+	var deletedDir string
 
 	// Phase 1: create two topics, produce data, delete one, close.
 	{
@@ -2497,6 +2642,7 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		)
 		produceN(t, c, keepTopic, 5)
 		produceN(t, c, deleteTopic, 5)
+		c.admin(func() { deletedDir = c.partDir(c.data.tps[deleteTopic][0]) })
 		if err := c.DeleteTopic(deleteTopic); err != nil {
 			t.Fatal(err)
 		}
@@ -2505,7 +2651,6 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 	}
 
 	// Verify partition directory for deleted topic is gone.
-	deletedDir := filepath.Join(dir, "partitions", deleteTopic+"-0")
 	if _, err := os.Stat(deletedDir); !os.IsNotExist(err) {
 		t.Fatalf("expected deleted topic partition dir to be removed, got err=%v", err)
 	}
@@ -3228,6 +3373,22 @@ func (eg *errgroup) wait() error {
 	return errors.Join(eg.errs...)
 }
 
+// partPath returns the directory of a topic's partition 0 in a data dir.
+func partPath(t *testing.T, dir, topic string) string {
+	t.Helper()
+	var pt persistTopics
+	if _, err := readJSONFile(osFS{root: dir}, filepath.Join(dir, "topics.json"), &pt); err != nil {
+		t.Fatal(err)
+	}
+	for _, tp := range pt.Topics {
+		if tp.Name == topic {
+			return filepath.Join(dir, "partitions", topicDirID(tp.ID)+"-0")
+		}
+	}
+	t.Fatalf("topic %s is not in topics.json", topic)
+	return ""
+}
+
 // copyDir recursively copies src to dst for crash simulation.
 func copyDir(t *testing.T, src, dst string) {
 	t.Helper()
@@ -3265,7 +3426,8 @@ func TestPersistShareGroupRestart(t *testing.T) {
 		name   string
 		opts   []Opt // extra cluster options, applied to both phases
 		before func(t *testing.T, c *Cluster, topic, group string)
-		want   int // records the consumer sees after the restart
+		want   int  // records the consumer sees after the restart
+		crash  bool // restart without Close
 	}{
 		{
 			// Every record was accepted, so the SPSO sits past them.
@@ -3316,6 +3478,89 @@ func TestPersistShareGroupRestart(t *testing.T) {
 			want: 5,
 		},
 		{
+			// The start offset that the first fetch picked survives a
+			// crash, and so does an ack, which logs no acquired record.
+			name: "acquired-crash",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				produceShareN(t, c, topic, group, 5)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				rawShareFetch(t, cl, group, memberID, topicID, 0)
+				if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, 0, int8(kgo.AckAccept)); code != 0 {
+					t.Fatalf("phase 1 ack: %v", kerr.ErrorForCode(code))
+				}
+				c.admin(func() {
+					raw, _ := c.fs.ReadFile(filepath.Join(c.cfg.dataDir, "groups.log"))
+					entries, _ := readEntries(raw)
+					var e groupLogEntry
+					json.Unmarshal(replayGroupsLog(entries).shares[glCommitKey{group, topic, 0}], &e)
+					if e.Offset != 1 || len(e.Records) != 0 {
+						t.Errorf("logged start offset %d and records %v, want 1 and none", e.Offset, e.Records)
+					}
+				})
+			},
+			want:  4,
+			crash: true,
+		},
+		{
+			// Closing a session that holds no record logs nothing.
+			name: "idle-session-close",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				c.admin(func() {
+					sg := c.shareGroups.getOrCreate(group)
+					sg.partitions.set(topic, 0, sharePartition{records: make(map[int64]shareRecord)})
+					size := c.groupsLogSize
+					sg.releaseRecordsForSession("m", &shareSession{partitions: map[uuid]map[int32]bool{c.data.t2id[topic]: {0: false}}})
+					if c.groupsLogSize != size {
+						t.Error("closing a session that held no record wrote to groups.log")
+					}
+				})
+			},
+			want: 0,
+		},
+		{
+			// Deleting the topic logs the deletes of its share state.
+			name: "deleted-topic",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				produceShareN(t, c, topic, group, 5)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				rawShareFetch(t, cl, group, memberID, topicID, 0)
+				if err := c.DeleteTopic(topic); err != nil {
+					t.Fatal(err)
+				}
+				c.admin(func() {
+					raw, _ := c.fs.ReadFile(filepath.Join(c.cfg.dataDir, "groups.log"))
+					entries, _ := readEntries(raw)
+					if _, ok := replayGroupsLog(entries).shares[glCommitKey{group, topic, 0}]; ok {
+						t.Error("groups.log keeps the deleted topic's share state")
+					}
+				})
+			},
+			want: 0,
+		},
+		{
+			// A partition added to a topic the group knows starts at
+			// 0, also after a crash before its first fetch.
+			name: "new-partition-crash",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				cl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+				joinShareGroupRaw(t, cl, group, topic)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err := kadm.NewClient(cl).CreatePartitions(ctx, 1, topic); err != nil {
+					t.Fatal(err)
+				}
+				for range 5 {
+					if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 1}).FirstErr(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+			want:  5,
+			crash: true,
+		},
+		{
 			// Acquired on the last delivery attempt and never acked.
 			// Like Kafka, the restart forgets the acquisition and the
 			// delivery it counted, so the records go out once more.
@@ -3352,6 +3597,15 @@ func TestPersistShareGroupRestart(t *testing.T) {
 				produceN(t, c, topic, 10)
 			},
 			want: 10,
+		},
+		{
+			name: "config-only-crash",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+				produceN(t, c, topic, 10)
+			},
+			want:  10,
+			crash: true,
 		},
 		{
 			// Released until the delivery count limit archived them.
@@ -3404,13 +3658,31 @@ func TestPersistShareGroupRestart(t *testing.T) {
 			tmem := newTestMemFS()
 			topic := "share-persist-" + tc.name
 			group := topic + "-grp"
-			opts := append([]Opt{tmem.opt(), NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
+			opts := func(m *testMemFS) []Opt {
+				return append([]Opt{m.opt(), NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
+			}
 
-			c := newCluster(t, opts...)
+			c := newCluster(t, opts(tmem)...)
 			tc.before(t, c, topic, group)
-			c.Close()
+			epoch := func() (e int32) {
+				c.admin(func() {
+					if sg := c.shareGroups.gs[group]; sg != nil {
+						e = sg.groupEpoch
+					}
+				})
+				return e
+			}
+			before := epoch()
+			if tc.crash {
+				tmem = tmem.clone() // the first cluster keeps writing to its files
+			} else {
+				c.Close()
+			}
 
-			c = newCluster(t, opts...)
+			c = newCluster(t, opts(tmem)...)
+			if after := epoch(); tc.crash && after != before {
+				t.Errorf("group epoch after a crash: got %d, want %d", after, before)
+			}
 			cl := newShareConsumer(t, c, topic, group)
 			if tc.want == 0 {
 				verifyZeroRecords(t, cl, 500*time.Millisecond)

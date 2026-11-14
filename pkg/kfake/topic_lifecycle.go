@@ -52,7 +52,6 @@ func (c *Cluster) DeleteTopic(topic string) error {
 		c.deleteTopic(topic, c.data.t2id[topic])
 		c.notifyTopicChange()
 		c.refreshCompactTicker()
-		c.persistTopicsState()
 	})
 	if e != nil {
 		return e

@@ -1102,10 +1102,12 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 			rr.ResourceName = ""
 			return rr
 		}()}, []int16{kerr.InvalidRequest.Code}},
-		// The configs replace the group's.
+		// The configs replace the group's and the subscription's.
 		{"group", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.auto.offset.reset", "earliest")}, []int16{0}},
 		{"group replaced", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.isolation.level", "read_committed")}, []int16{0}},
 		{"bad group config", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.isolation.level", "x")}, []int16{kerr.InvalidConfig.Code}},
+		{"client metrics", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeClientMetrics, "sub", "metrics", "a")}, []int16{0}},
+		{"client metrics replaced", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeClientMetrics, "sub", "interval.ms", "10000")}, []int16{0}},
 	} {
 		req := kmsg.NewAlterConfigsRequest()
 		req.Resources = step.resources
@@ -1124,6 +1126,9 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	c.admin(func() {
 		if g := c.groupConfigs["g"]; len(g) != 1 || g["share.isolation.level"] == nil || *g["share.isolation.level"] != "read_committed" {
 			t.Errorf("group configs %v, want only share.isolation.level=read_committed", g)
+		}
+		if sub := c.clientMetrics["sub"]; len(sub) != 1 || sub["interval.ms"] == nil || *sub["interval.ms"] != "10000" {
+			t.Errorf("subscription %v, want only interval.ms=10000", sub)
 		}
 	})
 
@@ -1838,13 +1843,17 @@ func TestDescribeProducers(t *testing.T) {
 	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("txn-data"), Timestamp: time.UnixMilli(1000)}).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
-	if ap := describe(0); ap.LastTimestamp != 1000 {
-		t.Fatalf("got last timestamp %d, want the batch's 1000", ap.LastTimestamp)
+	first := describe(0)
+	if first.LastTimestamp != 1000 {
+		t.Fatalf("got last timestamp %d, want the batch's 1000", first.LastTimestamp)
 	}
 	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
 		t.Fatal(err)
 	}
-	describe(-1)
+	// The v5 commit's marker carries the bumped epoch.
+	if ap := describe(-1); ap.ProducerEpoch != first.ProducerEpoch+1 || ap.LastSequence != -1 {
+		t.Fatalf("after the commit: got epoch %d and last sequence %d, want %d and -1", ap.ProducerEpoch, ap.LastSequence, first.ProducerEpoch+1)
+	}
 
 	// The second transaction is at a bumped epoch (KIP-890). Its records
 	// start after the first record and its commit marker.

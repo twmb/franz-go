@@ -127,6 +127,7 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 		}
 		if changed {
 			c.featuresEpoch++
+			c.persistDynamicConfigsState()
 		}
 	}
 	if req.Version <= 1 && resp.ErrorCode == 0 {

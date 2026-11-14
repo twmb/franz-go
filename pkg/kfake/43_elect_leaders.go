@@ -69,6 +69,7 @@ func (c *Cluster) handleElectLeaders(creq *clientReq) (kmsg.Response, error) {
 		return errResp(kerr.InvalidRequest.Code, kmsg.StringPtr(fmt.Sprintf("Unknown election type %d", req.ElectionType)))
 	}
 	unclean := req.ElectionType == 1
+	defer c.persistTopicsState() // the leaders and epochs we elect
 
 	// elect answers one partition. A fault answers first; the work's own
 	// answer does not replace it.

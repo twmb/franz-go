@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"hash/crc32"
 	"net"
@@ -954,6 +955,7 @@ func TestTransactionOffsetCommit(t *testing.T) {
 // 1. Uncommitted transactional data should NOT satisfy MinBytes
 // 2. When a transaction commits, the committed bytes should now count toward MinBytes
 // 3. If committed bytes satisfy MinBytes, the watcher should fire
+// 4. An abort counts the transaction's bytes too, as it moves the LSO past them
 //
 // This test uses ControlKey to intercept fetch requests and verify timing behavior.
 func TestReadCommittedMinBytes(t *testing.T) {
@@ -1116,7 +1118,9 @@ func TestReadCommittedMinBytes(t *testing.T) {
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
-	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("more-uncommitted")}).FirstErr(); err != nil {
+	big := make([]byte, 500) // random, so it stays large compressed
+	rand.Read(big)
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: big}).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1143,8 +1147,27 @@ func TestReadCommittedMinBytes(t *testing.T) {
 		t.Fatal("read_uncommitted should see uncommitted data")
 	}
 
+	// A read_committed fetch whose MinBytes the abort marker alone does
+	// not reach wakes at the abort.
+	abortArrived := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, Observe: true, Count: -1})
+	freq := fetchByID(0, -1, 5000, c.TopicInfo(testTopic).TopicID, 0)
+	freq.IsolationLevel = 1
+	freq.MinBytes = 300
+	freq.Topics[0].Partitions[0].FetchOffset = newLSO
+	abortElapsed := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		freq.RequestWith(ctx, newPlainClient(t, c))
+		abortElapsed <- time.Since(start)
+	}()
+	if err := abortArrived.Wait(ctx, 1); err != nil {
+		t.Fatal("timeout waiting for fetch request to arrive")
+	}
 	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("cleanup abort: %v", err)
+		t.Fatalf("abort: %v", err)
+	}
+	if elapsed := <-abortElapsed; elapsed > 2*time.Second {
+		t.Fatalf("readCommitted fetch took %v after abort, expected prompt wakeup", elapsed)
 	}
 }
 
@@ -4325,7 +4348,7 @@ func TestIssue1422(t *testing.T) {
 			if tc.restart {
 				c.Close()
 				if tc.replay {
-					if err := os.Remove(filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")); err != nil {
+					if err := os.Remove(filepath.Join(partPath(t, dir, topic), "snapshot.json")); err != nil {
 						t.Fatal(err)
 					}
 				}
