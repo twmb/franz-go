@@ -3476,43 +3476,45 @@ func (cl *Client) CommitOffsetsSync(
 	g.commitOffsetsSync(ctx, tc, onDone)
 }
 
-// waitJoinSyncMu is a rather insane way to try to grab a lock, but also return
+// waitLock is a rather insane way to try to grab a lock, but also return
 // early if we have to wait and the context is canceled.
-func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
-	if g.noCommitDuringJoinAndSync.TryRLock() {
-		g.cfg.logger.Log(LogLevelDebug, "grabbed join/sync mu on first try")
+func waitLock(ctx context.Context, tryLock func() bool, lock, unlock func()) error {
+	if tryLock() {
 		return nil
 	}
 
 	var (
-		blockJoinSyncCh = make(chan struct{})
-		mu              xsync.Mutex
-		returned        bool
-		maybeRUnlock    = func() {
+		locked      = make(chan struct{})
+		mu          xsync.Mutex
+		returned    bool
+		maybeUnlock = func() {
 			mu.Lock()
 			defer mu.Unlock()
 			if returned {
-				g.noCommitDuringJoinAndSync.RUnlock()
+				unlock()
 			}
 			returned = true
 		}
 	)
 
 	go func() {
-		g.noCommitDuringJoinAndSync.RLock()
-		close(blockJoinSyncCh)
-		maybeRUnlock()
+		lock()
+		close(locked)
+		maybeUnlock()
 	}()
 
 	select {
-	case <-blockJoinSyncCh:
-		g.cfg.logger.Log(LogLevelDebug, "grabbed join/sync mu after waiting")
+	case <-locked:
 		return nil
 	case <-ctx.Done():
-		g.cfg.logger.Log(LogLevelDebug, "not grabbing mu because context canceled")
-		maybeRUnlock()
+		maybeUnlock()
 		return ctx.Err()
 	}
+}
+
+func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
+	mu := &g.noCommitDuringJoinAndSync
+	return waitLock(ctx, mu.TryRLock, mu.RLock, mu.RUnlock)
 }
 
 func (g *groupConsumer) commitOffsetsSync(
@@ -3536,7 +3538,14 @@ func (g *groupConsumer) commitOffsetsSync(
 		return
 	}
 
-	g.syncCommitMu.Lock() // block all other concurrent commits until our OnDone is done.
+	// Block all other concurrent commits until our OnDone is done. If our
+	// context ends while we wait, we return without sending anything.
+	if err := waitLock(ctx, g.syncCommitMu.TryLock, g.syncCommitMu.Lock, g.syncCommitMu.Unlock); err != nil {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		close(done)
+		return
+	}
 	unblockCommits := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		g.noCommitDuringJoinAndSync.RUnlock()
 		defer close(done)
@@ -3626,7 +3635,12 @@ func (cl *Client) CommitOffsets(
 		return
 	}
 
-	g.syncCommitMu.RLock() // block sync commit, but allow other concurrent Commit to cancel us
+	// Block sync commits, but allow other concurrent CommitOffsets.
+	if err := waitLock(ctx, g.syncCommitMu.TryRLock, g.syncCommitMu.RLock, g.syncCommitMu.RUnlock); err != nil {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		return
+	}
 	unblockJoinSync := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		g.noCommitDuringJoinAndSync.RUnlock()
 		defer g.syncCommitMu.RUnlock()
@@ -3784,13 +3798,23 @@ func (g *groupConsumer) commit(
 			case <-priorDone:
 			default:
 				g.cfg.logger.Log(LogLevelDebug, "waiting for prior commit to finish before issuing another", "group", g.cfg.group)
-				<-priorDone
+				select {
+				case <-priorDone:
+				case <-ctx.Done():
+					// We never send ours, and the commit after
+					// ours still waits for the prior one.
+					req.Topics = append(req.Topics, refused...)
+					onDone(g.cl, req, nil, ctx.Err())
+					<-priorDone
+					return
+				}
 			}
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
 		if fn, ok := ctx.Value(commitContextFn).(func(*kmsg.OffsetCommitRequest) error); ok {
 			if err := fn(req); err != nil {
+				req.Topics = append(req.Topics, refused...)
 				onDone(g.cl, req, nil, err)
 				return
 			}

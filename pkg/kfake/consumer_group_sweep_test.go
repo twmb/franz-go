@@ -33,6 +33,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -44,18 +45,19 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TestAuditOverlappingCommitsBlockAutocommit reproduces B1. Marks-mode
-// autocommit gives the test full control of the head offset. Two manual
-// async commits (100, then 200) overlap via gated kfake responses; after
-// the first completes, the head is marked to 150 while the second is still
-// in flight. Pre-fix, blockAuto was already false, so an autocommit tick
-// snapshotted head=150 and - commits being strictly ordered behind the
-// in-flight 200 - rewound the broker's committed offset to 150 after the
-// 200 landed. (A later autocommit tick re-commits head=200, so the rewind
-// is a WINDOW, not the final state: the exposure is a rebalance, fatal
-// group error, or crash inside it. The test therefore asserts on the
-// sequence of commits the broker received, which must be monotonic.)
-func TestAuditOverlappingCommitsBlockAutocommit(t *testing.T) {
+// TestAuditOverlappingCommits reproduces B1. Marks-mode autocommit gives the
+// test full control of the head offset. Two manual async commits (100, then
+// 200) overlap via gated kfake responses; after the first completes, the head
+// is marked to 150 while the second is still in flight. Pre-fix, blockAuto was
+// already false, so an autocommit tick snapshotted head=150 and - commits
+// being strictly ordered behind the in-flight 200 - rewound the broker's
+// committed offset to 150 after the 200 landed. (A later autocommit tick
+// re-commits head=200, so the rewind is a WINDOW, not the final state: the
+// exposure is a rebalance, fatal group error, or crash inside it. The test
+// therefore asserts on the sequence of commits the broker received, which
+// must be monotonic.) Commits waiting behind the held 200 must also return
+// when their own contexts end (#1546).
+func TestAuditOverlappingCommits(t *testing.T) {
 	t.Parallel()
 	const (
 		topic = "audit-overlap-commit"
@@ -138,6 +140,39 @@ func TestAuditOverlappingCommitsBlockAutocommit(t *testing.T) {
 	// pre-fix they were no longer blocked and snapshotted head=150.
 	consumer.MarkCommitOffsets(off(150))
 	time.Sleep(400 * time.Millisecond)
+
+	// A commit waiting behind commit(200) returns when its own context
+	// ends and never sends: the sequence check below catches a 175 that
+	// lands after the 200.
+	shortCommit := func(what string, commit func(context.Context) error) {
+		errc := make(chan error, 1)
+		go func() {
+			short, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer shortCancel()
+			errc <- commit(short)
+		}()
+		select {
+		case err := <-errc:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s behind commit(200): got %v, want %v", what, err, context.DeadlineExceeded)
+			}
+		case <-time.After(5 * time.Second):
+			close(gate200)
+			t.Fatalf("%s waited past its context for commit(200)", what)
+		}
+	}
+	// The async commit goes first: it shares commit(200)'s read lock and
+	// waits only on the commit order. The sync commit waits on the lock.
+	shortCommit("CommitOffsets", func(ctx context.Context) error {
+		errc := make(chan error, 1)
+		consumer.CommitOffsets(ctx, off(175), func(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+			errc <- err
+		})
+		return <-errc
+	})
+	shortCommit("CommitRecords", func(ctx context.Context) error {
+		return consumer.CommitRecords(ctx, &kgo.Record{Topic: topic, Offset: 174, LeaderEpoch: -1})
+	})
 
 	close(gate200)
 	select {
