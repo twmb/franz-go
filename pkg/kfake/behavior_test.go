@@ -4573,6 +4573,30 @@ func TestApiVersionsFeatureTable(t *testing.T) {
 	}
 }
 
+// kadm sends UpgradeType 1, Kafka's default, when the caller leaves it unset:
+// Kafka rejects 0.
+func TestKadmUpdateFeaturesDefaultUpgradeType(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	defaulted := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.UpdateFeatures},
+		Observe: true,
+		When: func(kreq kmsg.Request) bool {
+			fus := kreq.(*kmsg.UpdateFeaturesRequest).FeatureUpdates
+			return len(fus) == 1 && fus[0].UpgradeType == 1
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	adm := kadm.NewClient(newPlainClient(t, c))
+	if _, err := adm.UpdateFeatures(ctx, true, kadm.FeatureUpdate{Feature: "transaction.version", MaxVersionLevel: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if defaulted.Hits() != 1 {
+		t.Error("kadm did not send UpgradeType 1 for an unset upgrade type")
+	}
+}
+
 // TestOffsetExpiration verifies that committed offsets for a simple group
 // (no protocolType) expire after offsets.retention.minutes and that the
 // empty group is auto-deleted (KIP-211).

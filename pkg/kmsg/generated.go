@@ -32228,6 +32228,8 @@ type UpdateFeaturesRequestFeatureUpdate struct {
 	// Determine which type of upgrade will be performed: 1 will perform an
 	// upgrade only (default), 2 is safe downgrades only (lossless), 3 is
 	// unsafe downgrades (lossy).
+	//
+	// This field has a default of 1.
 	UpgradeType int8 // v1+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -32237,6 +32239,7 @@ type UpdateFeaturesRequestFeatureUpdate struct {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to UpdateFeaturesRequestFeatureUpdate.
 func (v *UpdateFeaturesRequestFeatureUpdate) Default() {
+	v.UpgradeType = 1
 }
 
 // NewUpdateFeaturesRequestFeatureUpdate returns a default UpdateFeaturesRequestFeatureUpdate

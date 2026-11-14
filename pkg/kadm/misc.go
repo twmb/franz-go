@@ -1064,6 +1064,9 @@ func (cl *Client) UpdateFeatures(ctx context.Context, validateOnly bool, updates
 		reqUpdate.Feature = u.Feature
 		reqUpdate.MaxVersionLevel = u.MaxVersionLevel
 		reqUpdate.UpgradeType = u.UpgradeType
+		if reqUpdate.UpgradeType == 0 {
+			reqUpdate.UpgradeType = 1 // Kafka rejects 0
+		}
 		// v0 of UpdateFeatures predates UpgradeType and uses
 		// AllowDowngrade instead. Set it so v0 brokers honor a
 		// requested downgrade/delete.
