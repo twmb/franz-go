@@ -98,7 +98,8 @@ func classicJoin(ctx context.Context, t *testing.T, cl *kgo.Client, what, groupI
 // The classic session timeout closure must check that the member is still the
 // one in g.members. removeMember is not idempotent, so a timer that fired
 // before the member left would decrement g.protocols a second time, and that
-// counter is never rebuilt.
+// counter is never rebuilt. A reply that cannot be sent still restarts the
+// session timer.
 func TestClassicSessionTimerStaleFireKeepsProtocolCounts(t *testing.T) {
 	t.Parallel()
 	const groupID = "g-classic-stale-session-fire"
@@ -106,6 +107,16 @@ func TestClassicSessionTimerStaleFireKeepsProtocolCounts(t *testing.T) {
 	c, cl, ctx := newGuardCluster(t)
 
 	memberID := classicJoin(ctx, t, cl, "join", groupID, "").MemberID
+	onGroup(t, c, groupID, func(g *group) {
+		m := g.members[memberID]
+		before := m.last
+		dead := &clientConn{c: c, respCh: make(chan clientResp), done: make(chan struct{})}
+		close(dead.done)
+		g.reply(&clientReq{cc: dead}, nil, m)
+		if !m.last.After(before) {
+			t.Error("a reply that cannot be sent did not restart the session timer")
+		}
+	})
 
 	// The session deadline fires, and inline the member leaves the way
 	// LeaveGroup removes it.

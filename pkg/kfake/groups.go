@@ -1594,9 +1594,8 @@ func (g *group) expireSession(m *groupMember) {
 		return
 	}
 	// Kafka counts a member waiting in JoinGroup or SyncGroup as
-	// heartbeating, and restarts its session when it answers. We
-	// restart the timer now instead, so that the member still expires
-	// if that answer cannot be sent.
+	// heartbeating, and restarts its session when it answers, as reply
+	// does. Until then, we keep restarting the timer.
 	if !m.waitingReply.empty() {
 		g.updateHeartbeat(m)
 		return
@@ -1813,17 +1812,15 @@ members:
 
 // reply sends kresp back to the caller of creq. If m is non-nil,
 // m.waitingReply is cleared before the send attempt so a dead
-// connection does not leave a stale reply behind.
+// connection does not leave a stale reply behind, and m's session timer
+// restarts even if the send fails, as in Kafka: a member that a join
+// added has no timer until we answer it.
 func (g *group) reply(creq *clientReq, kresp kmsg.Response, m *groupMember) {
 	if m != nil {
 		m.waitingReply = nil
-	}
-	if !creq.reply(kresp) {
-		return
-	}
-	if m != nil {
 		g.updateHeartbeat(m)
 	}
+	creq.reply(kresp)
 }
 
 ///////////////////////////
