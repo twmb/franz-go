@@ -362,6 +362,52 @@ func (p *cursorOffsetPreferred) move() {
 
 type cursorPreferreds []cursorOffsetPreferred
 
+// fallBackToLeaders moves every cursor of a failed fetch that this source
+// serves as a preferred read replica (KIP-392) back to its partition's
+// leader, as the Java consumer clears its preferred read replicas when a
+// fetch fails.
+//
+// A cursor leaves its leader only when a fetch response names a preferred
+// replica, and metadata moves it back only when the partition's leader or
+// leader epoch changes. If the replica's broker dies, or drops out of
+// metadata (errUnknownBroker), while the leader stays up, every fetch here
+// fails, the leader never hears from us, and the partition stalls until
+// RecheckPreferredReplicaInterval elapses. Going back costs one fetch: if
+// the replica is still the best choice, the leader names it again.
+//
+// This runs within the fetch's consumer session, before the fetch's
+// deferred finishing of its used offsets; moved cursors are removed from
+// those offsets, as for preferred replicas returned in a response.
+func (s *source) fallBackToLeaders(req *fetchRequest, why error) {
+	var moves cursorPreferreds
+	req.usedOffsets.eachOffset(func(o *cursorOffsetNext) {
+		if o.from.leader != s.nodeID {
+			moves = append(moves, cursorOffsetPreferred{
+				cursorOffsetNext: *o,
+				preferredReplica: o.from.leader,
+			})
+		}
+	})
+	if len(moves) == 0 {
+		return
+	}
+	if s.cl.cfg.logger.Level() >= LogLevelInfo {
+		s.cl.cfg.logger.Log(LogLevelInfo, "fetch from a preferred replica failed, moving its partitions back to their leaders",
+			"from_broker", s.nodeID,
+			"moves", moves.String(),
+			"err", why,
+		)
+	}
+	for _, m := range moves {
+		m.move()
+		t := req.usedOffsets[m.from.topic]
+		delete(t, m.from.partition)
+		if len(t) == 0 {
+			delete(req.usedOffsets, m.from.topic)
+		}
+	}
+}
+
 func (cs cursorPreferreds) String() string {
 	type pnext struct {
 		p       int32
@@ -1057,6 +1103,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		if errors.Is(err, errResponseTooLarge) {
 			s.cl.consumer.addFakeReadyForDraining("", -1, err, "fetch response is larger than BrokerMaxReadBytes")
 		}
+		s.fallBackToLeaders(req, err)
 		backoff(err)
 		return fetched
 	}
