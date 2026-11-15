@@ -5653,3 +5653,92 @@ func TestIssue1531(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue1548 issues an OffsetFetch from a client that knows the group's
+// coordinator but not the topic in the response, so the client resolves the
+// topic with a Metadata request before returning. We hold that Metadata
+// request. Canceling the OffsetFetch must also stop waiting for the topic:
+// the request has to return around its deadline, not when Metadata answers.
+func TestIssue1548(t *testing.T) {
+	t.Parallel()
+	const (
+		topic = "issue-1548"
+		group = "issue-1548-group"
+	)
+
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	setup := newPlainClient(t, c)
+	mreq := kmsg.NewPtrMetadataRequest()
+	mt := kmsg.NewMetadataRequestTopic()
+	mt.Topic = kmsg.StringPtr(topic)
+	mreq.Topics = append(mreq.Topics, mt)
+	mresp, err := mreq.RequestWith(ctx, setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mresp.Topics) != 1 || mresp.Topics[0].ErrorCode != 0 {
+		t.Fatalf("bad metadata response: %v", mresp)
+	}
+
+	oreq := kmsg.NewPtrOffsetCommitRequest()
+	oreq.Group = group
+	ot := kmsg.NewOffsetCommitRequestTopic()
+	ot.Topic = topic
+	ot.TopicID = mresp.Topics[0].TopicID
+	op := kmsg.NewOffsetCommitRequestTopicPartition()
+	op.Partition = 0
+	op.Offset = 3
+	ot.Partitions = append(ot.Partitions, op)
+	oreq.Topics = append(oreq.Topics, ot)
+	oresp, err := oreq.RequestWith(ctx, setup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ec := oresp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+		t.Fatalf("offset commit failed with code %d", ec)
+	}
+
+	var hold atomic.Bool
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) }) // runs before the cluster closes
+	c.ControlKey(int16(kmsg.Metadata), func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		if hold.Load() {
+			c.SleepControl(func() { <-release })
+		}
+		return nil, nil, false
+	})
+
+	// A fresh client learns the brokers and the coordinator from an
+	// OffsetFetch of a group with no commits, which has no topics to
+	// resolve.
+	cl := newPlainClient(t, c)
+	warm := kmsg.NewPtrOffsetFetchRequest()
+	warm.Group = group + "-empty"
+	if _, err := warm.RequestWith(ctx, cl); err != nil {
+		t.Fatal(err)
+	}
+
+	hold.Store(true)
+	freq := kmsg.NewPtrOffsetFetchRequest()
+	freq.Group = group // all topics: the response names topics the client has not seen
+
+	const timeout = 500 * time.Millisecond
+	reqCtx, reqCancel := context.WithTimeout(ctx, timeout)
+	defer reqCancel()
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		freq.RequestWith(reqCtx, cl)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("OffsetFetch with a %v deadline still waiting for Metadata after %v", timeout, time.Since(start))
+	}
+}
