@@ -514,11 +514,14 @@ start:
 		// unclear reasons (principals change, somehow). If
 		// we receive SASL_AUTHENTICATION_FAILED, we retry
 		// once on a new connection. See #249. We do the same
-		// if the broker stopped supporting our mechanism.
+		// if the broker stopped supporting our mechanism, and
+		// for ILLEGAL_SASL_STATE: Kafka refuses to reauthenticate
+		// less than a second after the previous reauthentication
+		// began, which a session lifetime under 2s causes.
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
 		if err := cxn.sasl(); err != nil {
 			cxn.die()
-			if (errors.Is(err, kerr.SaslAuthenticationFailed) || errors.Is(err, errSASLFallback)) && !retriedOnNewConnection {
+			if (errors.Is(err, kerr.SaslAuthenticationFailed) || errors.Is(err, errSASLFallback) || errors.Is(err, kerr.IllegalSaslState)) && !retriedOnNewConnection {
 				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
 				retriedOnNewConnection = true
 				goto start

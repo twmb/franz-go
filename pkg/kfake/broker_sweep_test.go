@@ -406,6 +406,9 @@ func TestAuditApiVersionsDowngradeLoopTerminates(t *testing.T) {
 // must clear the connection's expiry. Before the fix the old, already-passed
 // expiry stuck around and every subsequent request on the connection re-ran
 // the full handshake+authenticate flow first.
+//
+// Before re-auth is disabled, the connection reauthenticates twice less than
+// a second apart, which the broker refuses; the request must still succeed.
 func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,
@@ -427,6 +430,15 @@ func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	// Warm the broker connection; its session carries the 1.5s lifetime.
 	if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
 		t.Fatalf("warm request failed: %v", err)
+	}
+
+	// Each request crosses the expiry. The second reauthentication
+	// begins ~0.6s after the first, so the broker refuses it.
+	for i := range 2 {
+		time.Sleep(600 * time.Millisecond)
+		if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
+			t.Fatalf("reauth-triggering request %d failed: %v", i, err)
+		}
 	}
 
 	// Disable reauthentication broker-side.
