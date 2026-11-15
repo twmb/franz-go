@@ -868,6 +868,9 @@ func (cl *Client) ElectLeaders(ctx context.Context, how ElectLeadersHow, s Topic
 	if err := maybeAuthErr(resp.ErrorCode); err != nil {
 		return nil, err
 	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
 	if resp.Version == 0 { // v0 does not have the election type field
 		how = ElectPreferredReplica
 	}

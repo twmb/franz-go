@@ -3949,6 +3949,13 @@ func TestElectLeaders(t *testing.T) {
 	}
 	expectAll("timed out all", tresp, 0, 0)
 
+	// A top-level error on an all-partitions election comes with no
+	// topics, so kadm must return it.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, TopLevel: true, Err: kerr.RequestTimedOut})
+	if _, err := kadm.NewClient(cl).ElectLeaders(ctx, kadm.ElectPreferredReplica, nil); !errors.Is(err, kerr.RequestTimedOut) {
+		t.Fatalf("elect all with a top-level error: got err %v, want %v", err, kerr.RequestTimedOut)
+	}
+
 	h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, Count: -1, Err: kerr.ClusterAuthorizationFailed})
 	defer h.Remove()
 	fresp, err := electReq.RequestWith(ctx, cl)
