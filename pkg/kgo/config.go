@@ -1977,9 +1977,8 @@ func DisableFetchCRCValidation() ConsumerOpt {
 // fetch from a preferred replica before switching back to the leader.
 // Periodically switching back to the leader allows the leader to re-choose a
 // perhaps better preferred replica (say you added a new cluster, or added
-// nodes to an existing cluster, or something else changed). For implementation
-// simplicity, the interval is checked after fetch responses, meaning one more
-// request can be issued after the interval has elapsed.
+// nodes to an existing cluster, or something else changed). The consumer also
+// switches back to the leader if a fetch to the preferred replica fails.
 //
 // The default interval is 30 minutes.
 func RecheckPreferredReplicaInterval(interval time.Duration) ConsumerOpt {

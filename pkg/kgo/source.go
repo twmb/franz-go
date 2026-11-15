@@ -148,15 +148,16 @@ type cursor struct {
 	//
 	//  * by metadata when the consumer session is completely stopped
 	//
-	//  * by a fetch when handling a fetch response that returned preferred
-	//  replicas
+	//  * by a fetch that moves the cursor to or from a preferred replica:
+	//  when a response names one, when the recheck interval passes, or
+	//  when a fetch to the replica fails
 	//
 	// This is additionally read within a session when cursor is
 	// transitioning from used to usable.
 	source *source
 
 	// If this cursor moves to a preferred replica: unix nano of when.
-	// This is set in `move`, and read when handling a response. Both are
+	// This is set in `move`, and read when creating a request. Both are
 	// independent events in a live session. If we have been consuming from
 	// the preferred replica for more than RecheckPreferredReplicaInterval,
 	// we fetch from the original leader again.
@@ -324,8 +325,8 @@ type cursorOffsetPreferred struct {
 }
 
 // Moves a cursor from one source to another. This is done while handling a
-// fetch response or creating a fetch request, which means within the context
-// of a live session.
+// fetch response, creating a fetch request, or handling a failed fetch, which
+// means within the context of a live session.
 //
 // NOTE: We cannot add the cursor to the new source until AFTER we are done
 // modifying everything on the cursor. FURTHER, we cannot add the cursor to the
@@ -377,6 +378,41 @@ func (p *cursorOffsetPreferred) move() {
 }
 
 type cursorPreferreds []cursorOffsetPreferred
+
+// Moves every cursor of a failed fetch that we serve as a preferred replica
+// (KIP-392) back to its partition's leader, as Kafka's client does. If the
+// replica's broker dies while the leader stays up, nothing else moves the
+// cursor until RecheckPreferredReplicaInterval. Going back costs one fetch:
+// if the replica is still the best choice, the leader names it again.
+func (s *source) fallBackToLeaders(req *fetchRequest, why error) {
+	var moves cursorPreferreds
+	req.usedOffsets.eachOffset(func(o *cursorOffsetNext) {
+		if o.from.leader != s.nodeID {
+			moves = append(moves, cursorOffsetPreferred{
+				cursorOffsetNext: *o,
+				preferredReplica: o.from.leader,
+			})
+		}
+	})
+	if len(moves) == 0 {
+		return
+	}
+	if s.cl.cfg.logger.Level() >= LogLevelInfo {
+		s.cl.cfg.logger.Log(LogLevelInfo, "fetch from a preferred replica failed, moving its partitions back to their leaders",
+			"from_broker", s.nodeID,
+			"moves", moves.String(),
+			"err", why,
+		)
+	}
+	for _, m := range moves {
+		m.move()
+		t := req.usedOffsets[m.from.topic]
+		delete(t, m.from.partition)
+		if len(t) == 0 {
+			delete(req.usedOffsets, m.from.topic)
+		}
+	}
+}
 
 func (cs cursorPreferreds) String() string {
 	type pnext struct {
@@ -1100,6 +1136,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		if errors.Is(err, errResponseTooLarge) {
 			s.cl.consumer.addFakeReadyForDraining("", -1, err, "fetch response is larger than BrokerMaxReadBytes")
 		}
+		s.fallBackToLeaders(req, err)
 		backoff(err)
 		return fetched
 	}
