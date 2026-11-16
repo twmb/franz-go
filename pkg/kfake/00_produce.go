@@ -355,10 +355,12 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					errCode = kerr.InvalidTxnState.Code
 				}
 
-				// A partition not in the transaction (before v12, which
-				// adds it). v11 clients understand TRANSACTION_ABORTABLE.
-				// Kafka fails it before the append, with no log start
-				// offset.
+				// A partition not in the transaction. As in Kafka, only
+				// v11 answers TRANSACTION_ABORTABLE: older clients do not
+				// know that error and get INVALID_TXN_STATE, and v12+
+				// adds the partition itself, so it never gets here.
+				// Kafka fails the batch before the append, with no log
+				// start offset.
 				if txnal && window == nil {
 					code, msg := kerr.InvalidTxnState.Code, "Partition was not added to the transaction"
 					if req.Version == 11 {

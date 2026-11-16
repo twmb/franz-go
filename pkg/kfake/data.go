@@ -876,7 +876,7 @@ func validateBrokerConfig(k string, v *string) bool {
 	case "log.cleaner.backoff.ms": // Kafka: at least 0
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n >= 0
-	case "offsets.retention.minutes", "offsets.retention.check.interval.ms", "producer.id.expiration.ms": // Kafka: at least 1
+	case "controller.max.records.per.batch", "offsets.retention.minutes", "offsets.retention.check.interval.ms", "producer.id.expiration.ms": // Kafka: at least 1
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n >= 1
 	}
@@ -939,6 +939,26 @@ var validTopicConfigs = map[string]string{
 	"segment.ms":             "log.roll.ms",
 }
 
+// topicDefaultSynonyms names the broker static default each topic config
+// falls back to in Kafka, which is at our default for the topic config. Kafka
+// lists log.retention.hours and log.roll.hours, 168 by default, only after a
+// log.retention.ms or log.roll.ms synonym, since those two have no default.
+var topicDefaultSynonyms = map[string]struct {
+	k     string
+	hours bool
+}{
+	"cleanup.policy":         {k: "log.cleanup.policy"},
+	"compression.type":       {k: "compression.type"},
+	"delete.retention.ms":    {k: "log.cleaner.delete.retention.ms"},
+	"max.message.bytes":      {k: "message.max.bytes"},
+	"message.timestamp.type": {k: "log.message.timestamp.type"},
+	"min.insync.replicas":    {k: "min.insync.replicas"},
+	"retention.bytes":        {k: "log.retention.bytes"},
+	"retention.ms":           {k: "log.retention.hours", hours: true},
+	"segment.bytes":          {k: "log.segment.bytes"},
+	"segment.ms":             {k: "log.roll.hours", hours: true},
+}
+
 // All valid broker configs we support, as well as their equivalent
 // topic config if there is one.
 var validBrokerConfigs = map[string]string{
@@ -946,6 +966,7 @@ var validBrokerConfigs = map[string]string{
 	"broker.rack":                               "",
 	"compression.type":                          "compression.type",
 	"connections.max.reauth.ms":                 "",
+	"controller.max.records.per.batch":          "",
 	"default.replication.factor":                "",
 	"fetch.max.bytes":                           "",
 	"max.incremental.fetch.session.cache.slots": "",
@@ -1104,6 +1125,7 @@ var configDefaults = map[string]string{
 	"state.log.compact.bytes": "10485760",
 
 	"connections.max.reauth.ms":                 "0",
+	"controller.max.records.per.batch":          "10000",
 	"default.replication.factor":                "3",
 	"fetch.max.bytes":                           "57671680",
 	"log.cleaner.backoff.ms":                    "3600000",
@@ -1138,6 +1160,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"cleanup.policy":                            kmsg.ConfigTypeList,
 	"compression.type":                          kmsg.ConfigTypeString,
 	"connections.max.reauth.ms":                 kmsg.ConfigTypeLong,
+	"controller.max.records.per.batch":          kmsg.ConfigTypeInt,
 	"default.replication.factor":                kmsg.ConfigTypeInt,
 	"delete.retention.ms":                       kmsg.ConfigTypeLong,
 	"fetch.max.bytes":                           kmsg.ConfigTypeInt,
@@ -1244,6 +1267,13 @@ func (c *Cluster) consumerHeartbeatIntervalMsForGroup(group string) int32 {
 
 func (c *Cluster) groupMaxSize() int32 {
 	return c.brokerConfigInt("group.max.size", 2147483647)
+}
+
+// maxPartitionsPerRequest is the most partitions a CreateTopics or
+// CreatePartitions may add, 10000 by default. Kafka's limit is
+// controller.max.records.per.batch, so we use that config.
+func (c *Cluster) maxPartitionsPerRequest() int32 {
+	return c.brokerConfigInt("controller.max.records.per.batch", 10000)
 }
 
 func (c *Cluster) consumerGroupMaxSize() int32 {

@@ -267,23 +267,3 @@ func (c *Cluster) topicSynonyms(rc *kmsg.DescribeConfigsResponseResourceConfig) 
 	}
 	return syns
 }
-
-// topicDefaultSynonyms names the broker static default each topic config
-// falls back to in Kafka, which is at our default for the topic config. Kafka
-// lists log.retention.hours and log.roll.hours, 168 by default, only after a
-// log.retention.ms or log.roll.ms synonym, since those two have no default.
-var topicDefaultSynonyms = map[string]struct {
-	k     string
-	hours bool
-}{
-	"cleanup.policy":         {k: "log.cleanup.policy"},
-	"compression.type":       {k: "compression.type"},
-	"delete.retention.ms":    {k: "log.cleaner.delete.retention.ms"},
-	"max.message.bytes":      {k: "message.max.bytes"},
-	"message.timestamp.type": {k: "log.message.timestamp.type"},
-	"min.insync.replicas":    {k: "min.insync.replicas"},
-	"retention.bytes":        {k: "log.retention.bytes"},
-	"retention.ms":           {k: "log.retention.hours", hours: true},
-	"segment.bytes":          {k: "log.segment.bytes"},
-	"segment.ms":             {k: "log.roll.hours", hours: true},
-}

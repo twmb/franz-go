@@ -106,7 +106,7 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 		switch {
 		case req.TimeoutMillis <= 0:
 			return failAll(kerr.RequestTimedOut.Code)
-		case newParts > maxPartitionsPerRequest:
+		case newParts > int64(c.maxPartitionsPerRequest()):
 			return failAll(kerr.PolicyViolation.Code)
 		}
 	}

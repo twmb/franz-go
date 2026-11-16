@@ -1515,7 +1515,6 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		{"zero partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 0 }, kerr.InvalidPartitions.Code},
 		{"negative partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = -2 }, kerr.InvalidPartitions.Code},
 		{"too many partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 10001 }, kerr.PolicyViolation.Code},
-		{"metadata log name", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.Topic = "__cluster_metadata" }, kerr.InvalidRequest.Code},
 		{"invalid name", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.Topic = "bad name" }, kerr.InvalidTopicException.Code},
 		{"timeout already passed", func(req *kmsg.CreateTopicsRequest, _ *kmsg.CreateTopicsRequestTopic) { req.TimeoutMillis = 0 }, kerr.RequestTimedOut.Code},
 		{"assignment with a broker twice", assign([]int32{0, 0}), kerr.InvalidReplicaAssignment.Code},
@@ -1545,9 +1544,17 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		}
 	}
 	// Cluster.CreateTopic, which Metadata's auto-creation shares, refuses
-	// the metadata log's name and more than 10000 partitions too.
-	if c.CreateTopic("__cluster_metadata", 1, nil) == nil || c.CreateTopic("huge", 10001, nil) == nil {
-		t.Error("CreateTopic created the metadata log or a topic with 10001 partitions")
+	// more than 10000 partitions too, and
+	// controller.max.records.per.batch changes the limit.
+	if c.CreateTopic("huge", 10001, nil) == nil {
+		t.Error("CreateTopic created a topic with 10001 partitions")
+	}
+	small := newCoverCluster(t, NumBrokers(1), BrokerConfigs(map[string]string{"controller.max.records.per.batch": "2"}))
+	if err := small.CreateTopic("two", 2, nil); err != nil {
+		t.Errorf("CreateTopic with 2 partitions at a limit of 2: %v", err)
+	}
+	if small.CreateTopic("three", 3, nil) == nil {
+		t.Error("CreateTopic created 3 partitions at a limit of 2")
 	}
 	// Seeded a.b and a_b collide, and a_b still refuses a new a.b after
 	// a.b is deleted.

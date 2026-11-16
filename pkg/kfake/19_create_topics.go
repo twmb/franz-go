@@ -72,8 +72,8 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 
 	misrouted := b != c.controller
 
-	// Kafka answers a duplicated name, and the metadata log's name, with
-	// INVALID_REQUEST before checking anything else, and creates the rest.
+	// Kafka answers a duplicated name with INVALID_REQUEST before
+	// checking anything else, and creates the rest.
 	counts := make(map[string]int)
 	for _, rt := range req.Topics {
 		counts[rt.Topic]++
@@ -85,7 +85,7 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 	)
 	for i := range req.Topics {
 		rt := &req.Topics[i]
-		if counts[rt.Topic] > 1 || rt.Topic == clusterMetadataTopic {
+		if counts[rt.Topic] > 1 {
 			donet(rt.Topic, kerr.InvalidRequest.Code)
 			continue
 		}
@@ -129,7 +129,7 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 		switch {
 		case req.TimeoutMillis <= 0:
 			return failAll(kerr.RequestTimedOut.Code)
-		case newParts > maxPartitionsPerRequest:
+		case newParts > int64(c.maxPartitionsPerRequest()):
 			return failAll(kerr.PolicyViolation.Code)
 		}
 	}
@@ -169,14 +169,6 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 	return resp, nil
 }
 
-// maxPartitionsPerRequest is Kafka's default controller.max.records.per.batch:
-// a CreateTopics or CreatePartitions that would add more partitions fails.
-const maxPartitionsPerRequest = 10000
-
-// clusterMetadataTopic is the metadata log's name, which Kafka refuses to
-// create.
-const clusterMetadataTopic = "__cluster_metadata"
-
 // createdTopicConfigs returns every config a newly created topic has, sorted
 // by name, as CreateTopics v5+ answers. A validate-only create stores nothing,
 // so we add the request's configs ourselves.
@@ -213,9 +205,6 @@ func (c *Cluster) createdTopicConfigs(t string, reqConfigs map[string]*string, v
 // reports. The caller runs notifyTopicChange, refreshCompactTicker and
 // persistTopicsState once, after its whole batch.
 func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[string]string, validateOnly bool) (int, int, map[string]*string, *kerr.Error) {
-	if rt.Topic == clusterMetadataTopic {
-		return 0, 0, nil, kerr.InvalidRequest
-	}
 	if !validTopicName(rt.Topic) {
 		return 0, 0, nil, kerr.InvalidTopicException
 	}
@@ -271,7 +260,7 @@ func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[strin
 	}
 	// A request caps the partitions it adds before it gets here; this
 	// caps a create from Metadata or Cluster.CreateTopic.
-	if nparts > maxPartitionsPerRequest {
+	if nparts > int(c.maxPartitionsPerRequest()) {
 		return 0, 0, nil, kerr.PolicyViolation
 	}
 
