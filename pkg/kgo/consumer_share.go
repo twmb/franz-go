@@ -25,6 +25,8 @@ type (
 
 		fm fetchManager
 
+		leaveOnce sync.Once // starts leaving with the first caller's context
+
 		// Our subscribed topic set and their partition metadata,
 		// updated atomically after metadata responses. The keys are
 		// the topic names we send as SubscribedTopicNames in the

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -170,6 +171,8 @@ type groupConsumer struct {
 	is848    bool
 	g848     *g848
 
+	leaveOnce sync.Once // starts leaving with the first caller's context
+
 	dying    bool // set when closing, read in findNewAssignments
 	left     chan struct{}
 	leaveErr error // set before left is closed
@@ -269,6 +272,9 @@ func (cl *Client) LeaveGroup() {
 // context, or client close. To unblock a poll loop when leaving, cancel the
 // context you poll with (or Close the client).
 //
+// The first call starts the leave operation with its context. Later callers
+// observe that operation; their contexts only bound how long they wait.
+//
 // Do not call this function with a non-nil context synchronously from
 // within an OnPartitions callback: the leave waits for the group
 // management loop to finish, and the loop is waiting for your callback to
@@ -286,7 +292,7 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	}
 
 	if c.s != nil {
-		go c.s.leave(ctx)
+		c.s.leaveOnce.Do(func() { go c.s.leave(ctx) })
 		if immediate {
 			return nil
 		}
@@ -298,14 +304,16 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 		}
 	}
 
-	go func() {
-		c.waitAndAddRebalanceSilent()
-		c.mu.Lock() // lock for assign
-		c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
-		c.g.leave(ctx)
-		c.mu.Unlock()
-		c.unaddRebalance()
-	}()
+	c.g.leaveOnce.Do(func() {
+		go func() {
+			c.waitAndAddRebalanceSilent()
+			c.mu.Lock() // lock for assign
+			c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
+			c.g.leave(ctx)
+			c.mu.Unlock()
+			c.unaddRebalance()
+		}()
+	})
 
 	if immediate {
 		return nil
