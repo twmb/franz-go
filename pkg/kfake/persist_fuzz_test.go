@@ -1,13 +1,22 @@
 package kfake
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // FuzzReadEntries feeds arbitrary bytes to readEntries and verifies invariants:
@@ -310,6 +319,30 @@ func TestMemFSFaultInjection(t *testing.T) {
 	f.Close()
 }
 
+// TestPersistFirstSaveCut verifies that a cluster whose first save stops
+// partway seeds its topics again at the next start, and that a first save
+// creates the partitions directory.
+func TestPersistFirstSaveCut(t *testing.T) {
+	t.Parallel()
+	mfs := newTestMemFS()
+	mfs.fs.(*memFS).failRename = func(oldpath, _ string) error {
+		if filepath.Base(oldpath) == "topics.json.tmp" {
+			return &testError{"injected"}
+		}
+		return nil
+	}
+	if _, err := NewCluster(mfs.opt(), NumBrokers(1), SeedTopics(1, "t")); err == nil {
+		t.Fatal("NewCluster with a failed first save: got no error")
+	}
+	mfs.fs.(*memFS).failRename = nil
+	if c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(1, "t")); c.PartitionInfo("t", 0) == nil {
+		t.Fatal("the next start did not seed the topic")
+	}
+	if _, err := mfs.fs.Stat("/kfake/partitions"); err != nil {
+		t.Errorf("after the first save: %v", err)
+	}
+}
+
 type testError struct{ msg string }
 
 func (e *testError) Error() string { return e.msg }
@@ -574,13 +607,18 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 			delete(c.data.t2id, topic)
 			delete(c.data.treplicas, topic)
 			delete(c.data.tcfgs, topic)
-			delete(c.data.tnorms, normalizeTopicName(topic))
+			c.data.dropNorm(topic)
 			c.persistTopicsState()
 			delete(existing, topic)
 		} else {
-			// Create it
+			// Create it, with a batch in each partition. A delete
+			// above leaves the files of the topic it deletes.
 			c.data.mkt(topic, 1+rng.Intn(3), -1, nil)
 			c.persistTopicsState()
+			for _, pd := range c.data.tps[topic] {
+				b := makeTestBatch(0, 1)
+				c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+			}
 			existing[topic] = true
 		}
 	}
@@ -596,8 +634,14 @@ func TestChaosTopicCreateDeleteRestart(t *testing.T) {
 	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
 
 	for topic := range expectedTopics {
-		if _, ok := c2.data.tps.gett(topic); !ok {
+		ps, ok := c2.data.tps.gett(topic)
+		if !ok {
 			t.Fatalf("expected topic %s to exist after restart", topic)
+		}
+		for p, pd := range ps {
+			if n := pd.totalBatches(); n != 1 {
+				t.Fatalf("topic %s partition %d: %d batches after restart, want 1", topic, p, n)
+			}
 		}
 	}
 	for _, topic := range allTopics {
@@ -636,125 +680,8 @@ func TestPersistTopicURLEscaping(t *testing.T) {
 	}
 }
 
-// TestPersistPIDEndTxAndTimeout verifies that PID state survives a
-// shutdown/restart cycle, testing init, endtx, and timeout log entries.
-func TestPersistPIDEndTxAndTimeout(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	c := newCluster(t, DataDir(dir), NumBrokers(1),
-		SeedTopics(1, "t"))
-
-	// PID 100: init, then endtx commit (epoch bump to 2).
-	p100 := &pidinfo{
-		pids:       &c.pids,
-		id:         100,
-		epoch:      1,
-		txid:       "tx-a",
-		txTimeout:  60000,
-		lastActive: time.Now(),
-	}
-	c.pids.ids[100] = p100
-	c.pids.byTxid["tx-a"] = p100
-	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 100, Epoch: 1, TxID: "tx-a", Timeout: 60000})
-	c.persistPIDEntry(pidLogEntry{Type: "endtx", PID: 100, Epoch: 2, Commit: new(true)})
-	p100.epoch = 2
-	p100.lastWasCommit = true
-
-	// PID 200: init, then timeout (epoch bump to 2).
-	p200 := &pidinfo{
-		pids:       &c.pids,
-		id:         200,
-		epoch:      1,
-		txid:       "tx-b",
-		txTimeout:  30000,
-		lastActive: time.Now(),
-	}
-	c.pids.ids[200] = p200
-	c.pids.byTxid["tx-b"] = p200
-	c.persistPIDEntry(pidLogEntry{Type: "init", PID: 200, Epoch: 1, TxID: "tx-b", Timeout: 30000})
-	c.persistPIDEntry(pidLogEntry{Type: "timeout", PID: 200, Epoch: 2})
-	p200.epoch = 2
-
-	// PID 300: init only - verifies lastWasCommit and txTimeout.
-	p300 := &pidinfo{
-		pids:          &c.pids,
-		id:            300,
-		epoch:         5,
-		txid:          "tx-c",
-		txTimeout:     90000,
-		lastWasCommit: true,
-		lastActive:    time.Now(),
-	}
-	c.pids.ids[300] = p300
-	c.pids.byTxid["tx-c"] = p300
-
-	c.Close()
-
-	// Reopen - the pids.log has live entries (init+endtx+timeout).
-	// On shutdown, savePIDsLog rewrites as compacted "init" entries.
-	// So this tests both the live replay path AND the compacted path.
-	c2 := newCluster(t, DataDir(dir), NumBrokers(1))
-
-	// PID 100: endtx committed, epoch should be 2.
-	r100, ok := c2.pids.ids[100]
-	if !ok {
-		t.Fatal("PID 100 missing after restart")
-	}
-	if r100.epoch != 2 {
-		t.Fatalf("PID 100 epoch: expected 2, got %d", r100.epoch)
-	}
-	if r100.txid != "tx-a" {
-		t.Fatalf("PID 100 txid: expected tx-a, got %s", r100.txid)
-	}
-	if !r100.lastWasCommit {
-		t.Fatal("PID 100 lastWasCommit: expected true")
-	}
-	if r100.txTimeout != 60000 {
-		t.Fatalf("PID 100 txTimeout: expected 60000, got %d", r100.txTimeout)
-	}
-
-	// PID 200: timeout, epoch should be 2.
-	r200, ok := c2.pids.ids[200]
-	if !ok {
-		t.Fatal("PID 200 missing after restart")
-	}
-	if r200.epoch != 2 {
-		t.Fatalf("PID 200 epoch: expected 2, got %d", r200.epoch)
-	}
-	if r200.txTimeout != 30000 {
-		t.Fatalf("PID 200 txTimeout: expected 30000, got %d", r200.txTimeout)
-	}
-
-	// PID 300: init only, verify lastWasCommit and txTimeout round-trip.
-	r300, ok := c2.pids.ids[300]
-	if !ok {
-		t.Fatal("PID 300 missing after restart")
-	}
-	if r300.epoch != 5 {
-		t.Fatalf("PID 300 epoch: expected 5, got %d", r300.epoch)
-	}
-	if !r300.lastWasCommit {
-		t.Fatal("PID 300 lastWasCommit: expected true")
-	}
-	if r300.txTimeout != 90000 {
-		t.Fatalf("PID 300 txTimeout: expected 90000, got %d", r300.txTimeout)
-	}
-
-	// Verify byTxid lookups.
-	if c2.pids.byTxid["tx-a"] != r100 {
-		t.Fatal("byTxid[tx-a] mismatch")
-	}
-	if c2.pids.byTxid["tx-b"] != r200 {
-		t.Fatal("byTxid[tx-b] mismatch")
-	}
-	if c2.pids.byTxid["tx-c"] != r300 {
-		t.Fatal("byTxid[tx-c] mismatch")
-	}
-}
-
 // TestPersistMeta848GroupReplay verifies that 848 consumer group metadata
-// (type, assignor, groupEpoch) survives a restart via groups.log replay.
+// (type and groupEpoch) survives a restart via groups.log replay.
 func TestPersistMeta848GroupReplay(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -769,7 +696,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 		c.groups.gs["test-848-group"] = g
 
 		g.typ = "consumer"
-		g.assignorName = "uniform"
 		g.groupEpoch = 7
 
 		// Persist the 848 metadata entry.
@@ -777,7 +703,6 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 			Type:       "meta848",
 			Group:      "test-848-group",
 			GroupType:  "consumer",
-			Assignor:   "uniform",
 			GroupEpoch: 7,
 		})
 	})
@@ -806,11 +731,13 @@ func TestPersistMeta848GroupReplay(t *testing.T) {
 	if g2.typ != "consumer" {
 		t.Fatalf("group type: expected consumer, got %s", g2.typ)
 	}
-	if g2.assignorName != "uniform" {
-		t.Fatalf("assignor: expected uniform, got %s", g2.assignorName)
-	}
 	if g2.groupEpoch != 7 {
 		t.Fatalf("groupEpoch: expected 7, got %d", g2.groupEpoch)
+	}
+	// The group restored no members, and an empty group's assignment
+	// epoch is its group epoch.
+	if g2.targetAssignmentEpoch != 7 {
+		t.Fatalf("targetAssignmentEpoch: expected 7, got %d", g2.targetAssignmentEpoch)
 	}
 
 	// Verify the commit coexists.
@@ -1067,23 +994,36 @@ func TestPersistOffsetDeleteRoundTrip(t *testing.T) {
 
 // TestPersistSnapshotFullReplayConvergence verifies that the snapshot
 // fast path and full-replay path produce equivalent partition state.
-// Produces data, shuts down (snapshot created), opens via snapshot
-// (records state), then deletes snapshot and opens via full replay,
-// comparing all key fields.
+// Produces data and moves the leader, shuts down (snapshot created), opens
+// via snapshot (records state), then deletes snapshot and opens via full
+// replay, comparing all key fields.
 func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
 	// Phase 1: produce data and shut down cleanly to create snapshot
 	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1),
+		c := newCluster(t, DataDir(dir), NumBrokers(3),
 			SeedTopics(3, "conv"))
 		pd, _ := c.data.tps.getp("conv", 0)
 		for i := range 20 {
 			b := makeTestBatch(pd.highWatermark, int32(1+i%3))
 			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
 		}
+		if err := c.MoveTopicPartition("conv", 0, 2); err != nil {
+			t.Fatal(err)
+		}
+		crashed := t.TempDir()
+		copyDir(t, dir, crashed)
 		c.Close()
+
+		// A crash right after the move keeps it.
+		c = newCluster(t, DataDir(crashed), NumBrokers(3))
+		c.admin(func() {
+			if pd := c.data.tps["conv"][0]; pd.epoch != 1 || pd.leader.node != 2 {
+				t.Errorf("after a crash: epoch %d and leader %d, want 1 and 2", pd.epoch, pd.leader.node)
+			}
+		})
 	}
 
 	// Phase 2: open with snapshot, record state
@@ -1094,11 +1034,14 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 		maxTimestampSeen int64
 		nbytes           int64
 		batchCount       int
+		epoch            int32
+		leader           int32
+		createdAt        time.Time
 	}
 
 	var snapState partState
 	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1))
+		c := newCluster(t, DataDir(dir), NumBrokers(3))
 		pd, ok := c.data.tps.getp("conv", 0)
 		if !ok {
 			t.Fatal("partition missing after snapshot load")
@@ -1110,19 +1053,22 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			maxTimestampSeen: pd.maxTimestampSeen,
 			nbytes:           pd.nbytes,
 			batchCount:       pd.totalBatches(),
+			epoch:            pd.epoch,
+			leader:           pd.leader.node,
+			createdAt:        pd.createdAt,
 		}
 		c.Close()
 	}
 
 	// Delete snapshot to force full replay
-	snapPath := filepath.Join(dir, "partitions", "conv-0", "snapshot.json")
+	snapPath := filepath.Join(partPath(t, dir, "conv"), "snapshot.json")
 	if err := os.Remove(snapPath); err != nil {
 		t.Fatalf("failed to remove snapshot: %v", err)
 	}
 
 	// Phase 3: open via full replay, compare state
 	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1))
+		c := newCluster(t, DataDir(dir), NumBrokers(3))
 
 		pd, ok := c.data.tps.getp("conv", 0)
 		if !ok {
@@ -1135,33 +1081,12 @@ func TestPersistSnapshotFullReplayConvergence(t *testing.T) {
 			maxTimestampSeen: pd.maxTimestampSeen,
 			nbytes:           pd.nbytes,
 			batchCount:       pd.totalBatches(),
+			epoch:            pd.epoch,
+			leader:           pd.leader.node,
+			createdAt:        pd.createdAt,
 		}
-
-		if snapState.hwm != replayState.hwm {
-			t.Errorf("HWM: snapshot=%d replay=%d", snapState.hwm, replayState.hwm)
-		}
-		if snapState.lso != replayState.lso {
-			t.Errorf("LSO: snapshot=%d replay=%d", snapState.lso, replayState.lso)
-		}
-		if snapState.logStartOffset != replayState.logStartOffset {
-			t.Errorf("logStartOffset: snapshot=%d replay=%d", snapState.logStartOffset, replayState.logStartOffset)
-		}
-		if snapState.maxTimestampSeen != replayState.maxTimestampSeen {
-			t.Errorf("maxTimestampSeen: snapshot=%d replay=%d", snapState.maxTimestampSeen, replayState.maxTimestampSeen)
-		}
-		if snapState.nbytes != replayState.nbytes {
-			t.Errorf("nbytes: snapshot=%d replay=%d", snapState.nbytes, replayState.nbytes)
-		}
-		if snapState.batchCount != replayState.batchCount {
-			t.Errorf("batchCount: snapshot=%d replay=%d", snapState.batchCount, replayState.batchCount)
-		}
-		// createdAt is inherently lossy on full replay - the snapshot
-		// stores the real partition creation time, while full replay
-		// can only approximate from the first batch's timestamp. Verify
-		// the replay path derived from first batch, not time.Now().
-		firstBatchTs := time.UnixMilli(pd.segments[0].index[0].firstTimestamp)
-		if !pd.createdAt.Equal(firstBatchTs) {
-			t.Errorf("createdAt: expected first batch timestamp %v, got %v", firstBatchTs, pd.createdAt)
+		if snapState != replayState || snapState.epoch != 1 || snapState.leader != 2 {
+			t.Errorf("snapshot %+v, full replay %+v, want equal at epoch 1 and leader 2", snapState, replayState)
 		}
 	}
 }
@@ -1189,7 +1114,7 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 	}
 
 	// Truncate the segment file to only ~3 records worth of data.
-	segDir := filepath.Join(dir, "partitions", "lso-0")
+	segDir := partPath(t, dir, "lso")
 	entries, _ := os.ReadDir(segDir)
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".dat" {
@@ -1215,6 +1140,64 @@ func TestPersistSnapshotLogStartOffsetClamp(t *testing.T) {
 	}
 }
 
+// TestPersistCorruptBatch verifies a restart through a segment with a
+// corrupt batch: as Kafka's log recovery does, we truncate the log there,
+// dropping every later segment, and later appends land where the index
+// says. A copy of a segment under another name for its base offset is not
+// loaded.
+func TestPersistCorruptBatch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		corrupt int    // which of the 5 batches; 3 fit in a segment
+		alias   string // instead, copy batch 0's segment to this name
+		want    int    // batches after the restart and one append
+	}{
+		{"sealed", 1, "", 2},
+		{"last", 4, "", 5},
+		{"alias", 0, "00.dat", 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mfs := newTestMemFS()
+			c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(1, "c"), BrokerConfigs(map[string]string{"log.segment.bytes": "150"}))
+			pd, _ := c.data.tps.getp("c", 0)
+			var path string
+			var at int64
+			for i := range 5 {
+				b := makeTestBatch(pd.highWatermark, 1)
+				c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+				if seg := &pd.segments[len(pd.segments)-1]; i == tc.corrupt {
+					path, at = filepath.Join(c.partDir(pd), segmentFileName(seg.base)), seg.index[len(seg.index)-1].segPos
+				}
+			}
+			c.Close()
+			mem := mfs.fs.(*memFS)
+			if tc.alias != "" {
+				mem.files[filepath.Join(filepath.Dir(path), tc.alias)] = &memFileData{data: slices.Clone(mem.files[path].data)}
+			} else {
+				mem.files[path].data[at+40] ^= 0xff // in the CRC'd bytes, same size
+			}
+
+			c = newCluster(t, mfs.opt(), NumBrokers(1))
+			pd, _ = c.data.tps.getp("c", 0)
+			c.admin(func() {
+				b := makeTestBatch(pd.highWatermark, 1)
+				c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+				if n := pd.totalBatches(); n != tc.want {
+					t.Errorf("got %d batches, want %d", n, tc.want)
+				}
+				pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+					if _, err := c.readBatchFull(pd, si, m); err != nil {
+						t.Errorf("batch at offset %d: %v", m.firstOffset, err)
+					}
+					return true
+				})
+			})
+		})
+	}
+}
+
 // TestTrimLeftDeletesSegmentFiles verifies that trimLeft deletes segment files
 // for fully-trimmed segments and adjusts nbytes correctly.
 func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
@@ -1237,8 +1220,7 @@ func TestTrimLeftDeletesSegmentFiles(t *testing.T) {
 	nbytesBeforeTrim := pd.nbytes
 
 	// Trim first 5 records.
-	pd.logStartOffset = 5
-	c.trimLeft(pd)
+	c.trimLeft(pd, 5)
 
 	if pd.totalBatches() != 5 {
 		t.Fatalf("expected 5 batches after trim, got %d", pd.totalBatches())
@@ -1273,8 +1255,7 @@ func TestTrimLeftAllThenProduce(t *testing.T) {
 	}
 
 	// Trim ALL records.
-	pd.logStartOffset = pd.highWatermark
-	c.trimLeft(pd)
+	c.trimLeft(pd, pd.highWatermark)
 
 	if pd.totalBatches() != 0 {
 		t.Fatalf("expected 0 batches after full trim, got %d", pd.totalBatches())
@@ -1346,8 +1327,7 @@ func TestSearchOffsetAfterTrimLeft(t *testing.T) {
 	}
 
 	// Trim first 5 records.
-	pd.logStartOffset = 5
-	c.trimLeft(pd)
+	c.trimLeft(pd, 5)
 
 	// Offset 4 is before logStartOffset - should not be found.
 	_, _, found, _ := pd.searchOffset(4)
@@ -1401,7 +1381,7 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	numSegsBefore := len(pd.segments)
 
 	// Corrupt the segment file so readBatchFull fails for some entries.
-	pdir := partDir(c.storageDir, pd.t, pd.p)
+	pdir := c.partDir(pd)
 	segName := segmentFileName(pd.segments[0].base)
 	path := filepath.Join(pdir, segName)
 	raw, err := c.fs.ReadFile(path)
@@ -1438,55 +1418,72 @@ func TestCompactBailsOnPartialReadError(t *testing.T) {
 	}
 }
 
-// TestSnapshotNbytesWithPartialTrim verifies that after a partial trim
-// (logStartOffset in the middle of a segment), snapshot reload correctly
-// computes nbytes without double-counting trimmed entries.
-func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
+// TestPersistLogStartRestart verifies DeleteRecords and retention survive a
+// restart: the log start offset, the high watermark, and the partition's
+// size come back as they were, from the snapshot after a clean shutdown, or
+// from the segments and the log start offset we wrote after a crash. A
+// partial delete leaves the first segment holding deleted batches, which
+// must not count toward the size; a full delete leaves no segment files. A
+// log start offset that cannot be saved does not move.
+func TestPersistLogStartRestart(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	for _, tc := range []struct {
+		name      string
+		deleteTo  int64
+		crash     bool // remove the snapshot before reopening
+		retention bool // every batch expires instead of deleteTo
+		failSave  bool // log_start.json cannot be written
+	}{
+		{"partial", 3, false, false, false},
+		{"partial-crash", 3, true, false, false},
+		{"all", -1, false, false, false},
+		{"all-crash", -1, true, false, false},
+		{"retention-crash", 0, true, true, false},
+		{"retention-save-fails", 0, true, true, true},
+		{"delete-save-fails", -1, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			const topic = "log-start-restart"
 
-	const topic = "nbytes-partial"
-	var savedNbytes int64
-	var savedHWM int64
+			var savedNbytes, savedHWM, savedStart int64
+			{
+				c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
+				pd, _ := c.data.tps.getp(topic, 0)
+				for range 10 {
+					b := makeTestBatch(pd.highWatermark, 1)
+					c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+				}
+				if tc.failSave { // a temp file that is a full directory
+					if err := os.MkdirAll(filepath.Join(partPath(t, dir, topic), logStartFile+".tmp", "x"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.retention {
+					c.ApplyRetention()
+				} else if err := c.DeleteRecords(topic, 0, tc.deleteTo); tc.failSave != errors.Is(err, kerr.KafkaStorageError) {
+					t.Fatal(err)
+				}
+				c.admin(func() { savedNbytes, savedHWM, savedStart = pd.nbytes, pd.highWatermark, pd.logStartOffset })
+				c.Close()
+			}
+			if tc.crash {
+				if err := os.Remove(filepath.Join(partPath(t, dir, topic), "snapshot.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	// Phase 1: produce records, partially trim, clean shutdown.
-	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, topic))
-
-		pd, _ := c.data.tps.getp(topic, 0)
-		for range 10 {
-			b := makeTestBatch(pd.highWatermark, 1)
-			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
-		}
-
-		// Advance logStartOffset to trim the first 3 records.
-		// This may leave the first segment with some trimmed entries
-		// (depending on whether they share a segment file).
-		pd.logStartOffset = 3
-		c.trimLeft(pd)
-
-		savedNbytes = pd.nbytes
-		savedHWM = pd.highWatermark
-		if savedNbytes <= 0 {
-			t.Fatalf("expected positive nbytes, got %d", savedNbytes)
-		}
-		c.Close()
-	}
-
-	// Phase 2: reopen from snapshot, verify nbytes matches.
-	{
-		c := newCluster(t, DataDir(dir), NumBrokers(1))
-
-		pd, ok := c.data.tps.getp(topic, 0)
-		if !ok {
-			t.Fatal("partition missing after restart")
-		}
-		if pd.highWatermark != savedHWM {
-			t.Fatalf("HWM mismatch: got %d, want %d", pd.highWatermark, savedHWM)
-		}
-		if pd.nbytes != savedNbytes {
-			t.Fatalf("nbytes mismatch after reopen: got %d, want %d", pd.nbytes, savedNbytes)
-		}
+			c := newCluster(t, DataDir(dir), NumBrokers(1))
+			pd, ok := c.data.tps.getp(topic, 0)
+			if !ok {
+				t.Fatal("partition missing after restart")
+			}
+			if pd.highWatermark != savedHWM || pd.logStartOffset != savedStart || pd.nbytes != savedNbytes {
+				t.Fatalf("after restart: got HWM %d log start %d nbytes %d, want %d %d %d",
+					pd.highWatermark, pd.logStartOffset, pd.nbytes, savedHWM, savedStart, savedNbytes)
+			}
+		})
 	}
 }
 
@@ -1494,9 +1491,8 @@ func TestSnapshotNbytesWithPartialTrim(t *testing.T) {
 // (used by compact) writes data that survives reopen.
 func TestRebuildSegmentsWritesSynced(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-
-	c := newCluster(t, DataDir(dir), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
+	mfs := newTestMemFS()
+	c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(1, "sync-rebuild"))
 
 	pd, _ := c.data.tps.getp("sync-rebuild", 0)
 
@@ -1532,6 +1528,185 @@ func TestRebuildSegmentsWritesSynced(t *testing.T) {
 		}
 		return true
 	})
+
+	// A rebuild that fails to write keeps the old segments.
+	mfs.fs.(*memFS).failNextWrite = &testError{"injected"}
+	if c.rebuildSegments(pd, batches[:1]) || pd.totalBatches() != 5 {
+		t.Fatalf("after a failed rebuild: %d batches, want the old 5", pd.totalBatches())
+	}
+	// So does one whose segment fsync fails, or whose leftover directories
+	// cannot be removed.
+	for _, f := range []struct{ op, suffix string }{{"sync", ".dat"}, {"removeall", ".compact"}, {"removeall", ".old"}} {
+		mfs.fs.(*memFS).failPath = func(op, path string) error {
+			if op == f.op && strings.HasSuffix(path, f.suffix) {
+				return &testError{"injected"}
+			}
+			return nil
+		}
+		if c.rebuildSegments(pd, batches[:1]) || pd.totalBatches() != 5 {
+			t.Fatalf("after a rebuild whose %s fails: %d batches, want the old 5", f.op, pd.totalBatches())
+		}
+	}
+	mfs.fs.(*memFS).failPath = nil
+
+	// A swap that can neither finish nor undo its renames leaves the new
+	// files for the load to rename in. Until then, the partition answers
+	// KAFKA_STORAGE_ERROR and writes nothing.
+	failed := mfs.clone()
+	c2 := newCluster(t, failed.opt(), NumBrokers(1))
+	pdir := c.partDir(pd)
+	failed.fs.(*memFS).failRename = func(oldpath, _ string) error {
+		if oldpath == pdir+".compact" || oldpath == pdir+".old" {
+			return &testError{"injected"}
+		}
+		return nil
+	}
+	c2.admin(func() { c2.rebuildSegments(c2.data.tps["sync-rebuild"][0], batches[:3]) })
+	failed.fs.(*memFS).failRename = nil
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c2, kgo.MaxVersions(v))
+	if p := produceRawV11(t, cl, "sync-rebuild", rawBatch(0, -1, 0, -1, kvRecord())); p.ErrorCode != kerr.KafkaStorageError.Code {
+		t.Errorf("produce to a failed partition: got %v, want KAFKA_STORAGE_ERROR", kerr.ErrorForCode(p.ErrorCode))
+	}
+	if resp, err := fetchByID(0, -1, 0, c2.TopicInfo("sync-rebuild").TopicID, 0).RequestWith(context.Background(), cl); err != nil || resp.Topics[0].Partitions[0].ErrorCode != kerr.KafkaStorageError.Code {
+		t.Errorf("fetch from a failed partition: %v %v, want KAFKA_STORAGE_ERROR", err, resp)
+	}
+	if pi := newCluster(t, failed.clone().opt(), NumBrokers(1)).PartitionInfo("sync-rebuild", 0); pi.HighWatermark != 3 {
+		t.Fatalf("after a failed swap: HWM %d, want 3", pi.HighWatermark)
+	}
+	// The next compaction finishes the swap.
+	c2.admin(func() {
+		pd2 := c2.data.tps["sync-rebuild"][0]
+		c2.compact(pd2, "sync-rebuild")
+		if pd2.failed || pd2.totalBatches() != 3 {
+			t.Errorf("after a compaction finished the swap: failed %v, %d batches, want 3", pd2.failed, pd2.totalBatches())
+		}
+	})
+
+	// A crash between the swap's two renames: the load finishes the swap.
+	mfs.fs.Rename(pdir, pdir+".compact")
+	c3 := newCluster(t, mfs.opt(), NumBrokers(1))
+	if pi := c3.PartitionInfo("sync-rebuild", 0); pi.HighWatermark != 5 {
+		t.Fatalf("after a crash in the swap: HWM %d, want 5", pi.HighWatermark)
+	}
+
+	// A swap whose directory fsync fails fails the partition and keeps
+	// the old files.
+	mfs.fs.(*memFS).failPath = func(op, path string) error {
+		if op == "syncdir" && path == filepath.Dir(pdir) {
+			return &testError{"injected"}
+		}
+		return nil
+	}
+	c3.admin(func() {
+		pd3 := c3.data.tps["sync-rebuild"][0]
+		c3.rebuildSegments(pd3, batches)
+		if _, err := mfs.fs.Stat(pdir + ".old"); !pd3.failed || err != nil {
+			t.Errorf("after a swap whose directory fsync failed: failed %v, old files %v", pd3.failed, err)
+		}
+		mfs.fs.(*memFS).failPath = nil
+		c3.compact(pd3, "sync-rebuild")
+		if _, err := mfs.fs.Stat(pdir + ".old"); pd3.failed || err == nil {
+			t.Errorf("after a compaction finished the swap: failed %v, old files %v", pd3.failed, err)
+		}
+	})
+}
+
+// TestPersistLoadSweep verifies what a restart removes from the data dir:
+// the directories of partitions we do not have and our temporary files,
+// and nothing we did not write.
+func TestPersistLoadSweep(t *testing.T) {
+	t.Parallel()
+	mfs := newTestMemFS()
+	c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(1, "t"))
+	var pdir string
+	c.admin(func() { pdir = c.partDir(c.data.tps["t"][0]) })
+	parts := filepath.Dir(pdir)
+	rows := []struct {
+		path string
+		kept bool
+	}{
+		{filepath.Join(parts, "README"), true},
+		{filepath.Join(parts, "mine", "file"), true},
+		{filepath.Join(parts, strings.Repeat("ab", 16)+"-0", "0.dat"), false}, // a topic we do not have
+		{strings.TrimSuffix(pdir, "0") + "1/0.dat", false},                    // past the topic's partitions
+		{filepath.Join(parts, "..", "notes.tmp"), true},
+		{filepath.Join(parts, "..", "topics.json.tmp"), false},
+		{filepath.Join(pdir, "notes.tmp"), true},
+		{filepath.Join(pdir, "snapshot.json.tmp"), false},
+		{pdir + ".compact/0.dat", true}, // beside the live directory and .old: the partition fails
+		{pdir + ".old/0.dat", true},
+	}
+	for _, r := range rows {
+		mfs.fs.MkdirAll(filepath.Dir(r.path), 0o755)
+		f, err := mfs.fs.OpenFile(r.path, os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	crashed := mfs.clone()
+	newCluster(t, crashed.opt(), NumBrokers(1))
+	for _, r := range rows {
+		if _, err := crashed.fs.Stat(r.path); (err == nil) != r.kept {
+			t.Errorf("%s after the restart: got kept %v, want %v", r.path, err == nil, r.kept)
+		}
+	}
+}
+
+// TestPersistFsyncs verifies the fsyncs we make without SyncWrites, so that
+// a power loss leaves whole files: a replaced file and its directory, a
+// rolled segment and its index, a new segment's directory, a new
+// partition's directory, the open segment at shutdown, and a compaction's
+// files and directories.
+func TestPersistFsyncs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		op   func(*Cluster, *partData)
+		want int
+	}{
+		{"json", func(c *Cluster, _ *partData) { writeJSONFile(c.fs, filepath.Join(c.cfg.dataDir, "x.json"), 1) }, 2},
+		{"pids.log", func(c *Cluster, _ *partData) { c.compactPIDsLog() }, 2},
+		{"groups.log", func(c *Cluster, _ *partData) { c.compactGroupsLog() }, 2},
+		{"roll", func(c *Cluster, pd *partData) {
+			b := makeTestBatch(pd.highWatermark, 1)
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+		}, 3},
+		{"shutdown", func(c *Cluster, pd *partData) { c.savePartition(c.fs, pd) }, 4},
+		{"new-partition", func(c *Cluster, _ *partData) {
+			pd := c.data.tps["f"][1]
+			b := makeTestBatch(pd.highWatermark, 1)
+			c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+		}, 2},
+		{"rebuild", func(c *Cluster, pd *partData) {
+			b, _ := c.readBatchFull(pd, 0, &pd.segments[0].index[0])
+			c.rebuildSegments(pd, []*partBatch{b})
+		}, 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mfs := newTestMemFS()
+			c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(2, "f"), BrokerConfigs(map[string]string{"log.segment.bytes": "1"}))
+			mem := mfs.fs.(*memFS)
+			syncs := func() int {
+				mem.mu.Lock()
+				defer mem.mu.Unlock()
+				return mem.syncs
+			}
+			c.admin(func() {
+				pd := c.data.tps["f"][0]
+				b := makeTestBatch(pd.highWatermark, 1)
+				c.pushBatch(pd, b.nbytes, b.RecordBatch, false)
+				before := syncs()
+				tc.op(c, pd)
+				if got := syncs() - before; got != tc.want {
+					t.Errorf("got %d fsyncs, want %d", got, tc.want)
+				}
+			})
+		})
+	}
 }
 
 // TestRebuildSegmentsSegmentSplitting verifies that rebuildSegments correctly
@@ -1613,8 +1788,7 @@ func TestTrimLeftPartialSegment(t *testing.T) {
 	}
 
 	// Trim first 5 - segment should remain but with fewer entries.
-	pd.logStartOffset = 5
-	c.trimLeft(pd)
+	c.trimLeft(pd, 5)
 
 	if len(pd.segments) != 1 {
 		t.Fatalf("expected 1 segment after partial trim, got %d", len(pd.segments))
@@ -1675,12 +1849,13 @@ func TestMaxTimestampBatchAfterCompaction(t *testing.T) {
 
 // TestWriteFailureTruncatesPartialEntry verifies that when writeEntry
 // fails (e.g., sync error), persistBatchToSegment truncates any partial
-// data so subsequent writes land at correct file positions.
+// data so subsequent writes land at correct file positions, and that a
+// failed transaction marker leaves the transaction open.
 func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	t.Parallel()
 
 	// Use memFS (no DataDir) so we can inject faults.
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, "fail-trunc"))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "fail-trunc"), SyncWrites())
 
 	mfs := c.fs.(*memFS)
 	pd, _ := c.data.tps.getp("fail-trunc", 0)
@@ -1708,7 +1883,7 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 
 	// The batchMeta was added in-memory but persist failed.
 	// The segment file should be truncated back to its pre-failure size.
-	pdir := partDir(c.storageDir, pd.t, pd.p)
+	pdir := c.partDir(pd)
 	path := filepath.Join(pdir, segmentFileName(seg.base))
 	info, err := mfs.Stat(path)
 	if err != nil {
@@ -1718,6 +1893,23 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 		t.Fatalf("expected file size %d after truncation, got %d",
 			sizeBeforeFailure, info.Size())
 	}
+
+	// With SyncWrites, a batch we cannot fsync fails the same way, and so
+	// does one whose segment directory we cannot fsync when we reopen it.
+	mfs.failNextSync = &testError{"injected sync"}
+	if b := makeTestBatch(pd.highWatermark, 1); c.pushBatch(pd, b.nbytes, b.RecordBatch, false) >= 0 {
+		t.Fatal("a batch whose fsync failed was appended")
+	}
+	mfs.failPath = func(op, path string) error {
+		if op == "syncdir" && path == pdir {
+			return &testError{"injected syncdir"}
+		}
+		return nil
+	}
+	if b := makeTestBatch(pd.highWatermark, 1); c.pushBatch(pd, b.nbytes, b.RecordBatch, false) >= 0 {
+		t.Fatal("a batch whose segment directory fsync failed was appended")
+	}
+	mfs.failPath = nil
 
 	// Produce 3 more batches - should succeed and land at correct positions.
 	for range 3 {
@@ -1745,6 +1937,49 @@ func TestWriteFailureTruncatesPartialEntry(t *testing.T) {
 	if readCount != 6 {
 		t.Fatalf("expected 6 readable batches, got %d", readCount)
 	}
+
+	// A transaction whose abort marker fails to write keeps the LSO below
+	// its records.
+	b = makeTestBatch(pd.highWatermark, 1)
+	b.ProducerID = 1
+	txnStart := c.pushBatch(pd, b.nbytes, b.RecordBatch, true)
+	mfs.failNextWrite = &testError{"injected write"}
+	if c.writeTxnMarker(pd, 1, 0, false, 0) >= 0 || pd.lastStableOffset != txnStart {
+		t.Fatalf("after a failed abort marker: LSO %d, want %d", pd.lastStableOffset, txnStart)
+	}
+
+	// An EndTxn whose marker fails keeps the transaction open with its
+	// decision, as Kafka does while its markers are pending: it refuses
+	// the other decision, and a retry once the marker writes commits.
+	c.admin(func() {
+		pidinf := c.pids.create(new("txn"), 60000)
+		pidinf.txParts.mkt("fail-trunc")[0] = pd
+		pidinf.maybeStart()
+		b := makeTestBatch(pd.highWatermark, 1)
+		b.ProducerID = pidinf.id
+		c.pushBatch(pd, b.nbytes, b.RecordBatch, true)
+		for _, s := range []struct {
+			commit, fail bool
+			code         int16
+			state        string
+		}{
+			{true, true, kerr.ConcurrentTransactions.Code, "PrepareCommit"},
+			{false, true, kerr.InvalidTxnState.Code, "PrepareCommit"},
+			{true, false, 0, "CompleteCommit"},
+		} {
+			mfs.failPath = func(op, path string) error {
+				if s.fail && op == "sync" && filepath.Dir(path) == pdir {
+					return &testError{"injected sync"}
+				}
+				return nil
+			}
+			req := &kmsg.EndTxnRequest{Version: 5, TransactionalID: "txn", ProducerID: pidinf.id, Commit: s.commit}
+			resp := c.pids.doEnd(&clientReq{cc: &clientConn{b: c.coordinator("txn")}, kreq: req}).(*kmsg.EndTxnResponse)
+			if state := c.pids.byTxid["txn"].state(); resp.ErrorCode != s.code || state != s.state {
+				t.Errorf("EndTxn commit=%v: got %v %s, want %v %s", s.commit, kerr.ErrorForCode(resp.ErrorCode), state, kerr.ErrorForCode(s.code), s.state)
+			}
+		}
+	})
 }
 
 // persistEntry frames data the way the persist writer does: length, CRC

@@ -25,17 +25,16 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 		return nil, err
 	}
 
-	if c.coordinator(req.GroupID).node != creq.cc.b.node {
-		resp.ErrorCode = kerr.NotCoordinator.Code
-		return resp, nil
-	}
-
 	// ACL: require GROUP READ (Kafka uses READ, not ALTER).
-	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.GroupID}); e != nil {
+	if e := c.deny(creq, req.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationRead, faultKey{group: req.GroupID, misrouted: !c.isCoordinator(creq, req.GroupID)}); e != nil {
 		resp.ErrorCode = e.Code
 		if creq.skipsWork(e) { // a timed-out reset still resets
 			return resp, nil
 		}
+	}
+	if ke := c.validateGroup(creq, req.GroupID); ke != nil {
+		resp.ErrorCode = ke.Code
+		return resp, nil
 	}
 
 	// Group type exclusivity: a consumer group under this id means
@@ -95,16 +94,10 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				continue
 			}
 
-			// -1 marks the partition uninitialized, as in Kafka: drop
-			// its state so the next fetch starts from
+			// Reset SPSO, scan cursor, end offset, and all record
+			// state. -1 leaves the partition without a start offset,
+			// as in Kafka: the next fetch takes one from
 			// share.auto.offset.reset.
-			if rp.StartOffset == -1 {
-				sg.partitions.delp(rt.Topic, rp.Partition)
-				rst.Partitions = append(rst.Partitions, rsp)
-				continue
-			}
-
-			// Reset SPSO, scan cursor, end offset, and all record state.
 			sp := sg.partitions.mkp(rt.Topic, rp.Partition, func() *sharePartition {
 				return new(sharePartition)
 			})
@@ -114,6 +107,7 @@ func (c *Cluster) handleAlterShareGroupOffsets(creq *clientReq) (kmsg.Response, 
 				acquireEnd: rp.StartOffset,
 				records:    make(map[int64]shareRecord),
 			}
+			sg.persistPartition(rt.Topic, rp.Partition)
 			rst.Partitions = append(rst.Partitions, rsp)
 		}
 		resp.Topics = append(resp.Topics, rst)

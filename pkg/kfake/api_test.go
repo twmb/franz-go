@@ -127,15 +127,15 @@ func TestTopicLifecycle(t *testing.T) {
 	const topic = "lifecycle"
 	c := newCluster(t, NumBrokers(1))
 
-	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
+	if err := c.CreateTopic(topic, 1, map[string]string{"retention.ms": "86400000"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.CreateTopic(topic, 1, nil); err == nil {
 		t.Fatal("creating a topic twice did not error")
 	}
 	ti := c.TopicInfo(topic)
-	if v := ti.Configs["cleanup.policy"]; v == nil || *v != "compact" {
-		t.Fatalf("topic configs %v do not carry cleanup.policy", ti.Configs)
+	if v := ti.Configs["retention.ms"]; v == nil || *v != "86400000" {
+		t.Fatalf("topic configs %v do not carry retention.ms", ti.Configs)
 	}
 	first := ti.TopicID
 

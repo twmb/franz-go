@@ -1,15 +1,14 @@
 package kfake
 
 import (
-	"cmp"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"maps"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,43 +20,11 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// FORMAT MIGRATION GUIDE
-//
-// Each file/entry embeds its own version. We support current version
-// (currentPersistVersion) and one version back (N-1). On save, we
-// always write currentPersistVersion.
-//
-// Append log entries are version-tagged per-entry, so old entries
-// remain readable in-place. No need to rewrite large files on upgrade.
-// New entries are appended at the current version.
-//
-// To evolve the format (bump from version N to N+1):
-//
-//   1. Bump currentPersistVersion from N to N+1.
-//
-//   2. For each type whose format changed, copy current type to
-//      a versioned name (persistTopics -> persistTopicsVN), then
-//      modify persistTopics for the new shape.
-//
-//   3. Write migration function: migrateTopicsVN(old) -> new
-//
-//   4. For JSON files: update loader to check version, decode old
-//      type if version == N, call migration.
-//      For append log entries: update entry decoder to handle both
-//      version N and N+1 entries in the same file.
-//
-//   5. Delete v(N-1) migration code and types. Only keep one old
-//      version. Users on v(N-1) must first load+save with v(N)
-//      code, then upgrade to v(N+1).
-//
-//   6. Unchanged types need no migration.
-//
-// Segment files (.dat) use raw Kafka RecordBatch wire format and are
-// version-independent. Index files (.idx) have a per-entry version
-// byte, so .idx format changes follow the per-entry versioning
-// pattern (step 4 above) without requiring segment file changes.
-
-const currentPersistVersion = 1
+// currentPersistVersion is the version we write into append log entries,
+// index (.idx) entries, and the JSON files that have a Version field.
+// Segment files (.dat) are raw Kafka RecordBatch wire format and have no
+// version. We refuse a data dir whose meta.json has a newer version.
+const currentPersistVersion = 2
 
 // entryHeader is the framing for all append log entries.
 // Format: [4 bytes length][4 bytes CRC32][2 bytes version][N bytes data]
@@ -145,6 +112,17 @@ type (
 		Partitions int               `json:"partitions"`
 		Replicas   int               `json:"replicas"`
 		Configs    map[string]string `json:"configs,omitempty"`
+		Parts      []persistPart     `json:"parts,omitempty"` // by partition
+	}
+
+	// persistPart is what a partition's log does not have: its leader
+	// and epoch, which a leader move with no produce after it changes,
+	// its log dirs, and its creation time.
+	persistPart struct {
+		Leader  int32            `json:"leader"`
+		Epoch   int32            `json:"epoch"`
+		Dirs    map[int32]string `json:"dirs,omitempty"`
+		Created time.Time        `json:"created"`
 	}
 
 	persistACLs struct {
@@ -181,6 +159,17 @@ type (
 		Configs map[string]string `json:"configs"`
 	}
 
+	// persistDynamicConfigs is dynamic_configs.json: what
+	// IncrementalAlterConfigs and UpdateFeatures set, other than broker
+	// and topic configs.
+	persistDynamicConfigs struct {
+		Version       int                           `json:"version"`
+		GroupConfigs  map[string]map[string]*string `json:"group_configs,omitempty"`
+		ClientMetrics map[string]map[string]*string `json:"client_metrics,omitempty"`
+		Features      map[string]int16              `json:"features,omitempty"`
+		FeaturesEpoch int64                         `json:"features_epoch,omitempty"`
+	}
+
 	persistQuotas struct {
 		Version int            `json:"version"`
 		Quotas  []persistQuota `json:"quotas"`
@@ -206,19 +195,13 @@ type (
 		Topic string `json:"topic"`
 		Part  int32  `json:"partition"`
 
-		// v2 format: independent entries.
 		Entries [5]persistPidEntry `json:"entries,omitempty"`
 		Count   uint8              `json:"count,omitempty"`
-
-		// v1 format (legacy): overlapping-pair circular buffer.
-		// Kept for backwards-compatible loading only.
-		Seq     [5]int32 `json:"seq,omitempty"`
-		Offsets [5]int64 `json:"offsets,omitempty"`
-
-		At      uint8 `json:"at"`
-		Epoch   int16 `json:"epoch"`
-		Seen    bool  `json:"seen,omitempty"`
-		NextSeq int32 `json:"next_seq,omitempty"`
+		At      uint8              `json:"at"`
+		Epoch   int16              `json:"epoch"`
+		Seen    bool               `json:"seen,omitempty"`
+		NextSeq int32              `json:"next_seq,omitempty"`
+		LastTS  int64              `json:"last_ts,omitempty"`
 	}
 
 	persistPidEntry struct {
@@ -232,12 +215,15 @@ type (
 		HighWatermark    int64                `json:"high_watermark"`
 		LastStableOffset int64                `json:"last_stable_offset"`
 		LogStartOffset   int64                `json:"log_start_offset"`
-		Epoch            int32                `json:"epoch"`
-		LeaderNode       int32                `json:"leader_node,omitempty"`
 		MaxTimestamp     int64                `json:"max_timestamp"`
-		CreatedAt        time.Time            `json:"created_at"`
 		AbortedTxns      []persistAbortedTxn  `json:"aborted_txns,omitempty"`
 		Segments         []persistSegmentInfo `json:"segments"`
+	}
+
+	// persistLogStart is a partition's log_start.json, the log start
+	// offset as DeleteRecords or retention last left it.
+	persistLogStart struct {
+		LogStartOffset int64 `json:"log_start_offset"`
 	}
 
 	persistAbortedTxn struct {
@@ -372,7 +358,7 @@ func (c *Cluster) segReadFile(pd *partData, segIdx int) (file, error) {
 	if seg.readFile != nil {
 		return seg.readFile, nil
 	}
-	path := filepath.Join(partDir(c.storageDir, pd.t, pd.p), segmentFileName(seg.base))
+	path := filepath.Join(c.partDir(pd), segmentFileName(seg.base))
 	f, err := c.fs.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
@@ -416,8 +402,9 @@ type (
 		Epoch    int32   `json:"e,omitempty"`
 		Metadata *string `json:"m,omitempty"`
 
-		// For commit entries: unix millis of last commit time (KIP-211)
-		LastCommit *int64 `json:"lc,omitempty"`
+		// For commit entries: unix nanos of the last commit time (KIP-211),
+		// which orders it against a staged TxnOffsetCommit.
+		LastCommit int64 `json:"lc,omitempty"`
 
 		// For meta entries (classic groups)
 		GroupType  string `json:"typ,omitempty"`
@@ -425,22 +412,42 @@ type (
 		Protocol   string `json:"pr,omitempty"`
 		Generation int32  `json:"gen,omitempty"`
 
-		// For meta848 entries (consumer groups)
-		Assignor   string `json:"assignor,omitempty"`
-		GroupEpoch int32  `json:"epoch848,omitempty"`
+		// For meta848 (consumer group) and shareMeta entries
+		GroupEpoch int32 `json:"epoch848,omitempty"`
 
 		// For static member entries
 		InstanceID string `json:"instance,omitempty"`
 		MemberID   string `json:"member,omitempty"`
+
+		// For share entries, which keep the start offset in Offset: the
+		// topic's ID, which a topic created again does not match, and
+		// the records past the start offset.
+		TopicID *uuid                    `json:"tid,omitempty"`
+		Records map[int64]shareLogRecord `json:"sr,omitempty"`
 	}
 
+	shareLogRecord struct {
+		State         int8  `json:"s"`
+		DeliveryCount int32 `json:"dc"`
+	}
+
+	// pidLogEntry is one line of pids.log. "init" restores a producer
+	// in full, replacing any earlier state for its PID and any other PID
+	// of its transactional ID; a Commit says a transaction ended since the
+	// last InitProducerID. "begin" opens a transaction, which a restart
+	// aborts unless session state restores it. "prepare" is EndTxn's
+	// decision, with its markers' epoch and the offsets a commit applies;
+	// a restart finishes the end if no init follows. "expire" drops the
+	// PID.
 	pidLogEntry struct {
-		Type    string `json:"type"` // init, endtx, timeout
-		PID     int64  `json:"pid"`
-		Epoch   int16  `json:"epoch"`
-		TxID    string `json:"txid,omitempty"`
-		Timeout int32  `json:"timeout,omitempty"`
-		Commit  *bool  `json:"commit,omitempty"`
+		Type    string          `json:"type"` // init, begin, prepare, expire
+		PID     int64           `json:"pid"`
+		Epoch   int16           `json:"epoch"`
+		TxID    string          `json:"txid,omitempty"`
+		Timeout int32           `json:"timeout,omitempty"`
+		Commit  *bool           `json:"commit,omitempty"`
+		PrevID  int64           `json:"prev,omitempty"`
+		Offsets stagedTxOffsets `json:"offsets,omitempty"`
 	}
 )
 
@@ -456,6 +463,7 @@ type (
 		metas   map[string][]byte
 		commits map[glCommitKey][]byte
 		statics map[glStaticKey][]byte
+		shares  map[glCommitKey][]byte
 	}
 )
 
@@ -466,6 +474,7 @@ func replayGroupsLog(entries []entryData) glReplay {
 		metas:   make(map[string][]byte),
 		commits: make(map[glCommitKey][]byte),
 		statics: make(map[glStaticKey][]byte),
+		shares:  make(map[glCommitKey][]byte),
 	}
 	for _, e := range entries {
 		var entry groupLogEntry
@@ -477,7 +486,24 @@ func replayGroupsLog(entries []entryData) glReplay {
 			r.commits[glCommitKey{entry.Group, entry.Topic, entry.Part}] = e.data
 		case "delete":
 			delete(r.commits, glCommitKey{entry.Group, entry.Topic, entry.Part})
-		case "meta", "meta848":
+		case "deleteGroup":
+			delete(r.metas, entry.Group)
+			for k := range r.commits {
+				if k.group == entry.Group {
+					delete(r.commits, k)
+				}
+			}
+			for k := range r.statics {
+				if k.group == entry.Group {
+					delete(r.statics, k)
+				}
+			}
+			maps.DeleteFunc(r.shares, func(k glCommitKey, _ []byte) bool { return k.group == entry.Group })
+		case "share":
+			r.shares[glCommitKey{entry.Group, entry.Topic, entry.Part}] = e.data
+		case "shareDelete":
+			delete(r.shares, glCommitKey{entry.Group, entry.Topic, entry.Part})
+		case "meta", "meta848", "shareMeta":
 			r.metas[entry.Group] = e.data
 		case "static":
 			if entry.MemberID == "" {
@@ -503,7 +529,7 @@ func writeJSONFile(fsys fs, path string, v any) error {
 		return fmt.Errorf("marshaling %s: %w", path, err)
 	}
 	tmpPath := path + ".tmp"
-	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := createTemp(fsys, tmpPath)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", tmpPath, err)
 	}
@@ -511,10 +537,30 @@ func writeJSONFile(fsys fs, path string, v any) error {
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
+	return replaceFile(fsys, f, tmpPath, path)
+}
+
+// replaceFile fsyncs the temporary file f, renames it over path, and fsyncs
+// the directory, so that a power loss leaves the old file or the new one.
+func replaceFile(fsys fs, f file, tmpPath, path string) error {
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("syncing %s: %w", tmpPath, err)
 	}
-	return fsys.Rename(tmpPath, path)
+	if err := fsys.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return fsys.SyncDir(filepath.Dir(path))
+}
+
+// createTemp creates the temporary file path, which we rename over a live
+// file. We remove what is at path first and create with O_EXCL, so that a
+// symlink planted at path is replaced rather than followed, and its target
+// is never truncated.
+func createTemp(fsys fs, path string) (file, error) {
+	if err := fsys.Remove(path); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return fsys.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 }
 
 // readJSONFile reads and unmarshals a JSON file. Returns false if the
@@ -543,10 +589,20 @@ func appendLogEntry(f file, v any, syncW bool) (int, error) {
 	return entryHeaderSize + len(data), writeEntry(f, data, syncW)
 }
 
-// partDir returns the partition directory path, URL-escaping for fs safety.
-func partDir(dataDir, topic string, part int32) string {
-	escaped := url.PathEscape(topic)
-	return filepath.Join(dataDir, "partitions", fmt.Sprintf("%s-%d", escaped, part))
+// partDir returns the partition directory, named by topic ID: a topic
+// created again under the same name gets a new directory.
+func (c *Cluster) partDir(pd *partData) string {
+	return filepath.Join(c.storageDir, "partitions", fmt.Sprintf("%s-%d", topicDirID(c.data.t2id[pd.t]), pd.p))
+}
+
+func topicDirID(id uuid) string { return fmt.Sprintf("%x", id[:]) }
+
+// isPartDirName returns whether name is one partDir builds.
+func isPartDirName(name string) bool {
+	id, p, _ := strings.Cut(name, "-")
+	b, idErr := hex.DecodeString(id)
+	n, pErr := strconv.ParseInt(p, 10, 32)
+	return idErr == nil && pErr == nil && len(b) == 16 && n >= 0 && name == fmt.Sprintf("%x-%d", b, n)
 }
 
 // segmentFileName returns the segment file name for a given base offset.
@@ -563,25 +619,32 @@ func (c *Cluster) saveToDisk() error {
 	fsys := c.fs
 	dir := c.cfg.dataDir
 
-	if err := fsys.MkdirAll(dir, 0o755); err != nil {
+	// The meta.json write below fsyncs the data dir, which makes the
+	// entry for partitions/ durable before any partition writes into it.
+	if err := fsys.MkdirAll(filepath.Join(dir, "partitions"), 0o755); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
 	}
 
-	return errors.Join(
-		writeJSONFile(fsys, filepath.Join(dir, "meta.json"), persistMeta{
-			Version:   currentPersistVersion,
-			ClusterID: c.cfg.clusterID,
-		}),
+	if err := errors.Join(
 		c.saveTopics(fsys, dir),
 		c.saveACLs(fsys, dir),
 		c.saveSASL(fsys, dir),
 		c.saveBrokerConfigs(fsys, dir),
+		c.saveDynamicConfigs(fsys, dir),
 		c.saveQuotas(fsys, dir),
-		c.savePartitions(fsys, dir),
+		c.savePartitions(fsys),
 		c.saveGroupsLog(fsys, dir),
 		c.savePIDsLog(fsys, dir),
 		c.saveSeqWindows(fsys, dir),
-	)
+	); err != nil {
+		return err
+	}
+	// The load takes meta.json to mean the rest is there, so it goes
+	// last: a first save that a crash cuts off seeds again at the restart.
+	return writeJSONFile(fsys, filepath.Join(dir, "meta.json"), persistMeta{
+		Version:   currentPersistVersion,
+		ClusterID: c.cfg.clusterID,
+	})
 }
 
 func (c *Cluster) saveTopics(fsys fs, dir string) error {
@@ -596,16 +659,18 @@ func (c *Cluster) saveTopics(fsys fs, dir string) error {
 				cfgs[k] = *v
 			}
 		}
-		nparts := 0
-		if ps, ok := c.data.tps[t]; ok {
-			nparts = len(ps)
+		ps := c.data.tps[t]
+		parts := make([]persistPart, len(ps))
+		for p, pd := range ps {
+			parts[p] = persistPart{pd.leader.node, pd.epoch, pd.dirs, pd.createdAt}
 		}
 		pts = append(pts, persistTopic{
 			Name:       t,
 			ID:         id,
-			Partitions: nparts,
+			Partitions: len(ps),
 			Replicas:   c.data.treplicas[t],
 			Configs:    cfgs,
+			Parts:      parts,
 		})
 	}
 	return writeJSONFile(fsys, filepath.Join(dir, "topics.json"), persistTopics{
@@ -678,6 +743,16 @@ func (c *Cluster) saveBrokerConfigs(fsys fs, dir string) error {
 	})
 }
 
+func (c *Cluster) saveDynamicConfigs(fsys fs, dir string) error {
+	return writeJSONFile(fsys, filepath.Join(dir, "dynamic_configs.json"), persistDynamicConfigs{
+		Version:       currentPersistVersion,
+		GroupConfigs:  c.groupConfigs,
+		ClientMetrics: c.clientMetrics,
+		Features:      c.features,
+		FeaturesEpoch: c.featuresEpoch,
+	})
+}
+
 func (c *Cluster) saveQuotas(fsys fs, dir string) error {
 	var pqs []persistQuota
 	for _, qe := range c.quotas {
@@ -736,19 +811,22 @@ func (c *Cluster) forEachPartition(fn func(topic string, part int32, pd *partDat
 	return firstErr
 }
 
-func (c *Cluster) savePartitions(fsys fs, dir string) error {
-	return c.forEachPartition(func(topic string, part int32, pd *partData) error {
-		return c.savePartition(fsys, dir, topic, part, pd)
+func (c *Cluster) savePartitions(fsys fs) error {
+	return c.forEachPartition(func(_ string, _ int32, pd *partData) error {
+		return c.savePartition(fsys, pd)
 	})
 }
 
-func (c *Cluster) savePartition(fsys fs, dir, topic string, part int32, pd *partData) error {
-	pdir := partDir(dir, topic, part)
+func (c *Cluster) savePartition(fsys fs, pd *partData) error {
+	if pd.failed {
+		return nil
+	}
+	pdir := c.partDir(pd)
 	if err := fsys.MkdirAll(pdir, 0o755); err != nil {
 		return err
 	}
 
-	pd.closeAllFiles(c.cfg.syncWrites)
+	pd.closeAllFiles(true)
 
 	// Build snapshot segment metadata from pd.segments.
 	// Segment files are already on disk (written by persistBatchToSegment
@@ -760,14 +838,6 @@ func (c *Cluster) savePartition(fsys fs, dir, topic string, part int32, pd *part
 			Size:       si.size,
 			MinEpoch:   si.minEpoch,
 			MaxEpoch:   si.maxEpoch,
-		}
-		// If size is not tracked (e.g., loaded from older snapshot),
-		// stat the file to get it.
-		if psi.Size == 0 {
-			path := filepath.Join(pdir, segmentFileName(si.base))
-			if info, err := fsys.Stat(path); err == nil {
-				psi.Size = info.Size()
-			}
 		}
 		snapSegments = append(snapSegments, psi)
 	}
@@ -786,36 +856,25 @@ func (c *Cluster) savePartition(fsys fs, dir, topic string, part int32, pd *part
 		HighWatermark:    pd.highWatermark,
 		LastStableOffset: pd.lastStableOffset,
 		LogStartOffset:   pd.logStartOffset,
-		Epoch:            pd.epoch,
-		LeaderNode:       pd.leader.node,
 		MaxTimestamp:     pd.maxTimestampSeen,
-		CreatedAt:        pd.createdAt,
 		AbortedTxns:      abortedTxns,
 		Segments:         snapSegments,
 	}
-	return writeJSONFile(fsys, filepath.Join(pdir, "snapshot.json"), snap)
+	return writeJSONFile(fsys, filepath.Join(pdir, snapshotFile), snap)
 }
 
-// rebuildSegments deletes existing segment files for a partition and rewrites
-// them from the given batches, rebuilding pd.segments with batchMeta. Called
-// after compaction changes the batch set. Also resets active file handles.
-func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
-	pdir := partDir(c.storageDir, pd.t, pd.p)
-
-	pd.closeAllFiles(false)
-
-	// Delete old segment + index files
-	for _, seg := range pd.segments {
-		c.fs.Remove(filepath.Join(pdir, segmentFileName(seg.base)))
-		c.fs.Remove(filepath.Join(pdir, indexFileName(seg.base)))
-	}
-	pd.segments = nil
-
-	if len(batches) == 0 {
-		pd.rolledAt = time.Now()
-		pd.rebuildMaxTimestampMeta()
-		return
-	}
+// rebuildSegments replaces a partition's directory with one holding the
+// given batches and the log start offset, rebuilding pd.segments with
+// batchMeta, and returns whether it did. Called after compaction changes
+// the batch set. We write the new directory beside the old one and swap it
+// in with two renames; cleanupFiles finishes a swap that a crash cut off,
+// so a crash leaves the old files or the new ones. On an error, the old
+// files stay, unless the renames can neither finish nor undo the swap: then
+// the new files stay for the next compaction or the load to rename in, and
+// the partition is failed until then.
+func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) bool {
+	pdir := c.partDir(pd)
+	tmp, old := pdir+".compact", pdir+".old"
 
 	// Group batches into segments by size
 	segMaxBytes := c.segmentBytes(pd.t)
@@ -825,6 +884,7 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 		size    int64
 	}
 	var groups []segGroup
+	var nbytes int64
 	for _, b := range batches {
 		if len(groups) == 0 || groups[len(groups)-1].size >= segMaxBytes {
 			groups = append(groups, segGroup{base: b.FirstOffset})
@@ -832,40 +892,47 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 		g := &groups[len(groups)-1]
 		g.batches = append(g.batches, b)
 		g.size += int64(b.nbytes)
+		nbytes += int64(b.nbytes)
 	}
 
-	// Write segment (.dat) and index (.idx) files.
-	c.fs.MkdirAll(pdir, 0o755)
+	// Write segment (.dat) and index (.idx) files, and the log start
+	// offset, which DeleteRecords or retention may have left past the
+	// first batch, into a fresh tmp: a leftover there must not be swapped
+	// in.
+	err := errors.Join(c.fs.RemoveAll(old), c.fs.RemoveAll(tmp))
+	if err == nil {
+		err = c.fs.MkdirAll(tmp, 0o755)
+	}
+	if err == nil {
+		err = writeJSONFile(c.fs, filepath.Join(tmp, logStartFile), persistLogStart{pd.logStartOffset})
+	}
+	var segments []segmentInfo
 	for _, g := range groups {
-		si := segmentInfo{base: g.base, lastModified: time.Now().UnixMilli()}
-		segPath := filepath.Join(pdir, segmentFileName(g.base))
-		idxPath := filepath.Join(pdir, indexFileName(g.base))
-		sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: create %s: %v", pd.t, pd.p, segPath, err)
-			continue
+			break
 		}
-		xf, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		if err != nil {
+		si := segmentInfo{base: g.base, lastModified: time.Now().UnixMilli()}
+		var sf, xf file
+		if sf, err = c.fs.OpenFile(filepath.Join(tmp, segmentFileName(g.base)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil {
+			break
+		}
+		if xf, err = c.fs.OpenFile(filepath.Join(tmp, indexFileName(g.base)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil {
 			sf.Close()
-			c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: create %s: %v", pd.t, pd.p, idxPath, err)
-			continue
+			break
 		}
 		var pos int64
 		for _, b := range g.batches {
 			bp := encodeBatch(b)
 			meta := b.meta(pos)
-			_, err := sf.Write(*bp)
+			_, err = sf.Write(*bp)
 			batchSize := int64(len(*bp))
 			*bp = (*bp)[:0]
 			batchPool.Put(bp)
-			if err != nil {
-				c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: write: %v", pd.t, pd.p, err)
-				break
+			if err == nil {
+				idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
+				_, err = xf.Write(idx[:])
 			}
-			idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
-			if _, err := xf.Write(idx[:]); err != nil {
-				c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: write index: %v", pd.t, pd.p, err)
+			if err != nil {
 				break
 			}
 			si.index = append(si.index, meta)
@@ -874,13 +941,59 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) {
 			pos += batchSize
 			si.size += batchSize
 		}
-		sf.Sync()
-		sf.Close()
-		xf.Sync()
-		xf.Close()
-		pd.segments = append(pd.segments, si)
+		err = errors.Join(err, sf.Sync(), sf.Close(), xf.Sync(), xf.Close())
+		segments = append(segments, si)
+	}
+
+	if err == nil {
+		err = c.fs.SyncDir(tmp) // its files' entries, before it goes live
+	}
+	if err == nil {
+		pd.closeAllFiles(false)
+		if err = c.fs.Rename(pdir, old); err == nil {
+			if err = c.fs.Rename(tmp, pdir); err != nil && c.fs.Rename(old, pdir) != nil {
+				// Nothing is at pdir: the next compaction or the load
+				// renames tmp in.
+				tmp, pd.failed, pd.swapRetry = "", true, true
+				pd.swapSegs, pd.swapBytes = segments, nbytes
+			}
+		}
+	}
+	if err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: %v", pd.t, pd.p, err)
+		if tmp != "" {
+			c.fs.RemoveAll(tmp)
+		}
+		return false
+	}
+	if err := c.fs.SyncDir(filepath.Dir(pdir)); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "rebuildSegments %s-%d: %v", pd.t, pd.p, err)
+		pd.failed, pd.swapRetry = true, true // the swap may not survive a power loss: keep the old files
+	} else {
+		c.fs.RemoveAll(old)
+	}
+	pd.segments = segments
+	if len(segments) == 0 {
+		pd.rolledAt = time.Now()
 	}
 	pd.rebuildMaxTimestampMeta()
+	return true
+}
+
+// finishSwap tries again to finish the compaction swap that failed pd.
+func (c *Cluster) finishSwap(pd *partData) {
+	pdir := c.partDir(pd)
+	if pd.swapSegs != nil {
+		if c.fs.Rename(pdir+".compact", pdir) != nil {
+			return
+		}
+		pd.segments, pd.nbytes, pd.swapSegs = pd.swapSegs, pd.swapBytes, nil
+		pd.rebuildMaxTimestampMeta()
+	}
+	if c.fs.SyncDir(filepath.Dir(pdir)) == nil {
+		c.fs.RemoveAll(pdir + ".old")
+		pd.failed, pd.swapRetry = false, false
+	}
 }
 
 // saveGroupsLog writes a compacted groups.log from live group state.
@@ -891,16 +1004,22 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 	for _, g := range c.groups.gs {
 		allEntries = append(allEntries, c.collectGroupEntries(g)...)
 	}
+	for _, sg := range c.shareGroups.gs {
+		allEntries = append(allEntries, sg.metaEntry())
+		sg.partitions.each(func(t string, p int32, _ *sharePartition) {
+			allEntries = append(allEntries, sg.partitionEntry(t, p))
+		})
+	}
 
 	path := filepath.Join(dir, "groups.log")
 	tmpPath := path + ".tmp"
-	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := createTemp(fsys, tmpPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	for _, e := range allEntries {
-		if _, err := appendLogEntry(f, e, c.cfg.syncWrites); err != nil {
+		if _, err := appendLogEntry(f, e, false); err != nil {
 			return err
 		}
 	}
@@ -908,7 +1027,7 @@ func (c *Cluster) saveGroupsLog(fsys fs, dir string) error {
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
 	}
-	return fsys.Rename(tmpPath, path)
+	return replaceFile(fsys, f, tmpPath, path)
 }
 
 // collectGroupEntries gathers all persistable state from a group.
@@ -947,7 +1066,7 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 
 	path := filepath.Join(dir, "pids.log")
 	tmpPath := path + ".tmp"
-	f, err := fsys.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := createTemp(fsys, tmpPath)
 	if err != nil {
 		return err
 	}
@@ -955,21 +1074,21 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 
 	for _, pidinf := range c.pids.ids {
 		// Write the latest state for each PID
-		entry := pidLogEntry{
-			Type:  "init",
-			PID:   pidinf.id,
-			Epoch: pidinf.epoch,
-			TxID:  pidinf.txid,
-		}
-		if pidinf.txid != "" {
-			entry.Timeout = pidinf.txTimeout
-			entry.Commit = &pidinf.lastWasCommit
-		}
-		if _, err := appendLogEntry(f, entry, c.cfg.syncWrites); err != nil {
+		if _, err := appendLogEntry(f, pidinf.logEntry(), false); err != nil {
 			return err
 		}
+		if pidinf.inTx {
+			if _, err := appendLogEntry(f, pidLogEntry{Type: "begin", PID: pidinf.id}, false); err != nil {
+				return err
+			}
+		}
+		if pidinf.ending != nil {
+			if _, err := appendLogEntry(f, pidLogEntry{Type: "prepare", PID: pidinf.id, Epoch: pidinf.endEpoch, Commit: pidinf.ending, Offsets: persistTxOffsets(pidinf.txOffsets)}, false); err != nil {
+				return err
+			}
+		}
 	}
-	return fsys.Rename(tmpPath, path)
+	return replaceFile(fsys, f, tmpPath, path)
 }
 
 func (c *Cluster) saveSeqWindows(fsys fs, dir string) error {
@@ -994,6 +1113,7 @@ func (c *Cluster) saveSeqWindows(fsys fs, dir string) error {
 				Epoch:   pw.epoch,
 				Seen:    pw.seen,
 				NextSeq: pw.nextSeq,
+				LastTS:  pw.lastTimestamp,
 			})
 		})
 	}
@@ -1007,30 +1127,70 @@ func (c *Cluster) saveSeqWindows(fsys fs, dir string) error {
 // LOAD (STARTUP)
 //////////////////////
 
-// cleanupTmpFiles removes orphaned .tmp files left by interrupted
-// writeJSONFile calls. These are incomplete writes that should be discarded.
-// Checks both the top-level dir and partition subdirectories.
-func cleanupTmpFiles(fsys fs, dir string) {
-	removeTmpIn := func(d string) {
-		entries, err := fsys.ReadDir(d)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".tmp") {
-				fsys.Remove(filepath.Join(d, e.Name()))
-			}
+// stateFiles are the files at the top of the data dir that we replace by
+// writing <name>.tmp and renaming it over <name>.
+var stateFiles = []string{
+	"meta.json", "topics.json", "acls.json", "sasl.json", "broker_configs.json", "dynamic_configs.json",
+	"quotas.json", "seq_windows.json", "session_state.json", "groups.log", "pids.log",
+}
+
+const snapshotFile = "snapshot.json"
+
+// cleanupFiles removes orphaned .tmp files left by interrupted
+// writeJSONFile calls, in the top-level dir and partition directories. It
+// removes the directories of partitions we do not have, and finishes or
+// drops a compaction that a crash cut off (see rebuildSegments). It leaves
+// alone what is not a partition directory partDir names.
+func (c *Cluster) cleanupFiles(fsys fs, dir string) {
+	removeTmp := func(d string, names ...string) {
+		for _, name := range names {
+			fsys.Remove(filepath.Join(d, name+".tmp"))
 		}
 	}
-	removeTmpIn(dir)
+	removeTmp(dir, stateFiles...)
 	partsDir := filepath.Join(dir, "partitions")
 	pdirs, err := fsys.ReadDir(partsDir)
 	if err != nil {
 		return
 	}
+	topics := make(map[string]string, len(c.data.t2id)) // by topicDirID
+	for t, id := range c.data.t2id {
+		topics[topicDirID(id)] = t
+	}
+	swaps := make(map[string]*partData) // by live directory
 	for _, d := range pdirs {
-		if d.IsDir() {
-			removeTmpIn(filepath.Join(partsDir, d.Name()))
+		path := filepath.Join(partsDir, d.Name())
+		name := strings.TrimSuffix(strings.TrimSuffix(d.Name(), ".compact"), ".old")
+		id, ps, _ := strings.Cut(name, "-")
+		p, _ := strconv.Atoi(ps)
+		pd, known := c.data.tps.getp(topics[id], int32(p))
+		switch {
+		case !d.IsDir() || !isPartDirName(name): // not ours
+		// A partition past the count is left from a CreatePartitions
+		// that topics.json missed, and must not come back with it.
+		case !known:
+			fsys.RemoveAll(path)
+		case name != d.Name():
+			swaps[filepath.Join(partsDir, name)] = pd
+		default:
+			removeTmp(path, snapshotFile, logStartFile)
+		}
+	}
+	// We settle a compaction swap that a stop cut off from what is on
+	// disk; a partition we cannot settle loads failed, and we delete
+	// nothing of it.
+	for live, pd := range swaps {
+		has := func(suffix string) bool { _, err := fsys.Stat(live + suffix); return err == nil }
+		switch hasLive, hasCompact, hasOld := has(""), has(".compact"), has(".old"); {
+		case hasLive && hasCompact && hasOld:
+			pd.failed = true
+		case hasLive: // cut off while writing .compact, or before removing .old
+			fsys.RemoveAll(live + ".compact")
+			fsys.RemoveAll(live + ".old")
+		case hasCompact && fsys.Rename(live+".compact", live) == nil: // cut off in the swap
+			fsys.RemoveAll(live + ".old")
+		default:
+			pd.failed = true
 		}
 	}
 }
@@ -1059,32 +1219,48 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 	}
 	c.cfg.clusterID = meta.ClusterID
 
-	// Clean up orphaned .tmp files from interrupted writeJSONFile calls
-	cleanupTmpFiles(fsys, dir)
-
 	// Load broker configs first (segment configs needed by topics),
-	// then topics (needed by partitions), then partitions (may
-	// detect crash-aborted PIDs).
-	var (
-		crashAbortedMu   sync.Mutex
-		crashAbortedPIDs = make(map[int64]struct{})
-	)
+	// then topics (needed by partitions), then partitions.
 	if err := errors.Join(
 		c.loadBrokerConfigs(fsys, dir),
 		c.loadTopics(fsys, dir),
-		c.loadPartitions(fsys, dir, &crashAbortedMu, crashAbortedPIDs),
 	); err != nil {
 		return false, err
 	}
-
-	// Load PIDs, then bump epoch for PIDs that had in-flight
-	// transactions at crash time.
-	if err := c.loadPIDsLog(fsys, dir); err != nil {
+	c.cleanupFiles(fsys, dir)
+	var (
+		replayMu sync.Mutex
+		replays  []replay
+	)
+	if err := c.loadPartitions(fsys, func(r replay) {
+		replayMu.Lock()
+		defer replayMu.Unlock()
+		replays = append(replays, r)
+	}); err != nil {
 		return false, err
 	}
-	for pid := range crashAbortedPIDs {
-		if pidinf, ok := c.pids.ids[pid]; ok {
-			pidinf.epoch++
+
+	ends, err := c.loadPIDsLog(fsys, dir)
+	if err != nil {
+		return false, err
+	}
+	replayed := make(map[*partData]bool, len(replays))
+	for _, r := range replays {
+		replayed[r.pd] = true
+		for pid, w := range r.windows {
+			if pidinf, ok := c.pids.ids[pid]; ok {
+				pidinf.windows.set(r.pd.t, r.pd.p, *w)
+			}
+		}
+		for pid, firstOff := range r.open {
+			pidinf, ok := c.pids.ids[pid]
+			if !ok { // pids.log lost the producer: abort, with nobody to fence
+				(&pidinfo{pids: &c.pids, id: pid, txParts: tps[partData]{r.pd.t: {r.pd.p: r.pd}}}).endTx(false, 0)
+				continue
+			}
+			pidinf.inTx = true
+			pidinf.txParts.mkt(r.pd.t)[r.pd.p] = r.pd
+			pidinf.txPartFirstOffsets.set(r.pd.t, r.pd.p, firstOff)
 		}
 	}
 
@@ -1092,8 +1268,9 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 		c.loadGroupsLog(fsys, dir),
 		c.loadACLs(fsys, dir),
 		c.loadSASL(fsys, dir),
+		c.loadDynamicConfigs(fsys, dir),
 		c.loadQuotas(fsys, dir),
-		c.loadSeqWindows(fsys, dir),
+		c.loadSeqWindows(fsys, dir, replayed),
 	); err != nil {
 		return false, err
 	}
@@ -1102,7 +1279,41 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 		c.cfg.logger.Logf(LogLevelWarn, "load session state: %v", err)
 	}
 
+	// A transaction open at crash time that session state did not
+	// restore ends as EndTxn decided before the crash, else with an
+	// abort and a bump that fences the producer. The markers make the
+	// end durable, and a retry of the EndTxn sees how it ended. We log
+	// the ends only after every end: a log compaction drops the prepare
+	// entries of transactions still open.
+	var ended []*pidinfo
+	for _, pidinf := range c.pids.ids {
+		end, decided := ends[pidinf.id]
+		if _, restored := c.pids.txs[pidinf]; !pidinf.inTx || restored && !decided {
+			continue
+		}
+		c.cfg.logger.Logf(LogLevelDebug, "load: ending txn open at crash pid=%d epoch=%d decided=%v", pidinf.id, pidinf.epoch, decided)
+		pidinf.txOffsets = restoreTxOffsets(end.Offsets)
+		epoch := pidinf.epoch + 1 // the abort fences the producer
+		if decided {
+			epoch = end.Epoch
+		}
+		if p, ok := pidinf.endTx(decided && *end.Commit, epoch); ok {
+			ended = append(ended, p)
+		}
+	}
+	for _, pidinf := range ended {
+		pidinf.persist()
+	}
+
 	return true, nil
+}
+
+// replay is what a full replay of a partition's log found for the
+// producers, which load after the partitions.
+type replay struct {
+	pd      *partData
+	open    map[int64]int64      // producers with records and no marker after them, to their first offset
+	windows map[int64]*pidwindow // sequence windows rebuilt from the records
 }
 
 func (c *Cluster) loadBrokerConfigs(fsys fs, dir string) error {
@@ -1137,7 +1348,8 @@ func (c *Cluster) loadTopics(fsys fs, dir string) error {
 		c.data.id2t[t.ID] = t.Name
 		c.data.t2id[t.Name] = t.ID
 		c.data.treplicas[t.Name] = t.Replicas
-		c.data.tnorms[normalizeTopicName(t.Name)] = t.Name
+		norm := normalizeTopicName(t.Name)
+		c.data.tnorms[norm] = append(c.data.tnorms[norm], t.Name)
 
 		if len(t.Configs) > 0 {
 			cfgs := make(map[string]*string, len(t.Configs))
@@ -1151,22 +1363,33 @@ func (c *Cluster) loadTopics(fsys fs, dir string) error {
 		for p := range t.Partitions {
 			pd := c.data.tps.mkp(t.Name, int32(p), c.newPartData(int32(p)))
 			pd.t = t.Name
+			if p >= len(t.Parts) {
+				continue
+			}
+			tp := t.Parts[p]
+			if tp.Leader >= 0 && int(tp.Leader) < len(c.bs) {
+				pd.leader = c.bs[tp.Leader]
+			}
+			pd.epoch, pd.dirs, pd.createdAt, pd.rolledAt = tp.Epoch, tp.Dirs, tp.Created, tp.Created
 		}
 	}
 	return nil
 }
 
-func (c *Cluster) loadPartitions(fsys fs, dir string, crashAbortedMu *sync.Mutex, crashAbortedPIDs map[int64]struct{}) error {
+func (c *Cluster) loadPartitions(fsys fs, addReplay func(replay)) error {
 	return c.forEachPartition(func(topic string, part int32, pd *partData) error {
-		return c.loadPartition(fsys, dir, topic, part, pd, crashAbortedMu, crashAbortedPIDs)
+		return c.loadPartition(fsys, topic, part, pd, addReplay)
 	})
 }
 
-func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *partData, crashAbortedMu *sync.Mutex, crashAbortedPIDs map[int64]struct{}) error {
-	pdir := partDir(dir, topic, part)
+func (c *Cluster) loadPartition(fsys fs, topic string, part int32, pd *partData, addReplay func(replay)) error {
+	if pd.failed {
+		return nil
+	}
+	pdir := c.partDir(pd)
 
 	// Try snapshot first
-	snapData, err := fsys.ReadFile(filepath.Join(pdir, "snapshot.json"))
+	snapData, err := fsys.ReadFile(filepath.Join(pdir, snapshotFile))
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -1184,26 +1407,73 @@ func (c *Cluster) loadPartition(fsys fs, dir, topic string, part int32, pd *part
 	for _, e := range entries {
 		name := e.Name()
 		if len(name) > 4 && name[len(name)-4:] == ".dat" {
+			// Only the name segmentFileName gives: 05.dat beside
+			// 5.dat must not load the segment twice.
 			base, err := strconv.ParseInt(name[:len(name)-4], 10, 64)
-			if err == nil {
+			if err == nil && base >= 0 && segmentFileName(base) == name {
 				segFiles = append(segFiles, base)
 			}
 		}
 	}
 	slices.Sort(segFiles)
 
-	// Try using snapshot for fast startup
-	if snapData != nil && len(segFiles) > 0 {
-		var snap persistPartSnapshot
-		if err := json.Unmarshal(snapData, &snap); err == nil && snap.Version <= currentPersistVersion {
-			if snapshotMatchesSegments(snap, segFiles, fsys, pdir) {
-				return c.loadPartitionFromSnapshot(pd, snap, segFiles, fsys, pdir)
-			}
+	// Try using snapshot for fast startup. A partition whose records
+	// were all deleted has a snapshot and no segment files. A partition
+	// with a transaction open at shutdown is replayed in full, which
+	// finds the transaction for session state to restore, or for
+	// loadFromDisk to end if we crash before writing again.
+	var snap persistPartSnapshot
+	snapOK := snapData != nil && json.Unmarshal(snapData, &snap) == nil &&
+		snap.Version <= currentPersistVersion && snapshotMatchesSegments(snap, segFiles, fsys, pdir)
+	if snapOK && snap.LastStableOffset == snap.HighWatermark {
+		if err := c.loadPartitionFromSnapshot(pd, snap, segFiles, fsys, pdir); err != nil {
+			return err
+		}
+	} else {
+		if err := c.loadPartitionFullReplay(pd, segFiles, fsys, pdir, addReplay); err != nil {
+			return err
 		}
 	}
 
-	// Full replay - scan all segments
-	return c.loadPartitionFullReplay(pd, segFiles, fsys, pdir, crashAbortedMu, crashAbortedPIDs)
+	// A crash leaves the log start offset DeleteRecords or retention last
+	// wrote newer than the snapshot's or the first batch's. Kafka likewise
+	// restores it from a checkpoint.
+	var ls persistLogStart
+	if found, err := readJSONFile(fsys, filepath.Join(pdir, logStartFile), &ls); err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d: %v", topic, part, err)
+	} else if found && ls.LogStartOffset > pd.logStartOffset {
+		if !pd.hasBatches() { // every record was deleted: the log ends where it starts
+			pd.highWatermark = max(pd.highWatermark, ls.LogStartOffset)
+		}
+		pd.logStartOffset = min(ls.LogStartOffset, pd.highWatermark)
+		pd.recalculateLSO()
+	}
+	if pd.hasBatches() {
+		c.dropBelowLogStart(pd)
+	}
+	return nil
+}
+
+const logStartFile = "log_start.json"
+
+// persistLogStart writes the log start offset to log_start.json, for a
+// restart after a crash: a snapshot has it only from a clean shutdown. It
+// returns whether the write succeeded.
+func (c *Cluster) persistLogStart(pd *partData) bool {
+	if !c.persist() {
+		return true
+	} else if pd.failed {
+		return false
+	}
+	pdir := c.partDir(pd)
+	err := c.fs.MkdirAll(pdir, 0o755)
+	if err == nil {
+		err = writeJSONFile(c.fs, filepath.Join(pdir, logStartFile), persistLogStart{pd.logStartOffset})
+	}
+	if err != nil {
+		c.cfg.logger.Logf(LogLevelWarn, "persist log start %s-%d: %v", pd.t, pd.p, err)
+	}
+	return err == nil
 }
 
 func snapshotMatchesSegments(snap persistPartSnapshot, segFiles []int64, fsys fs, pdir string) bool {
@@ -1226,12 +1496,6 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	pd.highWatermark = snap.HighWatermark
 	pd.lastStableOffset = snap.LastStableOffset
 	pd.logStartOffset = snap.LogStartOffset
-	pd.epoch = snap.Epoch
-	if snap.LeaderNode >= 0 && int(snap.LeaderNode) < len(c.bs) {
-		pd.leader = c.bs[snap.LeaderNode]
-	}
-	pd.createdAt = snap.CreatedAt
-	pd.rolledAt = snap.CreatedAt
 	for i, base := range segFiles {
 		ss := snap.Segments[i]
 		pd.segments = append(pd.segments, segmentInfo{
@@ -1240,8 +1504,13 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 			minEpoch: ss.MinEpoch,
 			maxEpoch: ss.MaxEpoch,
 		})
-		if _, err := c.loadSegmentBatches(pd, fsys, pdir, base); err != nil {
+		_, truncated, err := c.loadSegmentBatches(pd, fsys, pdir, base)
+		if err != nil {
 			return err
+		}
+		if truncated {
+			removeSegments(fsys, pdir, segFiles[i+1:])
+			break
 		}
 	}
 
@@ -1254,13 +1523,11 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	}
 	pd.pruneEmptySegments()
 
-	// Accumulate nbytes from batchMeta, skipping entries before
-	// logStartOffset (partially-trimmed segments may have stale entries).
+	// Accumulate nbytes from batchMeta. A partially-trimmed segment still
+	// holds batches below logStartOffset; loadPartition drops them, and
+	// their bytes, once the log start offset is final.
 	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
-		finRec := m.firstOffset + int64(m.lastOffsetDelta)
-		if finRec >= pd.logStartOffset {
-			pd.nbytes += int64(m.nbytes)
-		}
+		pd.nbytes += int64(m.nbytes)
 		return true
 	})
 
@@ -1294,16 +1561,20 @@ func (c *Cluster) loadPartitionFromSnapshot(pd *partData, snap persistPartSnapsh
 	return nil
 }
 
-func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys fs, pdir string, crashAbortedMu *sync.Mutex, crashAbortedPIDs map[int64]struct{}) error {
+func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys fs, pdir string, addReplay func(replay)) error {
 	// Load segments, getting full batches for crash recovery txn state.
 	var batches []*partBatch
-	for _, base := range segFiles {
+	for i, base := range segFiles {
 		pd.segments = append(pd.segments, segmentInfo{base: base})
-		loaded, err := c.loadSegmentBatches(pd, fsys, pdir, base)
+		loaded, truncated, err := c.loadSegmentBatches(pd, fsys, pdir, base)
 		if err != nil {
 			return err
 		}
 		batches = append(batches, loaded...)
+		if truncated {
+			removeSegments(fsys, pdir, segFiles[i+1:])
+			break
+		}
 	}
 	pd.pruneEmptySegments()
 
@@ -1315,16 +1586,13 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		last := &lastSeg.index[len(lastSeg.index)-1]
 		pd.highWatermark = last.firstOffset + int64(last.lastOffsetDelta) + 1
 
-		// logStartOffset: lossy reconstruction. The true value
-		// (set by DeleteRecords) is only in the snapshot. On full
-		// replay, the first batch's offset is a conservative lower
-		// bound - the true logStartOffset may point into the middle
-		// of this batch, so some "deleted" records may reappear.
-		// This matches Kafka unclean leader election behavior.
+		// logStartOffset: the first batch's offset is a lower bound,
+		// which loadPartition raises to what log_start.json has.
 		pd.logStartOffset = first.firstOffset
 
-		// epoch: use the last batch's epoch (highest seen).
-		pd.epoch = last.epoch
+		// epoch: topics.json has the epoch as of the last leader move,
+		// and a batch has the epoch it was written at.
+		pd.epoch = max(pd.epoch, last.epoch)
 	}
 
 	// Rebuild abortedTxns from control batches. On disk, data batches
@@ -1332,15 +1600,27 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 	// memory but not on disk. During full replay we identify completed
 	// transactions by their control batches.
 	activeTxns := make(map[int64]int64) // producerID -> firstOffset
+	r := replay{pd: pd, windows: make(map[int64]*pidwindow)}
 	for _, b := range batches {
 		isControl := b.Attributes&0x0020 != 0
 		if !isControl {
+			if b.FirstSequence >= 0 { // idempotent
+				w := r.windows[b.ProducerID]
+				if w == nil {
+					w = new(pidwindow)
+					r.windows[b.ProducerID] = w
+				}
+				w.accept(b.ProducerEpoch, b.FirstSequence, b.LastOffsetDelta+1, b.FirstOffset, b.MaxTimestamp)
+			}
 			if b.inTx {
 				if _, ok := activeTxns[b.ProducerID]; !ok {
 					activeTxns[b.ProducerID] = b.FirstOffset
 				}
 			}
 			continue
+		}
+		if w := r.windows[b.ProducerID]; w != nil {
+			w.marker(b.ProducerEpoch, b.MaxTimestamp)
 		}
 		// Control batch: decode the key to determine commit vs abort.
 		// Key is 4 bytes: version(2) + type(2). Type 0=ABORT, 1=COMMIT.
@@ -1370,40 +1650,17 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		delete(activeTxns, b.ProducerID)
 	}
 
-	// Implicitly abort in-flight transactions. Any producer still in
-	// activeTxns had a transaction open when the crash happened. We
-	// treat these as aborted so the LSO is not stuck forever.
-	if len(activeTxns) > 0 {
-		crashAbortedMu.Lock()
-		for pid, firstOff := range activeTxns {
-			last := firstOff
-			for _, b := range batches {
-				if b.ProducerID == pid && b.inTx {
-					end := b.FirstOffset + int64(b.LastOffsetDelta)
-					if end > last {
-						last = end
-					}
-				}
-			}
-			pd.abortedTxns = append(pd.abortedTxns, abortedTxnEntry{
-				producerID:  pid,
-				firstOffset: firstOff,
-				lastOffset:  last,
-			})
-			crashAbortedPIDs[pid] = struct{}{}
+	// A producer still in activeTxns had a transaction open when we
+	// stopped. It stays open until loadFromDisk ends it with markers or
+	// session state restores it.
+	for pid, firstOff := range activeTxns {
+		if pd.uncommittedPIDs == nil {
+			pd.uncommittedPIDs = make(map[int64]int64)
 		}
-		crashAbortedMu.Unlock()
+		pd.uncommittedPIDs[pid] = firstOff
 	}
-
-	// abortedTxns must be sorted by lastOffset for binary search in
-	// isBatchAborted and trimLeft. Implicit aborts (appended above) can
-	// have earlier lastOffset values than control-batch-derived entries,
-	// so we re-sort.
-	slices.SortFunc(pd.abortedTxns, func(a, b abortedTxnEntry) int {
-		return cmp.Compare(a.lastOffset, b.lastOffset)
-	})
-
-	// Rebuild LSO and other metadata
+	r.open = activeTxns
+	addReplay(r)
 	pd.recalculateLSO()
 
 	// Rebuild nbytes and the timestamp metadata from batchMeta
@@ -1412,13 +1669,6 @@ func (c *Cluster) loadPartitionFullReplay(pd *partData, segFiles []int64, fsys f
 		return true
 	})
 	pd.rebuildMaxTimestampMeta()
-
-	// Restore createdAt from the first batch. newPartData sets createdAt
-	// to time.Now() but on full replay we want the original creation time.
-	if pd.hasBatches() {
-		pd.createdAt = time.UnixMilli(pd.segments[0].index[0].firstTimestamp)
-	}
-	pd.rolledAt = pd.createdAt
 
 	// Initialize active segment state so persistBatchToSegment
 	// appends to the last segment instead of segment 0.
@@ -1449,11 +1699,15 @@ func (c *Cluster) initActiveSegment(pd *partData, fsys fs, pdir string) {
 // from the parallel index file (.idx). Segment files contain pure RecordBatch
 // wire bytes; entry boundaries are found via RecordBatch Length (big-endian
 // int32 at byte 8). Index entries are fixed-size (15 bytes each).
-func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base int64) ([]*partBatch, error) {
+//
+// Like Kafka's log recovery, we truncate the log at the first bad batch: we
+// truncate this segment there and return truncated, and the caller removes
+// every later segment.
+func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base int64) (batches []*partBatch, truncated bool, err error) {
 	segPath := filepath.Join(pdir, segmentFileName(base))
 	raw, err := fsys.ReadFile(segPath)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	idxRaw, _ := fsys.ReadFile(filepath.Join(pdir, indexFileName(base)))
 	var lastModified int64
@@ -1475,7 +1729,6 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 	}
 
 	// Parse RecordBatch entries from segment file.
-	var result []*partBatch
 	pos := 0
 	batchIdx := 0
 	for {
@@ -1512,7 +1765,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 			epoch:       epoch,
 			inTx:        inTx,
 		}
-		result = append(result, batch)
+		batches = append(batches, batch)
 		if seg != nil {
 			meta := batch.meta(int64(pos))
 			seg.index = append(seg.index, meta)
@@ -1523,7 +1776,9 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		batchIdx++
 	}
 
-	if pos < len(raw) {
+	size := len(raw)
+	if truncated = pos < len(raw); truncated {
+		size = pos
 		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: truncating %d corrupt bytes",
 			pd.t, pd.p, base, len(raw)-pos)
 		path := filepath.Join(pdir, segmentFileName(base))
@@ -1537,6 +1792,10 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		}
 	}
 
+	if seg != nil {
+		seg.size = int64(size)
+	}
+
 	// Truncate orphaned index entries that may remain from a prior
 	// crash where the index write succeeded but the segment did not.
 	expectedIdxBytes := int64(batchIdx * indexEntrySize)
@@ -1548,23 +1807,26 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		}
 	}
 
-	return result, nil
+	return batches, truncated, nil
 }
 
-func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
-	raw, err := fsys.ReadFile(filepath.Join(dir, "pids.log"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+// removeSegments removes the segment and index files of the given bases.
+func removeSegments(fsys fs, pdir string, bases []int64) {
+	for _, base := range bases {
+		fsys.Remove(filepath.Join(pdir, segmentFileName(base)))
+		fsys.Remove(filepath.Join(pdir, indexFileName(base)))
 	}
-	c.pidsLogSize = int64(len(raw))
+}
 
-	entries, validBytes := readEntries(raw)
-	if validBytes < len(raw) {
-		c.cfg.logger.Logf(LogLevelWarn, "pids.log: discarding %d corrupt trailing bytes", len(raw)-validBytes)
+// loadPIDsLog loads the producers, and returns the prepare entry of each
+// producer whose EndTxn a crash cut off.
+func (c *Cluster) loadPIDsLog(fsys fs, dir string) (map[int64]pidLogEntry, error) {
+	ends := make(map[int64]pidLogEntry)
+	entries, size, err := c.readLog(fsys, filepath.Join(dir, "pids.log"))
+	if err != nil {
+		return nil, err
 	}
+	c.pidsLogSize = size
 	for _, e := range entries {
 		var entry pidLogEntry
 		if err := json.Unmarshal(e.data, &entry); err != nil {
@@ -1573,67 +1835,91 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) error {
 		}
 		switch entry.Type {
 		case "init":
+			delete(ends, entry.PID)
 			pidinf := &pidinfo{
 				pids:       &c.pids,
 				id:         entry.PID,
 				epoch:      entry.Epoch,
+				prevID:     entry.PrevID,
 				txid:       entry.TxID,
 				txTimeout:  entry.Timeout,
 				lastActive: time.Now(),
 			}
 			if entry.Commit != nil {
+				pidinf.ended = true
 				pidinf.lastWasCommit = *entry.Commit
 			}
 			c.pids.ids[entry.PID] = pidinf
 			if entry.TxID != "" {
+				// An epoch overflow moved the ID to a new PID.
+				if old := c.pids.byTxid[entry.TxID]; old != nil && old.id != entry.PID {
+					delete(c.pids.ids, old.id)
+				}
 				c.pids.byTxid[entry.TxID] = pidinf
 			}
-		case "endtx":
-			pidinf, ok := c.pids.ids[entry.PID]
-			if ok {
-				pidinf.epoch = entry.Epoch
-				pidinf.inTx = false
-				if entry.Commit != nil {
-					pidinf.lastWasCommit = *entry.Commit
-				}
+		case "begin": // the end prepared before it went through
+			delete(ends, entry.PID)
+			if pidinf, ok := c.pids.ids[entry.PID]; ok {
+				pidinf.inTx = true
 			}
-		case "timeout":
-			pidinf, ok := c.pids.ids[entry.PID]
-			if ok {
-				pidinf.epoch = entry.Epoch
-				pidinf.inTx = false
+		case "prepare":
+			ends[entry.PID] = entry
+		case "expire":
+			if pidinf, ok := c.pids.ids[entry.PID]; ok {
+				delete(c.pids.ids, entry.PID)
+				if c.pids.byTxid[pidinf.txid] == pidinf {
+					delete(c.pids.byTxid, pidinf.txid)
+				}
 			}
 		}
 	}
-	return nil
+	return ends, nil
+}
+
+// readLog reads the entries of an append log. It truncates a torn last
+// entry, so that the entries we append next are read at the next load.
+func (c *Cluster) readLog(fsys fs, path string) ([]entryData, int64, error) {
+	raw, err := fsys.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, 0, nil
+	} else if err != nil {
+		return nil, 0, err
+	}
+	entries, validBytes := readEntries(raw)
+	if validBytes < len(raw) {
+		c.cfg.logger.Logf(LogLevelWarn, "%s: discarding %d corrupt trailing bytes", filepath.Base(path), len(raw)-validBytes)
+		if f, err := fsys.OpenFile(path, os.O_WRONLY, 0o644); err == nil {
+			f.Truncate(int64(validBytes))
+			f.Close()
+		}
+	}
+	return entries, int64(validBytes), nil
 }
 
 func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
-	raw, err := fsys.ReadFile(filepath.Join(dir, "groups.log"))
+	entries, size, err := c.readLog(fsys, filepath.Join(dir, "groups.log"))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
-	c.groupsLogSize = int64(len(raw))
-
-	entries, validBytes := readEntries(raw)
-	if validBytes < len(raw) {
-		c.cfg.logger.Logf(LogLevelWarn, "groups.log: discarding %d corrupt trailing bytes", len(raw)-validBytes)
-	}
+	c.groupsLogSize = size
 	r := replayGroupsLog(entries)
 
 	// Initialize groups from replayed state
 	for name, data := range r.metas {
 		var meta groupLogEntry
 		json.Unmarshal(data, &meta)
+		if meta.Type == "shareMeta" {
+			c.shareGroups.getOrCreate(name).groupEpoch = meta.GroupEpoch
+			continue
+		}
 		g := c.groups.newGroup(name)
 		switch meta.Type {
 		case "meta848":
 			g.typ = "consumer"
-			g.assignorName = meta.Assignor
 			g.groupEpoch = meta.GroupEpoch
+			// A group without restored members is empty, and an
+			// empty group's assignment epoch is its group epoch.
+			g.targetAssignmentEpoch = meta.GroupEpoch
 			g.consumerMembers = make(map[string]*consumerMember)
 			g.partitionEpochs = make(map[uuid]map[int32]partitionOwner)
 		default:
@@ -1658,9 +1944,7 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			offset:      entry.Offset,
 			leaderEpoch: entry.Epoch,
 			metadata:    entry.Metadata,
-		}
-		if entry.LastCommit != nil {
-			oc.lastCommit = time.UnixMilli(*entry.LastCommit)
+			lastCommit:  time.Unix(0, entry.LastCommit),
 		}
 		g.commits.set(ck.topic, ck.part, oc)
 	}
@@ -1677,6 +1961,21 @@ func (c *Cluster) loadGroupsLog(fsys fs, dir string) error {
 			g.staticMembers = make(map[string]string)
 		}
 		g.staticMembers[sk.instance] = entry.MemberID
+	}
+
+	// Share partitions, unless their topic is gone or was created again.
+	for k, data := range r.shares {
+		var e groupLogEntry
+		json.Unmarshal(data, &e)
+		if e.TopicID == nil || c.data.t2id[k.topic] != *e.TopicID {
+			continue
+		}
+		sp := sharePartition{spso: e.Offset, scanOffset: e.Offset, acquireEnd: e.Offset, records: make(map[int64]shareRecord, len(e.Records))}
+		for o, rec := range e.Records {
+			sp.records[o] = shareRecord{state: shareRecordState(rec.State), deliveryCount: rec.DeliveryCount}
+			sp.acquireEnd = max(sp.acquireEnd, o+1)
+		}
+		c.shareGroups.getOrCreate(k.group).partitions.set(k.topic, k.part, sp)
 	}
 
 	return nil
@@ -1714,6 +2013,16 @@ func (c *Cluster) loadSASL(fsys fs, dir string) error {
 	return nil
 }
 
+func (c *Cluster) loadDynamicConfigs(fsys fs, dir string) error {
+	var dc persistDynamicConfigs
+	if found, err := readJSONFile(fsys, filepath.Join(dir, "dynamic_configs.json"), &dc); err != nil || !found {
+		return err
+	}
+	c.groupConfigs, c.clientMetrics, c.featuresEpoch = dc.GroupConfigs, dc.ClientMetrics, dc.FeaturesEpoch
+	maps.Copy(c.features, dc.Features)
+	return nil
+}
+
 func (c *Cluster) loadQuotas(fsys fs, dir string) error {
 	var pq persistQuotas
 	if found, err := readJSONFile(fsys, filepath.Join(dir, "quotas.json"), &pq); err != nil || !found {
@@ -1736,59 +2045,22 @@ func (c *Cluster) loadQuotas(fsys fs, dir string) error {
 	return nil
 }
 
-func (c *Cluster) loadSeqWindows(fsys fs, dir string) error {
+// loadSeqWindows loads the windows saved at the last shutdown, except for
+// replayed partitions, whose windows were rebuilt from their logs.
+func (c *Cluster) loadSeqWindows(fsys fs, dir string, replayed map[*partData]bool) error {
 	var psw persistSeqWindows
 	if found, err := readJSONFile(fsys, filepath.Join(dir, "seq_windows.json"), &psw); err != nil || !found {
 		return err
 	}
 	for _, w := range psw.Windows {
 		pidinf, ok := c.pids.ids[w.PID]
-		if !ok {
+		if pd, _ := c.data.tps.getp(w.Topic, w.Part); !ok || replayed[pd] {
 			continue
 		}
 
-		var pw pidwindow
-		if w.Count > 0 {
-			// v2 format: independent entries.
-			for i, e := range w.Entries {
-				pw.entries[i] = pidEntry{
-					firstSeq: e.FirstSeq,
-					nextSeq:  e.NextSeq,
-					offset:   e.Offset,
-				}
-			}
-			pw.count = w.Count
-			pw.at = w.At
-			pw.epoch = w.Epoch
-			pw.seen = w.Seen
-			pw.nextSeq = w.NextSeq
-		} else if w.Seq != [5]int32{} {
-			// v1 format (legacy overlapping pairs): convert to
-			// independent entries by walking the circular buffer.
-			pw.epoch = w.Epoch
-			pw.seen = w.Seen
-			pw.nextSeq = w.NextSeq
-			if !pw.seen {
-				pw.seen = true
-				pw.nextSeq = w.Seq[w.At]
-			}
-			// Reconstruct entries from the overlapping pairs.
-			// The old buffer stored seq[i]=firstSeq, seq[(i+1)%5]=nextSeq.
-			// Walk from the oldest entry (at) backwards.
-			for i := range 5 {
-				idx := (int(w.At) - 1 - i + 10) % 5
-				next := (idx + 1) % 5
-				if w.Seq[idx] == 0 && w.Seq[next] == 0 && i > 0 {
-					break
-				}
-				pw.entries[pw.count] = pidEntry{
-					firstSeq: w.Seq[idx],
-					nextSeq:  w.Seq[next],
-					offset:   w.Offsets[idx],
-				}
-				pw.count++
-			}
-			pw.at = pw.count % 5
+		pw := pidwindow{count: w.Count, at: w.At, seen: w.Seen, epoch: w.Epoch, nextSeq: w.NextSeq, lastTimestamp: w.LastTS}
+		for i, e := range w.Entries {
+			pw.entries[i] = pidEntry{firstSeq: e.FirstSeq, nextSeq: e.NextSeq, offset: e.Offset}
 		}
 		pidinf.windows.set(w.Topic, w.Part, pw)
 	}
@@ -1814,6 +2086,11 @@ func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
 		sf.Close()
 		return err
 	}
+	if err := c.fs.SyncDir(pdir); err != nil { // the files may be new
+		sf.Close()
+		idxF.Close()
+		return err
+	}
 	pd.activeSegFile = sf
 	pd.activeIdxFile = idxF
 	return nil
@@ -1823,8 +2100,11 @@ func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
 // Returns the byte position of the entry within the segment file
 // (for batchMeta.segPos), or -1 on failure.
 func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
+	if pd.failed {
+		return -1
+	}
 	fsys := c.fs
-	pdir := partDir(c.storageDir, pd.t, pd.p)
+	pdir := c.partDir(pd)
 
 	// Ensure segment exists in memory before any I/O that might fail.
 	if len(pd.segments) == 0 {
@@ -1832,7 +2112,11 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	}
 
 	if pd.activeSegFile == nil {
-		if err := fsys.MkdirAll(pdir, 0o755); err != nil {
+		err := fsys.MkdirAll(pdir, 0o755)
+		if err == nil {
+			err = fsys.SyncDir(filepath.Dir(pdir)) // pdir may be new
+		}
+		if err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist batch mkdir %s: %v", pdir, err)
 			return -1
 		}
@@ -1846,7 +2130,7 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 	active := &pd.segments[len(pd.segments)-1]
 	if active.size >= c.segmentBytes(pd.t) {
 		active.endOff = b.FirstOffset
-		pd.closeActiveFiles(c.cfg.syncWrites)
+		pd.closeActiveFiles(true)
 		pd.segments = append(pd.segments, segmentInfo{base: b.FirstOffset})
 		if err := c.openSegmentFiles(pd, pdir); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist batch open %s-%d: %v", pd.t, pd.p, err)
@@ -1865,19 +2149,19 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 		idx := encodeIndexEntry(b.epoch, b.maxEarlierTimestamp, b.inTx)
 		_, segErr = pd.activeIdxFile.Write(idx[:])
 	}
+	// With SyncWrites, fsync every batch for immediate durability, and a
+	// batch we cannot fsync fails as one we cannot write. Without it, we
+	// fsync a segment when it rolls, when compaction rewrites it, and at
+	// Close: a crash keeps every write, and power loss can lose recent ones.
+	if segErr == nil && c.cfg.syncWrites {
+		segErr = errors.Join(pd.activeSegFile.Sync(), pd.activeIdxFile.Sync())
+	}
 	if segErr != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist batch %s-%d: %v", pd.t, pd.p, segErr)
 		pd.activeSegFile.Truncate(active.size)
+		pd.activeIdxFile.Truncate(int64(len(active.index)) * indexEntrySize)
 		pd.closeActiveFiles(false)
 		return -1
-	}
-
-	// With SyncWrites, fsync every batch for immediate durability.
-	// Without it, we rely on the OS page cache and sync only on
-	// segment roll and shutdown (like real Kafka's default).
-	if c.cfg.syncWrites {
-		pd.activeSegFile.Sync()
-		pd.activeIdxFile.Sync()
 	}
 
 	active.size += batchSize
@@ -1887,7 +2171,7 @@ func (c *Cluster) persistBatchToSegment(pd *partData, b *partBatch) int64 {
 // persistGroupEntry appends a group log entry.
 // Called from group handlers when dataDir is set.
 func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
-	if !c.persist() || c.dead.Load() {
+	if !c.persist() || c.filesClosed {
 		return nil
 	}
 	if c.groupsLogFile == nil {
@@ -1902,12 +2186,13 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 	n, err := appendLogEntry(c.groupsLogFile, entry, c.cfg.syncWrites)
 	if err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist group entry write: %v", err)
+		c.groupsLogFile.Truncate(c.groupsLogSize) // a torn entry would hide later ones
 		c.groupsLogFile.Close()
 		c.groupsLogFile = nil
 		return err
 	}
 	c.groupsLogSize += int64(n)
-	if c.groupsLogSize >= c.stateLogCompactBytes() {
+	if c.groupsLogSize >= c.compactAt(c.groupsLogCompacted) {
 		c.needsGroupsCompact = true
 	}
 	return nil
@@ -1916,8 +2201,13 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 // persistPIDEntry appends a PID log entry.
 // Called from txn handlers when dataDir is set.
 func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
-	if !c.persist() || c.dead.Load() {
+	if !c.persist() || c.filesClosed {
 		return nil
+	}
+	// We compact before we append: compaction rewrites the log from
+	// memory, which has no prepare entry.
+	if c.pidsLogSize >= c.compactAt(c.pidsLogCompacted) {
+		c.compactPIDsLog()
 	}
 	if c.pidsLogFile == nil {
 		path := filepath.Join(c.cfg.dataDir, "pids.log")
@@ -1931,14 +2221,12 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 	n, err := appendLogEntry(c.pidsLogFile, entry, c.cfg.syncWrites)
 	if err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "persist pid entry write: %v", err)
+		c.pidsLogFile.Truncate(c.pidsLogSize) // a torn entry would hide later ones
 		c.pidsLogFile.Close()
 		c.pidsLogFile = nil
 		return err
 	}
 	c.pidsLogSize += int64(n)
-	if c.pidsLogSize >= c.stateLogCompactBytes() {
-		c.compactPIDsLog()
-	}
 	return nil
 }
 
@@ -1962,14 +2250,21 @@ func (c *Cluster) stateLogCompactBytes() int64 {
 	return 10 << 20
 }
 
+// compactAt is the size at which we compact a state log: the configured
+// size, or twice what the last compaction left, so that live state past the
+// configured size does not compact at every append.
+func (c *Cluster) compactAt(compacted int64) int64 {
+	return max(c.stateLogCompactBytes(), 2*compacted)
+}
+
 func (c *Cluster) compactPIDsLog() {
 	if err := c.savePIDsLog(c.fs, c.cfg.dataDir); err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "compact pids.log: %v", err)
-		return
 	}
 	path := filepath.Join(c.cfg.dataDir, "pids.log")
-	if info, err := c.fs.Stat(path); err == nil {
+	if info, err := c.fs.Stat(path); err == nil { // the old log after a failure
 		c.pidsLogSize = info.Size()
+		c.pidsLogCompacted = c.pidsLogSize
 	}
 }
 
@@ -2003,7 +2298,7 @@ func (c *Cluster) compactGroupsLog() {
 
 	// Write compacted entries to tmp, then atomic rename.
 	tmpPath := path + ".tmp"
-	f, err := c.fs.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := createTemp(c.fs, tmpPath)
 	if err != nil {
 		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: create: %v", err)
 		return
@@ -2024,24 +2319,19 @@ func (c *Cluster) compactGroupsLog() {
 	for _, data := range r.commits {
 		write(data)
 	}
+	for _, data := range r.shares {
+		write(data)
+	}
+	if writeErr == nil {
+		writeErr = replaceFile(c.fs, f, tmpPath, path)
+	}
 	if writeErr != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: write: %v", writeErr)
+		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: %v", writeErr)
 		c.fs.Remove(tmpPath)
-		return
 	}
-	if c.cfg.syncWrites {
-		if err := f.Sync(); err != nil {
-			c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: sync: %v", err)
-			c.fs.Remove(tmpPath)
-			return
-		}
-	}
-	if err := c.fs.Rename(tmpPath, path); err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "compact groups.log: rename: %v", err)
-		return
-	}
-	if info, err := c.fs.Stat(path); err == nil {
+	if info, err := c.fs.Stat(path); err == nil { // the old file after a failure
 		c.groupsLogSize = info.Size()
+		c.groupsLogCompacted = c.groupsLogSize
 	}
 }
 
@@ -2050,6 +2340,9 @@ func (c *Cluster) persistACLsState()          { c.persistState("acls", c.saveACL
 func (c *Cluster) persistSASLState()          { c.persistState("sasl", c.saveSASL) }
 func (c *Cluster) persistBrokerConfigsState() { c.persistState("broker configs", c.saveBrokerConfigs) }
 func (c *Cluster) persistQuotasState()        { c.persistState("quotas", c.saveQuotas) }
+func (c *Cluster) persistDynamicConfigsState() {
+	c.persistState("dynamic configs", c.saveDynamicConfigs)
+}
 
 // Session state types - written as a one-shot JSON file on clean shutdown,
 // loaded on startup to restore ephemeral group member state.
@@ -2059,8 +2352,6 @@ type (
 		ClassicGroups  map[string]sessionClassicGroup  `json:"classicGroups,omitempty"`
 		ConsumerGroups map[string]sessionConsumerGroup `json:"consumerGroups,omitempty"`
 		ShareGroups    map[string]sessionShareGroup    `json:"shareGroups,omitempty"`
-		GroupConfigs   map[string]map[string]*string   `json:"groupConfigs,omitempty"`
-		ClientMetrics  map[string]map[string]*string   `json:"clientMetrics,omitempty"`
 		InProgressTxns []sessionInProgressTxn          `json:"inProgressTxns,omitempty"`
 		FetchSessions  map[int32][]sessionFetchSession `json:"fetchSessions,omitempty"` // broker node -> sessions
 	}
@@ -2077,6 +2368,7 @@ type (
 		Partitions []sessionFetchSessionPart `json:"parts,omitempty"`
 	}
 	sessionFetchSessionPart struct {
+		TopicID            uuid   `json:"id"`
 		Topic              string `json:"t"`
 		Partition          int32  `json:"p"`
 		FetchOffset        int64  `json:"fo"`
@@ -2087,12 +2379,16 @@ type (
 	}
 
 	sessionInProgressTxn struct {
-		PID                int64                                                       `json:"pid"`
-		TxStart            time.Time                                                   `json:"txStart"`
-		TxPartFirstOffsets map[string]map[int32]int64                                  `json:"txPartFirstOffsets"`
-		TxGroups           []string                                                    `json:"txGroups,omitempty"`
-		TxOffsets          map[string]map[string]map[int32]sessionTxStagedOffsetCommit `json:"txOffsets,omitempty"`
+		PID       int64              `json:"pid"`
+		TxStart   time.Time          `json:"txStart"`
+		TxParts   map[string][]int32 `json:"txParts,omitempty"` // the replay restores the rest
+		TxGroups  []string           `json:"txGroups,omitempty"`
+		TxOffsets stagedTxOffsets    `json:"txOffsets,omitempty"`
 	}
+
+	// stagedTxOffsets is a transaction's staged offsets by group, topic,
+	// and partition.
+	stagedTxOffsets map[string]map[string]map[int32]sessionTxStagedOffsetCommit
 
 	// sessionTxStagedOffsetCommit persists an offsetCommit staged via
 	// TxnOffsetCommit but not yet applied (pending EndTxn with commit=true).
@@ -2108,6 +2404,7 @@ type (
 		Offset      int64   `json:"o"`
 		LeaderEpoch int32   `json:"e,omitempty"`
 		Metadata    *string `json:"m,omitempty"`
+		At          int64   `json:"at,omitempty"` // TxnOffsetCommit time, nanos
 	}
 
 	sessionClassicGroup struct {
@@ -2157,6 +2454,7 @@ type (
 		Epoch                int32                    `json:"epoch"`
 		PrevEpoch            int32                    `json:"prevEpoch"`
 		Topics               []string                 `json:"topics"`
+		Regex                string                   `json:"regex,omitempty"`
 		Reconciled           map[uuid][]int32         `json:"reconciled"`
 		PendingRevoke        map[uuid][]int32         `json:"pendingRevoke,omitempty"`
 		Target               map[uuid][]int32         `json:"target"`
@@ -2168,26 +2466,14 @@ type (
 		LastHeartbeat        time.Time                `json:"lastHeartbeat,omitzero"`
 	}
 
-	// Share group state: partition SPSO, per-record acquisition state,
-	// and members. Persisting members lets a rejoin after restart land
-	// on the existing shareMember instead of triggering a full join +
-	// rebalance; under run_tests.sh --restart that difference is the
-	// difference between net-forward progress per cycle and no progress.
+	// Share group members; groups.log has the partition state.
+	// Persisting members lets a rejoin after restart land on the existing
+	// shareMember instead of triggering a full join + rebalance; under
+	// run_tests.sh --restart that difference is the difference between
+	// net-forward progress per cycle and no progress.
 	sessionShareGroup struct {
-		GroupEpoch int32                                      `json:"groupEpoch"`
-		Partitions map[string]map[int32]sessionSharePartition `json:"partitions"` // topic -> partition -> state
-		Members    []sessionShareMember                       `json:"members,omitempty"`
-	}
-
-	sessionSharePartition struct {
-		SPSO    int64                        `json:"spso"`
-		Records map[int64]sessionShareRecord `json:"records,omitempty"`
-	}
-
-	sessionShareRecord struct {
-		State         int8   `json:"s"`
-		DeliveryCount int32  `json:"dc"`
-		AcquiredBy    string `json:"ab,omitempty"`
+		GroupEpoch int32                `json:"groupEpoch"`
+		Members    []sessionShareMember `json:"members,omitempty"`
 	}
 
 	sessionShareMember struct {
@@ -2202,6 +2488,41 @@ type (
 		LastHeartbeat    time.Time        `json:"last,omitzero"`
 	}
 )
+
+func persistTxOffsets(txOffsets map[string]tps[offsetCommit]) stagedTxOffsets {
+	if len(txOffsets) == 0 {
+		return nil
+	}
+	m := make(stagedTxOffsets, len(txOffsets))
+	for group, offsets := range txOffsets {
+		m[group] = make(map[string]map[int32]sessionTxStagedOffsetCommit)
+		offsets.each(func(t string, p int32, oc *offsetCommit) {
+			if m[group][t] == nil {
+				m[group][t] = make(map[int32]sessionTxStagedOffsetCommit)
+			}
+			m[group][t][p] = sessionTxStagedOffsetCommit{oc.offset, oc.leaderEpoch, oc.metadata, oc.lastCommit.UnixNano()}
+		})
+	}
+	return m
+}
+
+// restoreTxOffsets undoes persistTxOffsets.
+func restoreTxOffsets(m stagedTxOffsets) map[string]tps[offsetCommit] {
+	if len(m) == 0 {
+		return nil
+	}
+	txOffsets := make(map[string]tps[offsetCommit], len(m))
+	for group, topics := range m {
+		var offsets tps[offsetCommit]
+		for t, parts := range topics {
+			for p, s := range parts {
+				offsets.set(t, p, offsetCommit{offset: s.Offset, leaderEpoch: s.LeaderEpoch, metadata: s.Metadata, lastCommit: time.Unix(0, s.At)})
+			}
+		}
+		txOffsets[group] = offsets
+	}
+	return txOffsets
+}
 
 func (c *Cluster) saveSessionState() error {
 	ss := sessionState{ShutdownAt: time.Now()}
@@ -2246,6 +2567,7 @@ func (c *Cluster) saveSessionState() error {
 					Epoch:                m.memberEpoch,
 					PrevEpoch:            m.previousMemberEpoch,
 					Topics:               m.subscribedTopics,
+					Regex:                m.subscribedRegexSource,
 					Reconciled:           m.lastReconciledSent,
 					PendingRevoke:        m.partitionsPendingRevocation,
 					Target:               m.targetAssignment,
@@ -2264,35 +2586,13 @@ func (c *Cluster) saveSessionState() error {
 			ss.ConsumerGroups[g.name] = sg
 		}
 	}
-	// Save share group partition state (SPSO + per-record tracking)
-	// AND members. Persisting members is what lets a post-restart
-	// heartbeat land as a rejoin on the existing member instead of
-	// triggering a fresh join + full-group rebalance on every --restart
-	// cycle, which otherwise starves net-forward consumption progress.
+	// Save share group members. Persisting members is what lets a
+	// post-restart heartbeat land as a rejoin on the existing member
+	// instead of triggering a fresh join + full-group rebalance on every
+	// --restart cycle, which otherwise starves net-forward consumption
+	// progress.
 	for name, sg := range c.shareGroups.gs {
-		ssg := sessionShareGroup{
-			GroupEpoch: sg.groupEpoch,
-			Partitions: make(map[string]map[int32]sessionSharePartition),
-		}
-		sg.partitions.each(func(topic string, partition int32, sp *sharePartition) {
-			if _, ok := ssg.Partitions[topic]; !ok {
-				ssg.Partitions[topic] = make(map[int32]sessionSharePartition)
-			}
-			ssp := sessionSharePartition{
-				SPSO: sp.spso,
-			}
-			if len(sp.records) > 0 {
-				ssp.Records = make(map[int64]sessionShareRecord, len(sp.records))
-				for offset, sr := range sp.records {
-					ssp.Records[offset] = sessionShareRecord{
-						State:         int8(sr.state),
-						DeliveryCount: sr.deliveryCount,
-						AcquiredBy:    sr.acquiredBy,
-					}
-				}
-			}
-			ssg.Partitions[topic][partition] = ssp
-		})
+		ssg := sessionShareGroup{GroupEpoch: sg.groupEpoch}
 		for _, m := range sg.members {
 			sm := sessionShareMember{
 				ID:               m.memberID,
@@ -2304,27 +2604,19 @@ func (c *Cluster) saveSessionState() error {
 				SubscribedTopics: slices.Clone(m.subscribedTopics),
 				LastHeartbeat:    m.last,
 			}
-			if len(m.assignment) > 0 {
-				sm.Assignment = make(map[uuid][]int32, len(m.assignment))
-				for tid, parts := range m.assignment {
+			if len(m.target) > 0 {
+				sm.Assignment = make(map[uuid][]int32, len(m.target))
+				for tid, parts := range m.target {
 					sm.Assignment[tid] = slices.Clone(parts)
 				}
 			}
 			ssg.Members = append(ssg.Members, sm)
 		}
-		if len(ssg.Partitions) > 0 || len(ssg.Members) > 0 {
-			if ss.ShareGroups == nil {
-				ss.ShareGroups = make(map[string]sessionShareGroup)
-			}
-			ss.ShareGroups[name] = ssg
+		// Like Kafka, an empty share group lives until DeleteGroups.
+		if ss.ShareGroups == nil {
+			ss.ShareGroups = make(map[string]sessionShareGroup)
 		}
-	}
-
-	if len(c.groupConfigs) > 0 {
-		ss.GroupConfigs = c.groupConfigs
-	}
-	if len(c.clientMetrics) > 0 {
-		ss.ClientMetrics = c.clientMetrics
+		ss.ShareGroups[name] = ssg
 	}
 
 	// Save in-progress transaction state so records survive restart.
@@ -2333,15 +2625,18 @@ func (c *Cluster) saveSessionState() error {
 			continue
 		}
 		st := sessionInProgressTxn{
-			PID:                pidinf.id,
-			TxStart:            pidinf.txStart,
-			TxPartFirstOffsets: make(map[string]map[int32]int64),
+			PID:     pidinf.id,
+			TxStart: pidinf.txStart,
 		}
-		pidinf.txPartFirstOffsets.each(func(t string, p int32, off *int64) {
-			if _, ok := st.TxPartFirstOffsets[t]; !ok {
-				st.TxPartFirstOffsets[t] = make(map[int32]int64)
+		// The replay of a partition with the transaction's records
+		// restores the partition in the transaction; one added but not
+		// yet written to must stay in it too, or a pre-KIP-890 produce
+		// to it fails.
+		pidinf.txParts.each(func(t string, p int32, _ *partData) {
+			if st.TxParts == nil {
+				st.TxParts = make(map[string][]int32)
 			}
-			st.TxPartFirstOffsets[t][p] = *off
+			st.TxParts[t] = append(st.TxParts[t], p)
 		})
 		// Save staged TxnOffsetCommit offsets (pending EndTxn commit).
 		// Without this, after restart endTx has no offsets to apply,
@@ -2350,23 +2645,7 @@ func (c *Cluster) saveSessionState() error {
 		if len(pidinf.txGroups) > 0 {
 			st.TxGroups = slices.Clone(pidinf.txGroups)
 		}
-		if len(pidinf.txOffsets) > 0 {
-			st.TxOffsets = make(map[string]map[string]map[int32]sessionTxStagedOffsetCommit, len(pidinf.txOffsets))
-			for group, groupOffsets := range pidinf.txOffsets {
-				topicMap := make(map[string]map[int32]sessionTxStagedOffsetCommit)
-				groupOffsets.each(func(t string, p int32, oc *offsetCommit) {
-					if _, ok := topicMap[t]; !ok {
-						topicMap[t] = make(map[int32]sessionTxStagedOffsetCommit)
-					}
-					topicMap[t][p] = sessionTxStagedOffsetCommit{
-						Offset:      oc.offset,
-						LeaderEpoch: oc.leaderEpoch,
-						Metadata:    oc.metadata,
-					}
-				})
-				st.TxOffsets[group] = topicMap
-			}
-		}
+		st.TxOffsets = persistTxOffsets(pidinf.txOffsets)
 		ss.InProgressTxns = append(ss.InProgressTxns, st)
 	}
 
@@ -2390,6 +2669,7 @@ func (c *Cluster) saveSessionState() error {
 			}
 			for k, p := range fs.partitions {
 				sf.Partitions = append(sf.Partitions, sessionFetchSessionPart{
+					TopicID:            p.topicID,
 					Topic:              k.t,
 					Partition:          k.p,
 					FetchOffset:        p.fetchOffset,
@@ -2410,12 +2690,12 @@ func (c *Cluster) saveSessionState() error {
 		}
 	}
 
-	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 && len(ss.GroupConfigs) == 0 && len(ss.InProgressTxns) == 0 && len(ss.FetchSessions) == 0 {
+	if len(ss.ClassicGroups) == 0 && len(ss.ConsumerGroups) == 0 && len(ss.ShareGroups) == 0 && len(ss.InProgressTxns) == 0 && len(ss.FetchSessions) == 0 {
 		c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: nothing to save")
 		return nil
 	}
-	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d share=%d groupConfigs=%d inProgressTxns=%d fetchSessions=%d",
-		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.ShareGroups), len(ss.GroupConfigs), len(ss.InProgressTxns), fetchSessionCount)
+	c.cfg.logger.Logf(LogLevelDebug, "saveSessionState: saving classic=%d consumer=%d share=%d inProgressTxns=%d fetchSessions=%d",
+		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.ShareGroups), len(ss.InProgressTxns), fetchSessionCount)
 	return writeJSONFile(c.fs, filepath.Join(c.cfg.dataDir, "session_state.json"), ss)
 }
 
@@ -2439,19 +2719,13 @@ func (c *Cluster) loadSessionState() error {
 	c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: classic=%d consumer=%d inProgressTxns=%d shutdownAt=%v elapsed=%v",
 		len(ss.ClassicGroups), len(ss.ConsumerGroups), len(ss.InProgressTxns), ss.ShutdownAt, time.Since(ss.ShutdownAt))
 
-	// Group configs first: the share restore below reads them.
-	if len(ss.GroupConfigs) > 0 {
-		c.groupConfigs = ss.GroupConfigs
-		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored %d group configs", len(ss.GroupConfigs))
-	}
-
 	for name, sg := range ss.ClassicGroups {
 		g, ok := c.groups.gs[name]
 		if !ok {
 			c.cfg.logger.Logf(LogLevelInfo, "loadSessionState: classic group %s not found in groups.gs", name)
 			continue
 		}
-		g.restoreClassicMembers(ss.ShutdownAt, sg)
+		g.restoreClassicMembers(sg)
 		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored classic group=%s members=%d state=%s",
 			name, len(g.members), g.state)
 	}
@@ -2462,39 +2736,30 @@ func (c *Cluster) loadSessionState() error {
 			c.cfg.logger.Logf(LogLevelInfo, "loadSessionState: consumer group %s not found in groups.gs", name)
 			continue
 		}
-		g.restoreConsumerMembers(ss.ShutdownAt, sg)
+		g.restoreConsumerMembers(sg)
 		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored consumer group=%s members=%d state=%s",
 			name, len(g.consumerMembers), g.state)
 	}
 
-	// Restore share group partition state AND members. The share group
-	// is created on demand (getOrCreate), so we create it here to
-	// restore state into.
+	// Restore share group members; groups.log restored the partition
+	// state. The share group is created on demand (getOrCreate), so we
+	// create it here to restore state into.
 	//
-	// If the member set is restored, acquisitions are preserved as
-	// "acquired" against their original memberID. When the client's
-	// ShareGroupHeartbeat arrives post-restart, handleJoin finds the
-	// existing member and fast-paths the rejoin with the prior
-	// assignment instead of triggering a full group rebalance, which is
-	// what otherwise starves net-forward consumption progress per
-	// --restart cycle. Members whose last heartbeat is older than the
-	// configured share session timeout are skipped -- same pattern as
-	// restoreClassicMembers and the in-progress-txn auto-abort: a
-	// long-enough outage should let fresh members claim the group.
-	// Acquisitions whose save-time is older than the configured record
-	// lock duration are released too, so fresh members can re-acquire
-	// records the prior owner never got to ack/release.
-	restoreMembers := func(sg *shareGroup, members []sessionShareMember) map[string]struct{} {
+	// When the client's ShareGroupHeartbeat arrives post-restart,
+	// handleJoin finds the existing member and fast-paths the rejoin with
+	// the prior assignment instead of triggering a full group rebalance,
+	// which is what otherwise starves net-forward consumption progress
+	// per --restart cycle. Members whose last heartbeat is older than the
+	// configured share session timeout are fenced, as their session
+	// timeout would have done: a long-enough outage should let fresh
+	// members claim the group.
+	restoreMembers := func(sg *shareGroup, members []sessionShareMember) (fenced bool) {
 		shareSessionTimeout := time.Duration(c.shareSessionTimeoutMs(sg.name)) * time.Millisecond
-		restored := make(map[string]struct{}, len(members))
-		now := time.Now()
 		for _, sm := range members {
 			lastHB := sm.LastHeartbeat
-			if lastHB.IsZero() {
-				lastHB = ss.ShutdownAt
-			}
 			if time.Since(lastHB) >= shareSessionTimeout {
-				continue // matches restoreClassicMembers: silently drop expired
+				fenced = true
+				continue
 			}
 			m := &shareMember{
 				memberID:            sm.ID,
@@ -2504,89 +2769,34 @@ func (c *Cluster) loadSessionState() error {
 				memberEpoch:         sm.Epoch,
 				previousMemberEpoch: sm.PrevEpoch,
 				subscribedTopics:    slices.Clone(sm.SubscribedTopics),
-				assignment:          make(map[uuid][]int32, len(sm.Assignment)),
+				target:              make(map[uuid][]int32, len(sm.Assignment)),
 				last:                lastHB,
 			}
-			if m.last.IsZero() {
-				m.last = now
-			}
 			for tid, parts := range sm.Assignment {
-				m.assignment[tid] = slices.Clone(parts)
+				m.target[tid] = slices.Clone(parts)
 			}
+			m.assignment = m.target
 			sg.members[sm.ID] = m
 			sg.resetSessionTimeout(m)
-			restored[sm.ID] = struct{}{}
 		}
-		return restored
+		return fenced
 	}
 	for name, ssg := range ss.ShareGroups {
 		sg := c.shareGroups.getOrCreate(name)
-		acquisitionStale := time.Since(ss.ShutdownAt) >= time.Duration(c.shareRecordLockDurationMs(name))*time.Millisecond
-		maxDelivery := c.shareMaxDeliveryAttempts(name)
 		sg.groupEpoch = ssg.GroupEpoch
-		restoredMembers := restoreMembers(sg, ssg.Members)
-		for topic, parts := range ssg.Partitions {
-			for partition, ssp := range parts {
-				sp := sg.partitions.mkp(topic, partition, func() *sharePartition {
-					return &sharePartition{
-						spso:    ssp.SPSO,
-						records: make(map[int64]shareRecord),
-					}
-				})
-				sp.spso = ssp.SPSO
-				sp.scanOffset = ssp.SPSO
-				for offset, ssr := range ssp.Records {
-					state := shareRecordState(ssr.State)
-					acquiredBy := ssr.AcquiredBy
-					// Release the acquisition if the member that
-					// held it did not survive the save-to-load
-					// window, or if we have sat past the lock
-					// duration already. Either case lets a fresh
-					// owner re-acquire on the next fetch.
-					_, memberSurvived := restoredMembers[acquiredBy]
-					if state == shareRecordAcquired && (!memberSurvived || acquisitionStale) {
-						if ssr.DeliveryCount >= maxDelivery {
-							state = shareRecordArchived
-						} else {
-							state = shareRecordAvailable
-						}
-						acquiredBy = ""
-					}
-					sp.records[offset] = shareRecord{
-						state:         state,
-						deliveryCount: ssr.DeliveryCount,
-						acquiredBy:    acquiredBy,
-					}
-					// Track acquireEnd as one past the highest restored offset.
-					if offset+1 > sp.acquireEnd {
-						sp.acquireEnd = offset + 1
-					}
-				}
-				sp.advanceSPSO()
-			}
+		if restoreMembers(sg, ssg.Members) {
+			sg.bumpEpoch()
+			sg.recomputeAssignments()
 		}
 		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored share group=%s epoch=%d members=%d",
 			name, sg.groupEpoch, len(sg.members))
 	}
 
-	if len(ss.ClientMetrics) > 0 {
-		c.clientMetrics = ss.ClientMetrics
-	}
-
-	// Restore in-progress transaction state: reconstruct txParts,
-	// txPartFirstOffsets, and pd.uncommittedPIDs from the saved
-	// per-partition first offsets. This lets endTx properly commit
-	// or abort records that were produced before the restart.
-	//
-	// The "effective elapsed" time of a txn excludes broker downtime:
-	// we shift txStart forward by time.Since(ShutdownAt) so a client
-	// that started a txn pre-restart gets back the same remaining
-	// budget, not a shortened one that counts the restart gap as
-	// in-flight time. Without this, cumulative downtime across many
-	// --restart cycles can drive a live txn past its TransactionTimeout
-	// and trigger auto-abort on the NEXT restart, which fences the
-	// producer epoch and fails any subsequent Produce with
-	// INVALID_PRODUCER_EPOCH (fatal post-KIP-890).
+	// Restore in-progress transaction state, on top of what the replay
+	// of each partition with the transaction's records restored: the
+	// partitions, their first offsets, and the LSO. This lets endTx
+	// properly commit or abort records that were produced before the
+	// restart.
 	outage := time.Since(ss.ShutdownAt)
 	if outage < 0 {
 		outage = 0
@@ -2596,85 +2806,24 @@ func (c *Cluster) loadSessionState() error {
 		if !ok {
 			continue
 		}
-		// Auto-abort if absolute elapsed time since the txn was opened
-		// exceeds its timeout. Unlike session timeouts (where we want to
-		// exclude broker downtime so members aren't unfairly kicked),
-		// txn timeouts are absolute: real Kafka expires a txn that has
-		// been open too long regardless of broker availability.
-		txTimeout := time.Duration(pidinf.txTimeout) * time.Millisecond
-		if !st.TxStart.IsZero() && time.Since(st.TxStart) > txTimeout {
-			c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: auto-aborting expired txn pid=%d epoch=%d (start %v ago, timeout %v)",
-				pidinf.id, pidinf.epoch, time.Since(st.TxStart), txTimeout)
-			// Reconstruct just enough state for endTx to abort.
-			pidinf.inTx = true
-			c.pids.txs[pidinf] = struct{}{}
-			for topic, parts := range st.TxPartFirstOffsets {
-				for part, firstOff := range parts {
-					pd, ok := c.data.tps.getp(topic, part)
-					if !ok || pd == nil {
-						continue
-					}
-					ps := pidinf.txParts.mkt(topic)
-					ps[part] = pd
-					ptr := pidinf.txPartFirstOffsets.mkp(topic, part, func() *int64 {
-						v := int64(-1)
-						return &v
-					})
-					*ptr = firstOff
-					if pd.uncommittedPIDs == nil {
-						pd.uncommittedPIDs = make(map[int64]int64)
-					}
-					existing, exists := pd.uncommittedPIDs[pidinf.id]
-					if !exists || firstOff < existing {
-						pd.uncommittedPIDs[pidinf.id] = firstOff
-					}
-					pd.recalculateLSO()
-				}
-			}
-			pidinf.endTx(false)
-			continue
-		}
-
 		pidinf.inTx = true
-		// When restoring a non-expired txn, shift its start time
-		// forward by the outage so the txn's effective clock pauses
-		// during broker downtime. The timeout check above uses
-		// absolute elapsed time (matching real Kafka); this shift
-		// only affects the post-restart timer, giving the client a
-		// fair chance to complete the txn without the clock counting
-		// broker downtime it had no control over.
+		// A txn's clock pauses while we are down: we shift its start
+		// forward by the outage, so the client gets back the time it
+		// had left. Otherwise, repeated restarts would push a live txn
+		// past its timeout, and the abort would fence the producer. A
+		// txn open longer than its timeout keeps its start, and the
+		// updateTimer below aborts it and bumps the epoch, as Kafka
+		// expires a txn open too long whether or not the broker was up.
 		pidinf.txStart = st.TxStart
-		if !pidinf.txStart.IsZero() {
+		if time.Since(st.TxStart) <= time.Duration(pidinf.txTimeout)*time.Millisecond {
 			pidinf.txStart = pidinf.txStart.Add(outage)
 		}
-		if pidinf.txStart.IsZero() {
-			pidinf.txStart = time.Now()
-		}
 		c.pids.txs[pidinf] = struct{}{}
-		for topic, parts := range st.TxPartFirstOffsets {
-			for part, firstOff := range parts {
-				pd, ok := c.data.tps.getp(topic, part)
-				if !ok || pd == nil {
-					continue
+		for topic, parts := range st.TxParts {
+			for _, part := range parts {
+				if pd, ok := c.data.tps.getp(topic, part); ok {
+					pidinf.txParts.mkt(topic)[part] = pd
 				}
-				// Reconstruct txParts
-				ps := pidinf.txParts.mkt(topic)
-				ps[part] = pd
-				// Reconstruct txPartFirstOffsets
-				ptr := pidinf.txPartFirstOffsets.mkp(topic, part, func() *int64 {
-					v := int64(-1)
-					return &v
-				})
-				*ptr = firstOff
-				// Reconstruct pd.uncommittedPIDs
-				if pd.uncommittedPIDs == nil {
-					pd.uncommittedPIDs = make(map[int64]int64)
-				}
-				existing, exists := pd.uncommittedPIDs[pidinf.id]
-				if !exists || firstOff < existing {
-					pd.uncommittedPIDs[pidinf.id] = firstOff
-				}
-				pd.recalculateLSO()
 			}
 		}
 		// Restore staged TxnOffsetCommit state so a post-restart EndTxn
@@ -2684,24 +2833,9 @@ func (c *Cluster) loadSessionState() error {
 		if len(st.TxGroups) > 0 {
 			pidinf.txGroups = slices.Clone(st.TxGroups)
 		}
-		if len(st.TxOffsets) > 0 {
-			pidinf.txOffsets = make(map[string]tps[offsetCommit], len(st.TxOffsets))
-			for group, topicMap := range st.TxOffsets {
-				var groupOffsets tps[offsetCommit]
-				for topic, parts := range topicMap {
-					for part, s := range parts {
-						groupOffsets.set(topic, part, offsetCommit{
-							offset:      s.Offset,
-							leaderEpoch: s.LeaderEpoch,
-							metadata:    s.Metadata,
-						})
-					}
-				}
-				pidinf.txOffsets[group] = groupOffsets
-			}
-		}
+		pidinf.txOffsets = restoreTxOffsets(st.TxOffsets)
 		c.cfg.logger.Logf(LogLevelDebug, "loadSessionState: restored in-progress txn pid=%d epoch=%d parts=%d groups=%d stagedOffsets=%d (started %v ago)",
-			pidinf.id, pidinf.epoch, len(st.TxPartFirstOffsets), len(pidinf.txGroups), len(pidinf.txOffsets), time.Since(pidinf.txStart))
+			pidinf.id, pidinf.epoch, len(pidinf.txParts), len(pidinf.txGroups), len(pidinf.txOffsets), time.Since(pidinf.txStart))
 	}
 	if len(ss.InProgressTxns) > 0 {
 		c.pids.updateTimer()
@@ -2733,10 +2867,12 @@ func (c *Cluster) loadSessionState() error {
 				id:         sf.ID,
 				epoch:      sf.Epoch,
 				partitions: make(map[tp]fetchSessionPartition, len(sf.Partitions)),
+				unknownIDs: make(map[idp]fetchSessionPartition),
 				lastUsed:   time.Now(),
 			}
 			for _, p := range sf.Partitions {
 				fs.partitions[tp{p.Topic, p.Partition}] = fetchSessionPartition{
+					topicID:            p.TopicID,
 					fetchOffset:        p.FetchOffset,
 					maxBytes:           p.MaxBytes,
 					currentEpoch:       p.CurrentEpoch,
@@ -2766,6 +2902,7 @@ func (c *Cluster) loadSessionState() error {
 
 // closeOpenFiles closes all open file handles for persistence.
 func (c *Cluster) closeOpenFiles() {
+	c.filesClosed = true
 	if c.groupsLogFile != nil {
 		if c.cfg.syncWrites {
 			c.groupsLogFile.Sync()
@@ -2781,6 +2918,6 @@ func (c *Cluster) closeOpenFiles() {
 		c.pidsLogFile = nil
 	}
 	c.data.tps.each(func(_ string, _ int32, pd *partData) {
-		pd.closeAllFiles(c.cfg.syncWrites)
+		pd.closeAllFiles(true)
 	})
 }

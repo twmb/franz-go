@@ -38,13 +38,15 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 
 ## Transactions
 
-- KIP-890: Produce v12+ implicitly adds partitions via `pids.get()` with a non-nil `pd`. EndTxn v5+ bumps the epoch after each transaction; an EndTxn retry with `epoch == serverEpoch-1` and `!inTx` returns success with the current epoch.
-- State is `inTx` + `lastWasCommit`, not a state machine: completion is synchronous, so there are no PREPARE/COMPLETE states.
-- All txn coordinator epoch errors use PRODUCER_FENCED; only the produce path uses INVALID_PRODUCER_EPOCH.
-- InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) always gets a fresh PID.
-- KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` when `pids.hasUnstableOffsets(group)`.
+- KIP-890: Produce v12+ implicitly adds partitions via `pids.get()` with a non-nil `pd`. EndTxn v5+ bumps the epoch after each transaction, even an empty one; an EndTxn retry with `epoch == serverEpoch-1` (or the old PID's last epoch after an overflow, via `prevID`) succeeds only after an end in the same direction (Kafka trunk's TV2 table).
+- State is `inTx` + `ending` + `ended` + `lastWasCommit` (Ongoing; PrepareCommit or PrepareAbort; Empty; CompleteCommit or CompleteAbort), not a state machine. Completion is synchronous unless a marker fails to write: the transaction then stays open with `ending` set, coordinator requests answer CONCURRENT_TRANSACTIONS, and a retry of the end, an InitProducerID, or the transaction timer writes the rest.
+- All txn coordinator epoch errors use PRODUCER_FENCED, mapped to INVALID_PRODUCER_EPOCH for request versions that predate it in the handlers; the produce path and TxnOffsetCommit (group coordinator) use INVALID_PRODUCER_EPOCH.
+- Coordinator requests look the producer up by transactional ID (`txnPid`), never by producer ID alone.
+- InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) and unknown (expired) txids get a fresh PID.
+- Persistence: pids.log `init` entries carry the full producer state; `begin` marks an open transaction. `prepare` records an EndTxn's decision before its markers. A crash restart ends a transaction that session state does not restore as its `prepare` entry decided, else aborts it with a bump that fences the producer.
+- KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` for each partition an open transaction commits (`pids.hasUnstableOffset`).
 
-**Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The one exception: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller.
+**Concurrency**: everything runs on `Cluster.run()`, nothing has a goroutine of its own, and timers hand their work back through the loop. The exceptions: while the loop is paused inside a `Fault.When`, `admin` runs its function inline under `whenMu`, for the `When` and for any other caller; and a cluster loading a data directory loads its partitions on parallel goroutines (`forEachPartition`) before the loop starts, each touching only its own partition.
 
 ## ACLs
 

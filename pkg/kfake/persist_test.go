@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -52,7 +53,7 @@ func TestPersistProduceCloseReopen(t *testing.T) {
 	}
 
 	// Verify snapshot was written during clean shutdown
-	snapPath := filepath.Join(dir, "partitions", "test-topic-0", "snapshot.json")
+	snapPath := filepath.Join(partPath(t, dir, "test-topic"), "snapshot.json")
 	if _, err := os.Stat(snapPath); err != nil {
 		t.Fatalf("expected snapshot.json after clean shutdown: %v", err)
 	}
@@ -355,11 +356,13 @@ func TestPersistACLsRestart(t *testing.T) {
 	}
 }
 
+// TestPersistBrokerConfigsRestart verifies that broker configs, a client
+// metrics subscription, and a feature level survive a crash.
 func TestPersistBrokerConfigsRestart(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir, crashed := t.TempDir(), t.TempDir()
 
-	// Phase 1: set broker configs, close
+	// Phase 1: set them, crash
 	{
 		c := newCluster(t,
 			DataDir(dir),
@@ -368,13 +371,36 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 				"log.retention.ms": "86400000",
 			}),
 		)
-		c.Close()
+		req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeClientMetrics
+		rr.ResourceName = "sub"
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = "metrics"
+		rc.Value = new("*")
+		rr.Configs = append(rr.Configs, rc)
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(context.Background(), newPlainClient(t, c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Resources[0].ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+		}
+		ureq := kmsg.NewPtrUpdateFeaturesRequest()
+		f := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
+		f.Feature, f.MaxVersionLevel, f.UpgradeType = "transaction.version", 0, 2 // safe downgrade
+		ureq.FeatureUpdates = append(ureq.FeatureUpdates, f)
+		if uresp, err := ureq.RequestWith(context.Background(), newPlainClient(t, c)); err != nil || uresp.ErrorCode != 0 {
+			t.Fatalf("UpdateFeatures: %v %v", err, uresp)
+		}
+		copyDir(t, dir, crashed) // the cluster keeps writing to dir
 	}
 
 	// Phase 2: reopen, verify config persisted
 	{
 		c := newCluster(t,
-			DataDir(dir),
+			DataDir(crashed),
 			NumBrokers(1),
 		)
 
@@ -390,14 +416,27 @@ func TestPersistBrokerConfigsRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var found bool
 		for _, r := range resp.Resources {
 			for _, c := range r.Configs {
 				if c.Name == "log.retention.ms" && c.Value != nil && *c.Value == "86400000" {
-					return // success
+					found = true
 				}
 			}
 		}
-		t.Fatal("expected log.retention.ms=86400000 to be persisted")
+		if !found {
+			t.Fatal("expected log.retention.ms=86400000 to be persisted")
+		}
+
+		listed, err := kadm.NewClient(cl).ListConfigResources(context.Background(), kadm.ConfigResourceClientMetrics)
+		if names := listed.Names(); err != nil || len(names) != 1 || names[0] != "sub" {
+			t.Fatalf("client metrics after restart: got %v (%v), want [sub]", names, err)
+		}
+		c.admin(func() {
+			if level, ok := c.features["transaction.version"]; !ok || level != 0 || c.featuresEpoch != 1 {
+				t.Errorf("transaction.version after restart: got %d (set %v) at epoch %d, want 0 at epoch 1", level, ok, c.featuresEpoch)
+			}
+		})
 	}
 }
 
@@ -486,7 +525,7 @@ func TestPersistCRCCorruption(t *testing.T) {
 
 	// Delete snapshot.json so Phase 2 forces a full replay through
 	// the corrupted segment files (not the snapshot path).
-	partDir := filepath.Join(dir, "partitions", "crc-topic-0")
+	partDir := partPath(t, dir, "crc-topic")
 	os.Remove(filepath.Join(partDir, "snapshot.json"))
 
 	// Corrupt the last entry in a segment file.
@@ -569,7 +608,7 @@ func TestPersistSegmentRollover(t *testing.T) {
 	}
 
 	// Verify multiple segment files were created
-	partDir := filepath.Join(dir, "partitions", "seg-topic-0")
+	partDir := partPath(t, dir, "seg-topic")
 	entries, err := os.ReadDir(partDir)
 	if err != nil {
 		t.Fatal(err)
@@ -618,6 +657,56 @@ func TestPersistNoDataDir(t *testing.T) {
 	r := &kgo.Record{Topic: "no-persist", Value: []byte("test")}
 	if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPersistRelativeDataDir verifies that a chdir after NewCluster does not
+// move a relative DataDir. It cannot be parallel: it changes the process's
+// working directory.
+func TestPersistRelativeDataDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	c := newCluster(t, DataDir("data"), NumBrokers(1), SeedTopics(1, "t"))
+	t.Chdir(t.TempDir())
+	produceN(t, c, "t", 1)
+	c.Close()
+	if _, err := os.Stat("data"); !os.IsNotExist(err) {
+		t.Fatal("the cluster wrote to data in the directory we changed to")
+	}
+}
+
+// TestPersistTempSymlink verifies that we write only inside the data dir: a
+// symlink planted where we write a temporary file is replaced, not
+// followed, so its target keeps its contents, and a path outside the data
+// dir fails.
+func TestPersistTempSymlink(t *testing.T) {
+	t.Parallel()
+	dir, targets := t.TempDir(), t.TempDir()
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
+	names := []string{"topics.json.tmp", "pids.log.tmp", "groups.log.tmp"}
+	for _, name := range names {
+		target := filepath.Join(targets, name)
+		if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Skipf("cannot symlink: %v", err)
+		}
+	}
+	if err := c.CreateTopic("t", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.admin(func() {
+		c.compactPIDsLog()
+		c.compactGroupsLog()
+	})
+	for _, name := range names {
+		if data, _ := os.ReadFile(filepath.Join(targets, name)); string(data) != "keep" {
+			t.Errorf("the target of %s: got %q, want it untouched", name, data)
+		}
+	}
+	outside := filepath.Join(dir, "..", "outside")
+	if err := c.fs.MkdirAll(outside, 0o755); err == nil {
+		t.Errorf("MkdirAll(%s) outside the data dir: got no error", outside)
 	}
 }
 
@@ -730,85 +819,125 @@ func TestPersistSyncWritesGroupCommitCrash(t *testing.T) {
 	}
 }
 
-// TestPersistSyncWritesOffsetDeleteCrash verifies that OffsetDelete
-// entries survive a crash with SyncWrites.
-func TestPersistSyncWritesOffsetDeleteCrash(t *testing.T) {
+// TestPersistSyncWritesDeleteCrash verifies that OffsetDelete and
+// DeleteGroups entries survive a crash with SyncWrites.
+func TestPersistSyncWritesDeleteCrash(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
 
 	const topic = "del-topic"
 	const group = "del-group"
 
-	// Phase 1: produce, commit offsets, then delete them, then crash
-	{
-		c := newCluster(t,
-			DataDir(dir),
-			SyncWrites(),
-			NumBrokers(1),
-			SeedTopics(1, topic),
-		)
+	for _, tc := range []struct {
+		name      string
+		groupGone bool
+		req       func() kmsg.Request
+	}{
+		{"OffsetDelete", false, func() kmsg.Request {
+			req := kmsg.NewPtrOffsetDeleteRequest()
+			req.Group = group
+			rt := kmsg.NewOffsetDeleteRequestTopic()
+			rt.Topic = topic
+			rp := kmsg.NewOffsetDeleteRequestTopicPartition()
+			rp.Partition = 0
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+			return req
+		}},
+		{"DeleteGroups", true, func() kmsg.Request {
+			req := kmsg.NewPtrDeleteGroupsRequest()
+			req.Groups = []string{group}
+			return req
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
 
-		produceN(t, c, topic, 5)
+			// Phase 1: produce, commit offsets, then delete them, then crash
+			{
+				c := newCluster(t,
+					DataDir(dir),
+					SyncWrites(),
+					NumBrokers(1),
+					SeedTopics(1, topic),
+				)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+				produceN(t, c, topic, 5)
 
-		consCl := newPlainClient(t, c,
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(group),
-			kgo.HeartbeatInterval(100*time.Millisecond),
-			kgo.FetchMaxWait(250*time.Millisecond),
-		)
-		var consumed int
-		for consumed < 5 {
-			fetches := consCl.PollFetches(ctx)
-			fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
-		}
-		if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
-			t.Fatal(err)
-		}
-		consCl.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-		// Delete the committed offset via protocol
-		cl := newPlainClient(t, c)
-		req := kmsg.NewOffsetDeleteRequest()
-		req.Group = group
-		rt := kmsg.NewOffsetDeleteRequestTopic()
-		rt.Topic = topic
-		rp := kmsg.NewOffsetDeleteRequestTopicPartition()
-		rp.Partition = 0
-		rt.Partitions = append(rt.Partitions, rp)
-		req.Topics = append(req.Topics, rt)
-		if _, err := req.RequestWith(ctx, cl); err != nil {
-			t.Fatal(err)
-		}
-		// Crash: don't call c.Close()
-	}
+				consCl := newPlainClient(t, c,
+					kgo.ConsumeTopics(topic),
+					kgo.ConsumerGroup(group),
+					kgo.HeartbeatInterval(100*time.Millisecond),
+					kgo.FetchMaxWait(250*time.Millisecond),
+				)
+				var consumed int
+				for consumed < 5 {
+					fetches := consCl.PollFetches(ctx)
+					fetches.EachRecord(func(_ *kgo.Record) { consumed++ })
+				}
+				if err := consCl.CommitUncommittedOffsets(ctx); err != nil {
+					t.Fatal(err)
+				}
+				consCl.Close()
 
-	// Phase 2: reopen, verify the offset delete survived.
-	// The group may not exist at all (GROUP_ID_NOT_FOUND) since
-	// the only commit was deleted - that's also a valid outcome.
-	{
-		c := newCluster(t,
-			DataDir(dir),
-			NumBrokers(1),
-		)
+				// Delete the committed offset via protocol
+				cl := newPlainClient(t, c)
+				if _, err := cl.Request(ctx, tc.req()); err != nil {
+					t.Fatal(err)
+				}
+				// Crash: don't call c.Close()
+			}
 
-		if _, ok := groupCommits(c, group)[topic][0]; ok {
-			t.Fatal("expected deleted offset to remain deleted after crash with SyncWrites")
-		}
+			// Phase 2: reopen, verify the delete survived. After
+			// OffsetDelete the group may not exist at all, since the
+			// only commit was deleted.
+			{
+				c := newCluster(t,
+					DataDir(dir),
+					NumBrokers(1),
+				)
+
+				if _, ok := groupCommits(c, group)[topic][0]; ok {
+					t.Fatal("expected deleted offset to remain deleted after crash with SyncWrites")
+				}
+				if tc.groupGone && c.GroupInfo(group) != nil {
+					t.Fatal("expected deleted group to remain deleted after crash with SyncWrites")
+				}
+			}
+		})
 	}
 }
 
 // TestPersistSyncWritesTxnOffsetCommitCrash verifies that transactional
 // offset commits (applied at EndTxn) are durable with SyncWrites even
-// without a clean shutdown.
+// without a clean shutdown, and that a transaction with only offset commits
+// that is open at the crash is aborted: a commit after the restart fails.
 func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir, openDir := t.TempDir(), t.TempDir()
 
 	const topic = "txn-oc-topic"
 	const group = "txn-oc-group"
+	const txid = "txn-oc-txid"
+
+	var pid int64
+	var epoch int16
+	endTxn := func(ctx context.Context, cl *kgo.Client) *kmsg.EndTxnResponse {
+		t.Helper()
+		endReq := kmsg.NewEndTxnRequest()
+		endReq.TransactionalID = txid
+		endReq.ProducerID = pid
+		endReq.ProducerEpoch = epoch
+		endReq.Commit = true
+		endResp, err := endReq.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return endResp
+	}
 
 	// Phase 1: produce, then use transactional offset commit, crash
 	{
@@ -822,93 +951,33 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		// Produce some records
 		produceN(t, c, topic, 10)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		// Use all raw kmsg requests for the transactional flow so we
-		// control the ProducerID/Epoch explicitly.
 		cl := newPlainClient(t, c)
 
-		// InitProducerID
-		initReq := kmsg.NewInitProducerIDRequest()
-		initReq.TransactionalID = new("txn-oc-txid")
-		initReq.TransactionTimeoutMillis = 30000
-		initReq.ProducerID = -1
-		initReq.ProducerEpoch = -1
-		initResp, err := initReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
+		// The transaction commits offset 7 for the group, which, as in
+		// Kafka, the TxnOffsetCommit creates.
+		commit := stageTxnOffset(t, c, cl, txid, group, topic, 7)
+		if c.GroupInfo(group) == nil {
+			t.Fatal("TxnOffsetCommit at generation -1 did not create the group")
 		}
-		if initResp.ErrorCode != 0 {
-			t.Fatalf("InitProducerID failed with code %d", initResp.ErrorCode)
-		}
-		pid := initResp.ProducerID
-		epoch := initResp.ProducerEpoch
+		commit()
 
-		// AddOffsetsToTxn: register the group with the transaction
-		aotReq := kmsg.NewAddOffsetsToTxnRequest()
-		aotReq.TransactionalID = "txn-oc-txid"
-		aotReq.ProducerID = pid
-		aotReq.ProducerEpoch = epoch
-		aotReq.Group = group
-		aotResp, err := aotReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if aotResp.ErrorCode != 0 {
-			t.Fatalf("AddOffsetsToTxn failed with code %d", aotResp.ErrorCode)
-		}
-
-		// TxnOffsetCommit: commit offset 7 for the group
-		tocReq := kmsg.NewTxnOffsetCommitRequest()
-		tocReq.TransactionalID = "txn-oc-txid"
-		tocReq.ProducerID = pid
-		tocReq.ProducerEpoch = epoch
-		tocReq.Group = group
-		tocReq.Generation = -1
-		tocReq.MemberID = ""
-		tocT := kmsg.NewTxnOffsetCommitRequestTopic()
-		tocT.Topic, tocT.TopicID = topic, c.TopicInfo(topic).TopicID
-		tocP := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-		tocP.Partition = 0
-		tocP.Offset = 7
-		tocP.LeaderEpoch = -1
-		tocT.Partitions = append(tocT.Partitions, tocP)
-		tocReq.Topics = append(tocReq.Topics, tocT)
-		tocR, err := tocReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, rt := range tocR.Topics {
-			for _, rp := range rt.Partitions {
-				if rp.ErrorCode != 0 {
-					t.Fatalf("TxnOffsetCommit %s/%d failed with code %d", rt.Topic, rp.Partition, rp.ErrorCode)
-				}
-			}
-		}
-
-		// EndTxn: commit the transaction
-		endReq := kmsg.NewEndTxnRequest()
-		endReq.TransactionalID = "txn-oc-txid"
-		endReq.ProducerID = pid
-		endReq.ProducerEpoch = epoch
-		endReq.Commit = true
-		endResp, err := endReq.RequestWith(ctx, cl)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if endResp.ErrorCode != 0 {
-			t.Fatalf("EndTxn failed with code %d", endResp.ErrorCode)
-		}
+		// A second transaction stages offset 9 and is open at the crash.
+		stageTxnOffset(t, c, cl, txid, group, topic, 9)
+		c.admin(func() { pid, epoch = c.pids.byTxid[txid].id, c.pids.byTxid[txid].epoch })
 
 		cl.Close()
-		// Crash: don't call c.Close()
+		// Crash: don't call c.Close(). openDir crashes with the second
+		// transaction open, dir right after its EndTxn logs a commit.
+		copyDir(t, dir, openDir)
+		c.admin(func() {
+			c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pid, Commit: new(true), Offsets: persistTxOffsets(c.pids.ids[pid].txOffsets)})
+		})
 	}
 
 	// Phase 2: reopen, verify transactional offset commit survived
 	{
 		c := newCluster(t,
-			DataDir(dir),
+			DataDir(openDir),
 			NumBrokers(1),
 		)
 
@@ -919,6 +988,186 @@ func TestPersistSyncWritesTxnOffsetCommitCrash(t *testing.T) {
 		if o.Offset != 7 {
 			t.Fatalf("expected transactional committed offset 7, got %d", o.Offset)
 		}
+
+		// The restart aborted the open transaction, so its commit is
+		// fenced rather than a success that applies nothing.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if code := endTxn(ctx, newPlainClient(t, c)).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("EndTxn of the transaction open at the crash: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+		if o := groupCommits(c, group)[topic][0]; o.Offset != 7 {
+			t.Fatalf("expected committed offset 7 after the failed commit, got %d", o.Offset)
+		}
+	}
+
+	// Phase 3: the restart finishes the logged commit, and a retry of
+	// its EndTxn succeeds.
+	{
+		c := newCluster(t, DataDir(dir), NumBrokers(1))
+		o := groupCommits(c, group)[topic][0]
+		if code := endTxn(context.Background(), newPlainClient(t, c)).ErrorCode; code != 0 || o.Offset != 9 {
+			t.Fatalf("after a logged commit: got offset %d and EndTxn %v, want 9 and success", o.Offset, kerr.ErrorForCode(code))
+		}
+	}
+}
+
+// TestPersistPIDsLogReplay verifies that a producer's epoch and last
+// transaction outcome survive a restart, and how a restart ends the
+// transactions that pids.log leaves open: a begin after a prepare is a new
+// transaction, which aborts; a pids.log compaction while the restart ends
+// transactions keeps the prepare entries of those it has yet to end; and an
+// EndTxn whose prepare write fails leaves its transaction open. It also
+// verifies that an InitProducerID answered while Close waits is logged,
+// that state logs whose live state is past state.log.compact.bytes, or
+// whose compaction failed, do not compact at every append, and that a
+// regular commit made after a staged one in the same millisecond still wins
+// after a restart.
+func TestPersistPIDsLogReplay(t *testing.T) {
+	t.Parallel()
+	commit := new(true)
+	logged := func(entries ...pidLogEntry) func(*testing.T, *Cluster) {
+		return func(_ *testing.T, c *Cluster) {
+			for _, e := range entries {
+				c.persistPIDEntry(e)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		setup        func(*testing.T, *Cluster)
+		compactBytes string // state.log.compact.bytes at the restart
+		want         map[string]string
+		commit       int64 // if set, group g's offset for t-0 after the restart
+	}{
+		{"ended-commit", logged(pidLogEntry{Type: "init", PID: 1, TxID: "a", Epoch: 2, Timeout: 60000, Commit: commit}), "", map[string]string{"a": "CompleteCommit 2"}, 0},
+		{"ended-abort", logged(pidLogEntry{Type: "init", PID: 1, TxID: "a", Epoch: 2, Timeout: 30000, Commit: new(false)}), "", map[string]string{"a": "CompleteAbort 2"}, 0},
+		{"begin-after-prepare", logged(
+			pidLogEntry{Type: "init", PID: 1, TxID: "a", Timeout: 60000},
+			pidLogEntry{Type: "prepare", PID: 1, Commit: commit},
+			pidLogEntry{Type: "begin", PID: 1}, // the init after the prepare failed
+		), "", map[string]string{"a": "CompleteAbort 1"}, 0},
+		{"compact-while-ending", logged(append([]pidLogEntry{
+			{Type: "init", PID: 1, TxID: "a", Timeout: 60000},
+			{Type: "begin", PID: 1},
+			{Type: "prepare", PID: 1, Commit: commit},
+			{Type: "init", PID: 2, TxID: "b", Timeout: 60000},
+			{Type: "begin", PID: 2},
+			{Type: "prepare", PID: 2, Epoch: 1, Commit: commit}, // a v5 end bumps
+		}, slices.Repeat([]pidLogEntry{{Type: "expire", PID: 3}}, 10)...)...), "300", map[string]string{"a": "CompleteCommit 0", "b": "CompleteCommit 1"}, 0},
+		{"failed-prepare", func(t *testing.T, c *Cluster) {
+			pidinf := c.pids.create(new("a"), 60000)
+			pidinf.persist()
+			pidinf.maybeStart()
+			c.fs.(*memFS).failNextWrite = &testError{"injected"}
+			req := &kmsg.EndTxnRequest{TransactionalID: "a", ProducerID: pidinf.id, Commit: true}
+			resp := c.pids.doEnd(&clientReq{cc: &clientConn{b: c.coordinator("a")}, kreq: req}).(*kmsg.EndTxnResponse)
+			if resp.ErrorCode != kerr.NotCoordinator.Code {
+				t.Errorf("EndTxn with a failed prepare write: got %v, want NOT_COORDINATOR", kerr.ErrorForCode(resp.ErrorCode))
+			}
+		}, "", map[string]string{"a": "CompleteAbort 1"}, 0},
+		{"closing", func(_ *testing.T, c *Cluster) {
+			c.dead.Store(true) // Close is waiting for us
+			c.pids.create(new("a"), 60000).persist()
+			c.dead.Store(false)
+		}, "", map[string]string{"a": "Empty 0"}, 0},
+		{"compact-past-threshold", func(t *testing.T, c *Cluster) {
+			c.bcfgs["state.log.compact.bytes"] = new("100")
+			for _, txid := range []string{"a", "b", "c"} {
+				c.pids.create(new(txid), 60000).persist() // c compacts
+			}
+			mem := c.fs.(*memFS)
+			path := filepath.Join(c.cfg.dataDir, "pids.log")
+			mem.mu.Lock()
+			compacted := mem.files[path]
+			mem.mu.Unlock()
+			c.pids.create(new("d"), 60000).persist()
+			mem.mu.Lock()
+			again := mem.files[path] != compacted
+			mem.mu.Unlock()
+			if again {
+				t.Error("pids.log compacted again")
+			}
+			for p := range int32(4) {
+				c.persistGroupEntry(groupLogEntry{Type: "commit", Group: "g", Part: p})
+				if p == 2 {
+					c.compactGroupsLog()
+				}
+			}
+			if c.needsGroupsCompact {
+				t.Error("groups.log wants to compact again")
+			}
+		}, "", map[string]string{"d": "Empty 0"}, 0},
+		{"failed-compaction", func(t *testing.T, c *Cluster) {
+			c.bcfgs["state.log.compact.bytes"] = new("100")
+			var tries int
+			c.fs.(*memFS).failRename = func(oldpath, _ string) error {
+				if filepath.Base(oldpath) != "pids.log.tmp" {
+					return nil
+				}
+				tries++
+				return &testError{"injected"}
+			}
+			for _, txid := range []string{"a", "b", "c", "d"} {
+				c.pids.create(new(txid), 60000).persist() // c tries to compact
+			}
+			c.fs.(*memFS).failRename = nil
+			if tries != 1 {
+				t.Errorf("pids.log compaction tried %d times, want once until the log doubles", tries)
+			}
+		}, "", map[string]string{"d": "Empty 0"}, 0},
+		{"regular-commit-after-staged", func(_ *testing.T, c *Cluster) {
+			at := time.UnixMilli(1000).Add(100 * time.Microsecond)
+			pidinf := c.pids.create(new("a"), 60000)
+			pidinf.persist()
+			pidinf.maybeStart()
+			var staged tps[offsetCommit]
+			staged.set("t", 0, offsetCommit{offset: 1, lastCommit: at})
+			pidinf.txOffsets = map[string]tps[offsetCommit]{"g": staged}
+			g := c.groups.newGroup("g")
+			c.groups.gs["g"] = g
+			oc := offsetCommit{offset: 2, lastCommit: at.Add(time.Microsecond)} // later, in the same millisecond
+			g.commits.set("t", 0, oc)
+			c.persistGroupEntry(g.commitEntry("t", 0, oc))
+			c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Commit: commit, Offsets: persistTxOffsets(pidinf.txOffsets)})
+		}, "", map[string]string{"a": "CompleteCommit 0"}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mfs := newTestMemFS()
+			c := newCluster(t, mfs.opt(), NumBrokers(1))
+			c.admin(func() { tc.setup(t, c) })
+
+			opts := []Opt{mfs.clone().opt(), NumBrokers(1)}
+			if tc.compactBytes != "" {
+				opts = append(opts, BrokerConfigs(map[string]string{"state.log.compact.bytes": tc.compactBytes}))
+			}
+			c = newCluster(t, opts...)
+			c.admin(func() {
+				for txid, state := range tc.want {
+					if p := c.pids.byTxid[txid]; p == nil || fmt.Sprintf("%s %d", p.state(), p.epoch) != state {
+						t.Errorf("%s after the restart: got %v, want %s", txid, p, state)
+					}
+				}
+				if g := c.groups.gs["g"]; tc.commit != 0 {
+					if oc, _ := g.commits.getp("t", 0); oc == nil || oc.offset != tc.commit {
+						t.Errorf("group g's commit after the restart: got %v, want offset %d", oc, tc.commit)
+					}
+				}
+				if tc.compactBytes == "" {
+					return
+				}
+				raw, _ := c.fs.ReadFile(filepath.Join(c.cfg.dataDir, "pids.log"))
+				entries, _ := readEntries(raw)
+				for _, e := range entries {
+					var entry pidLogEntry
+					json.Unmarshal(e.data, &entry)
+					if entry.Type == "begin" {
+						t.Errorf("the restart compacted pids.log with pid %d still open", entry.PID)
+					}
+				}
+			})
+		})
 	}
 }
 
@@ -1244,7 +1493,7 @@ func TestPersistAbortedTxnsRestart(t *testing.T) {
 				c.Close()
 			}
 
-			snapPath := filepath.Join(dir, "partitions", topic+"-0", "snapshot.json")
+			snapPath := filepath.Join(partPath(t, dir, topic), "snapshot.json")
 			if tc.deleteSnapshot {
 				if err := os.Remove(snapPath); err != nil {
 					t.Fatal(err)
@@ -1465,10 +1714,6 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		// SyncWrites ensures all data+PID entries are fsynced.
 	}
 
-	// Delete the partition snapshot to force full replay.
-	snapPath := filepath.Join(dir, "partitions", "inflight-txn-topic-0", "snapshot.json")
-	os.Remove(snapPath) // may not exist since we didn't close cleanly
-
 	// Phase 2: reopen (full replay), verify in-flight txn is implicitly aborted.
 	{
 		c := newCluster(t,
@@ -1484,6 +1729,17 @@ func TestPersistFullReplayInFlightTxn(t *testing.T) {
 		if pi.LastStableOffset != pi.HighWatermark {
 			t.Fatalf("LSO should equal HWM after implicit abort: LSO=%d HWM=%d", pi.LastStableOffset, pi.HighWatermark)
 		}
+		// The abort is a marker in the log, after 3 records, a commit
+		// marker, and 2 records, so a later replay sees it.
+		if pi.HighWatermark != 7 {
+			t.Fatalf("expected an abort marker at offset 6, got HWM %d", pi.HighWatermark)
+		}
+		// The abort fences the producer, which was at epoch 1.
+		c.admin(func() {
+			if pw, _ := c.pids.byTxid["txn-inflight-test"].windows.getp(topic, 0); pw == nil || pw.epoch != 2 {
+				t.Errorf("after the abort: got window %+v, want epoch 2", pw)
+			}
+		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1577,7 +1833,7 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
-			SeedTopics(1, topic),
+			SeedTopics(2, topic),
 		)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1623,16 +1879,31 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			savedPID, savedEpoch = pidinf.id, pidinf.epoch
 		})
 
+		// Partition 1 is added to the transaction but not written to.
+		addReq := kmsg.NewAddPartitionsToTxnRequest()
+		addReq.TransactionalID = "txn-clean-restart"
+		addReq.ProducerID = savedPID
+		addReq.ProducerEpoch = savedEpoch
+		addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+		addT.Topic = topic
+		addT.Partitions = []int32{1}
+		addReq.Topics = append(addReq.Topics, addT)
+		if _, err := addReq.RequestWith(ctx, cl); err != nil {
+			t.Fatal(err)
+		}
+
 		cl.Close()
 		c.Close()
 	}
 
 	// Phase 2: reopen with same memFS, verify in-progress txn is preserved.
+	var crashed *testMemFS
 	{
 		c := newCluster(t,
 			mfs.opt(),
 			NumBrokers(1),
 		)
+		crashed = mfs.clone()
 
 		// LSO should be behind HWM (in-progress transaction).
 		pi := c.PartitionInfo(topic, 0)
@@ -1661,9 +1932,20 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			t.Fatalf("read_committed before EndTxn: expected 3 records, got %d", len(committed))
 		}
 
+		// Both partitions are still in the transaction.
+		plainCl := newPlainClient(t, c)
+		desc := kmsg.NewPtrDescribeTransactionsRequest()
+		desc.TransactionalIDs = []string{"txn-clean-restart"}
+		descResp, err := desc.RequestWith(ctx, plainCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := descResp.TransactionStates[0]; len(st.Topics) != 1 || len(st.Topics[0].Partitions) != 2 {
+			t.Fatalf("expected partitions 0 and 1 in the transaction after restart, got %+v", st.Topics)
+		}
+
 		// Commit the in-progress transaction using a raw EndTxn
 		// with the saved PID/epoch.
-		plainCl := newPlainClient(t, c)
 
 		endReq := kmsg.NewEndTxnRequest()
 		endReq.TransactionalID = "txn-clean-restart"
@@ -1704,6 +1986,13 @@ func TestPersistCleanRestartInProgressTxn(t *testing.T) {
 			t.Fatalf("read_committed after EndTxn: expected 5 records, got %d: %v", len(all), vals)
 		}
 	}
+
+	// Phase 3: a crash right after phase 2's restart aborts the
+	// transaction rather than leaving the LSO stuck below it.
+	c := newCluster(t, crashed.opt(), NumBrokers(1))
+	if pi := c.PartitionInfo(topic, 0); pi.LastStableOffset != pi.HighWatermark {
+		t.Fatalf("after a crash: LSO=%d HWM=%d, want equal", pi.LastStableOffset, pi.HighWatermark)
+	}
 }
 
 // TestPersistTxnAutoAbortExpiredOnRestart verifies that an in-progress
@@ -1714,6 +2003,8 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 	mfs := newTestMemFS()
 
 	const topic = "txn-auto-abort"
+
+	var savedEpoch int16
 
 	// Phase 1: produce in a transaction, close without committing.
 	{
@@ -1728,8 +2019,7 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 
 		cl := newPlainClient(t, c,
 			kgo.TransactionalID("txn-expire"),
-			// Short timeout so it's expired by the time we restart.
-			kgo.TransactionTimeout(200*time.Millisecond),
+			kgo.TransactionTimeout(time.Minute),
 			kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		)
 		if err := cl.BeginTransaction(); err != nil {
@@ -1741,13 +2031,14 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-
 		cl.Close()
+		// The transaction started longer ago than its timeout.
+		c.admin(func() {
+			pidinf := c.pids.byTxid["txn-expire"]
+			savedEpoch, pidinf.txStart = pidinf.epoch, pidinf.txStart.Add(-time.Hour)
+		})
 		c.Close()
 	}
-
-	// Sleep to guarantee the 200ms timeout has elapsed.
-	time.Sleep(300 * time.Millisecond)
 
 	// Phase 2: reopen - the expired txn should be auto-aborted.
 	{
@@ -1764,6 +2055,19 @@ func TestPersistTxnAutoAbortExpiredOnRestart(t *testing.T) {
 		if pi.LastStableOffset != pi.HighWatermark {
 			t.Fatalf("expired txn should be auto-aborted: LSO=%d HWM=%d (should be equal)",
 				pi.LastStableOffset, pi.HighWatermark)
+		}
+
+		// The abort is a timeout, which fences the old epoch so that a
+		// produce at it cannot reopen the transaction.
+		var epoch, markerEpoch int16
+		var state string
+		c.admin(func() {
+			pidinf := c.pids.byTxid["txn-expire"]
+			pw, _ := pidinf.windows.getp(topic, 0)
+			epoch, markerEpoch, state = pidinf.epoch, pw.epoch, pidinf.state()
+		})
+		if epoch != savedEpoch+1 || markerEpoch != epoch || state != "CompleteAbort" {
+			t.Fatalf("after the auto-abort: epoch %d marker epoch %d state %s, want epoch %d CompleteAbort", epoch, markerEpoch, state, savedEpoch+1)
 		}
 
 		// read_committed should see 0 records (all aborted).
@@ -1857,6 +2161,7 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 
 	// Phase 2: restart, verify phantom is alive (500ms < 1s), close.
 	// This advances shutdownAt to ~500ms after the real LastHeartbeat.
+	var generation int32
 	{
 		c := newCluster(t,
 			mfs.opt(),
@@ -1871,6 +2176,7 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 		if len(g.Members) != 1 {
 			t.Fatalf("phase 2: expected 1 phantom member, got %d", len(g.Members))
 		}
+		generation = g.Epoch
 		c.Close()
 	}
 
@@ -1897,13 +2203,18 @@ func TestPersistGroupPhantomMemberExpiry(t *testing.T) {
 		if len(g.Members) != 0 {
 			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", len(g.Members))
 		}
+		// The expiry rebalanced the group, as a session timeout does.
+		if g.Epoch != generation+1 {
+			t.Errorf("phase 3: generation %d, want %d", g.Epoch, generation+1)
+		}
 	}
 }
 
 // TestPersistGroupPhantomMemberExpiry848 is the KIP-848 counterpart to
 // TestPersistGroupPhantomMemberExpiry. It verifies that 848 consumer
 // group members whose sessions have expired across repeated restarts
-// are correctly evicted via persisted LastHeartbeat.
+// are correctly evicted via persisted LastHeartbeat, and that a member
+// restored alive keeps its regex subscription.
 //
 // Same three-phase design: phase 2's intermediate restart advances
 // shutdownAt so that phase 3 can distinguish persisted LastHeartbeat
@@ -1953,6 +2264,7 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		consCl := newPlainClient(t, c,
 			kgo.ServerSideBalancer(),
 			kgo.ConsumeTopics(topic),
+			kgo.ConsumeRegex(),
 			kgo.ConsumerGroup(group),
 			kgo.FetchMaxWait(50*time.Millisecond),
 			kgo.RetryTimeout(50*time.Millisecond),
@@ -1987,6 +2299,13 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		if members != 1 {
 			t.Fatalf("phase 2: expected 1 phantom member, got %d", members)
 		}
+		c.admin(func() {
+			for _, m := range c.groups.gs[group].consumerMembers {
+				if m.subscribedTopicRegex == nil || !m.subscribedTopicRegex.MatchString(topic) {
+					t.Errorf("phase 2: the restored member lost its regex subscription %q", m.subscribedRegexSource)
+				}
+			}
+		})
 		c.Close()
 	}
 
@@ -2011,6 +2330,21 @@ func TestPersistGroupPhantomMemberExpiry848(t *testing.T) {
 		if members != 0 {
 			t.Fatalf("phase 3: expected 0 members (phantom expired), got %d", members)
 		}
+		// The expired member's partition is free again, and the now
+		// empty group's assignment epoch is its group epoch.
+		c.admin(func() {
+			g := c.groups.gs[group]
+			if g == nil {
+				t.Error("phase 3: the group is missing")
+				return
+			}
+			if n := g.countPartitionEpochs(); n != 0 {
+				t.Errorf("phase 3: the expired member still owns %d partitions", n)
+			}
+			if g.targetAssignmentEpoch != g.groupEpoch {
+				t.Errorf("phase 3: assignment epoch %d, want the group epoch %d", g.targetAssignmentEpoch, g.groupEpoch)
+			}
+		})
 	}
 }
 
@@ -2022,8 +2356,10 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 	dir := t.TempDir()
 
 	const topic = "nbytes-topic"
+	const movedDir = "/mem/kfake-moved"
 
-	// Phase 1: produce records, clean shutdown (creates snapshot).
+	// Phase 1: produce records, move the log dir, clean shutdown (creates
+	// snapshot).
 	var savedNbytes int64
 	{
 		c := newCluster(t,
@@ -2057,6 +2393,7 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		if savedNbytes <= 0 {
 			t.Fatalf("expected positive nbytes before shutdown, got %d", savedNbytes)
 		}
+		c.admin(func() { c.data.tps[topic][0].dirs = map[int32]string{0: movedDir} })
 		c.Close()
 	}
 
@@ -2074,6 +2411,13 @@ func TestPersistSnapshotNbytesRetention(t *testing.T) {
 		if pi.NumBytes != savedNbytes {
 			t.Fatalf("nbytes mismatch after snapshot reopen: got %d, want %d", pi.NumBytes, savedNbytes)
 		}
+
+		// The replica is still in the dir it moved to.
+		c.admin(func() {
+			if d := c.data.tps[topic][0].dirs[0]; d != movedDir {
+				t.Errorf("partition in dir %q after reopen, want %s", d, movedDir)
+			}
+		})
 
 		// Verify retention actually works after restart by setting a
 		// tight retention.bytes via topic config and producing a record
@@ -2145,7 +2489,7 @@ func TestPersistSnapshotTruncatedSegment(t *testing.T) {
 	// Truncate the segment file to roughly half its size, but keep
 	// the snapshot.json intact. This simulates a crash that lost the
 	// tail of the segment file.
-	partDir := filepath.Join(dir, "partitions", topic+"-0")
+	partDir := partPath(t, dir, topic)
 	entries, err := os.ReadDir(partDir)
 	if err != nil {
 		t.Fatal(err)
@@ -2287,6 +2631,7 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		keepTopic   = "keep-topic"
 		deleteTopic = "delete-topic"
 	)
+	var deletedDir string
 
 	// Phase 1: create two topics, produce data, delete one, close.
 	{
@@ -2297,6 +2642,7 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 		)
 		produceN(t, c, keepTopic, 5)
 		produceN(t, c, deleteTopic, 5)
+		c.admin(func() { deletedDir = c.partDir(c.data.tps[deleteTopic][0]) })
 		if err := c.DeleteTopic(deleteTopic); err != nil {
 			t.Fatal(err)
 		}
@@ -2305,7 +2651,6 @@ func TestPersistTopicDeletionRestart(t *testing.T) {
 	}
 
 	// Verify partition directory for deleted topic is gone.
-	deletedDir := filepath.Join(dir, "partitions", deleteTopic+"-0")
 	if _, err := os.Stat(deletedDir); !os.IsNotExist(err) {
 		t.Fatalf("expected deleted topic partition dir to be removed, got err=%v", err)
 	}
@@ -2422,7 +2767,8 @@ func TestPersistSessionStateClassicGroup(t *testing.T) {
 }
 
 // TestPersistSeqWindowDedup verifies that sequence window deduplication
-// works correctly across a clean restart. A produce retry after restart
+// works correctly across a clean restart and a crash, including for a
+// producer that skipped InitProducerID. A produce retry after restart
 // should return the original offset, not write a duplicate batch.
 func TestPersistSeqWindowDedup(t *testing.T) {
 	t.Parallel()
@@ -2466,7 +2812,7 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 
 	var pid int64
 	var epoch int16
-	var origOffset int64
+	var origOffset, seq3Offset, uninitOffset int64
 
 	// Phase 1: init PID, produce 3 batches, close cleanly
 	{
@@ -2552,6 +2898,7 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 		if p2.BaseOffset <= origOffset {
 			t.Fatalf("new produce: expected offset > %d, got %d", origOffset, p2.BaseOffset)
 		}
+		seq3Offset = p2.BaseOffset
 
 		// Verify record count: should have exactly 4 records (3 original + 1 new, no dups)
 		consumer := newPlainClient(t, c,
@@ -2569,6 +2916,66 @@ func TestPersistSeqWindowDedup(t *testing.T) {
 			}
 			t.Fatalf("expected exactly 4 records (no dups), got %d; offsets=%v", len(records), offsets)
 		}
+
+		// A producer that skipped InitProducerID.
+		resp3, err := buildProduce(12345, 0, 0).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		uninitOffset = resp3.Topics[0].Partitions[0].BaseOffset
+	}
+
+	// Phase 3: a crash after phase 2: the retries of seq=3 and of the
+	// uninitialized producer's batch are still dups.
+	c := newCluster(t, DataDir(dir), NumBrokers(1))
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	for _, retry := range []struct {
+		pid    int64
+		epoch  int16
+		seq    int32
+		offset int64
+	}{{pid, epoch, 3, seq3Offset}, {12345, 0, 0, uninitOffset}} {
+		resp, err := buildProduce(retry.pid, retry.epoch, retry.seq).RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := resp.Topics[0].Partitions[0]; p.ErrorCode != 0 || p.BaseOffset != retry.offset {
+			t.Fatalf("retry of pid %d after a crash: got offset %d and %v, want %d", retry.pid, p.BaseOffset, kerr.ErrorForCode(p.ErrorCode), retry.offset)
+		}
+	}
+}
+
+// TestPersistCompactedProducerDedup verifies that compaction keeps a
+// producer's last batch, empty once another producer supersedes its
+// records, so that a retry of it after a crash is still a duplicate.
+func TestPersistCompactedProducerDedup(t *testing.T) {
+	t.Parallel()
+	const topic = "compacted-dedup"
+	mfs := newTestMemFS()
+	c := newCluster(t, mfs.opt(), NumBrokers(1))
+	if err := c.CreateTopic(topic, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
+		t.Fatal(err)
+	}
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(0, 11)
+	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+	for _, b := range []struct {
+		pid int64
+		seq int32
+		key string
+	}{{1, 0, "k"}, {2, 0, "k"}, {2, 1, "x"}} {
+		if p := produceRawV11(t, cl, topic, rawBatch(0, b.pid, 0, b.seq, kmsg.Record{Key: []byte(b.key), Value: []byte("v")})); p.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(p.ErrorCode))
+		}
+	}
+	c.Compact()
+
+	c = newCluster(t, mfs.clone().opt(), NumBrokers(1))
+	cl = newPlainClient(t, c, kgo.MaxVersions(v))
+	if p := produceRawV11(t, cl, topic, rawBatch(0, 1, 0, 0, kmsg.Record{Key: []byte("k"), Value: []byte("v")})); p.ErrorCode != 0 || p.BaseOffset != 0 {
+		t.Fatalf("retry after compaction and a crash: got offset %d and %v, want the original 0", p.BaseOffset, kerr.ErrorForCode(p.ErrorCode))
 	}
 }
 
@@ -2613,7 +3020,7 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 	// metadata and committed offsets, but no live members (session state
 	// only saves Stable groups with members - none survive since the client
 	// was closed). Send a raw OffsetCommit with a stale generation - this
-	// should fail with IllegalGeneration but NOT kill the group.
+	// should fail with UNKNOWN_MEMBER_ID but NOT kill the group.
 	{
 		c := newCluster(t,
 			NumBrokers(1),
@@ -2642,8 +3049,7 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Should get an error (IllegalGeneration or UnknownMemberID) but
-		// NOT crash the group.
+		// Should get UNKNOWN_MEMBER_ID, but NOT kill the group.
 		if len(resp.Topics) == 0 || len(resp.Topics[0].Partitions) == 0 {
 			t.Fatal("expected partition response")
 		}
@@ -2651,21 +3057,15 @@ func TestPersistLoadedGroupNotKilledByOffsetCommit(t *testing.T) {
 		if errCode == 0 {
 			t.Fatal("expected error code for stale commit, got 0")
 		}
-		// Verify the group is still alive by sending a Heartbeat.
-		// Heartbeat goes through handleHijack - if the group was
-		// killed, handleHijack returns false and the response is
-		// GROUP_ID_NOT_FOUND.
-		hbReq := kmsg.NewPtrHeartbeatRequest()
-		hbReq.Group = group
-		hbReq.Generation = 1
-		hbReq.MemberID = "fake-member"
-
-		hbResp, err := hbReq.RequestWith(context.Background(), cl)
+		// Verify the group is still alive: DescribeGroups answers
+		// GROUP_ID_NOT_FOUND for a group that does not exist.
+		dReq := kmsg.NewPtrDescribeGroupsRequest()
+		dReq.Groups = []string{group}
+		dResp, err := dReq.RequestWith(context.Background(), cl)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ec := kerr.ErrorForCode(hbResp.ErrorCode)
-		if ec == kerr.GroupIDNotFound {
+		if dResp.Groups[0].ErrorCode == kerr.GroupIDNotFound.Code {
 			t.Fatal("group was killed after OffsetCommit - the firstJoin bug is present")
 		}
 	}
@@ -2973,6 +3373,22 @@ func (eg *errgroup) wait() error {
 	return errors.Join(eg.errs...)
 }
 
+// partPath returns the directory of a topic's partition 0 in a data dir.
+func partPath(t *testing.T, dir, topic string) string {
+	t.Helper()
+	var pt persistTopics
+	if _, err := readJSONFile(osFS{root: dir}, filepath.Join(dir, "topics.json"), &pt); err != nil {
+		t.Fatal(err)
+	}
+	for _, tp := range pt.Topics {
+		if tp.Name == topic {
+			return filepath.Join(dir, "partitions", topicDirID(tp.ID)+"-0")
+		}
+	}
+	t.Fatalf("topic %s is not in topics.json", topic)
+	return ""
+}
+
 // copyDir recursively copies src to dst for crash simulation.
 func copyDir(t *testing.T, src, dst string) {
 	t.Helper()
@@ -3010,7 +3426,8 @@ func TestPersistShareGroupRestart(t *testing.T) {
 		name   string
 		opts   []Opt // extra cluster options, applied to both phases
 		before func(t *testing.T, c *Cluster, topic, group string)
-		want   int // records the consumer sees after the restart
+		want   int  // records the consumer sees after the restart
+		crash  bool // restart without Close
 	}{
 		{
 			// Every record was accepted, so the SPSO sits past them.
@@ -3061,6 +3478,117 @@ func TestPersistShareGroupRestart(t *testing.T) {
 			want: 5,
 		},
 		{
+			// The start offset that the first fetch picked survives a
+			// crash, and so does an ack, which logs no acquired record.
+			name: "acquired-crash",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				produceShareN(t, c, topic, group, 5)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				rawShareFetch(t, cl, group, memberID, topicID, 0)
+				if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, 0, int8(kgo.AckAccept)); code != 0 {
+					t.Fatalf("phase 1 ack: %v", kerr.ErrorForCode(code))
+				}
+				c.admin(func() {
+					raw, _ := c.fs.ReadFile(filepath.Join(c.cfg.dataDir, "groups.log"))
+					entries, _ := readEntries(raw)
+					var e groupLogEntry
+					json.Unmarshal(replayGroupsLog(entries).shares[glCommitKey{group, topic, 0}], &e)
+					if e.Offset != 1 || len(e.Records) != 0 {
+						t.Errorf("logged start offset %d and records %v, want 1 and none", e.Offset, e.Records)
+					}
+				})
+			},
+			want:  4,
+			crash: true,
+		},
+		{
+			// Closing a session that holds no record logs nothing.
+			name: "idle-session-close",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				c.admin(func() {
+					sg := c.shareGroups.getOrCreate(group)
+					sg.partitions.set(topic, 0, sharePartition{records: make(map[int64]shareRecord)})
+					size := c.groupsLogSize
+					sg.releaseRecordsForSession("m", &shareSession{partitions: map[uuid]map[int32]bool{c.data.t2id[topic]: {0: false}}})
+					if c.groupsLogSize != size {
+						t.Error("closing a session that held no record wrote to groups.log")
+					}
+				})
+			},
+			want: 0,
+		},
+		{
+			// Deleting the topic logs the deletes of its share state.
+			name: "deleted-topic",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				produceShareN(t, c, topic, group, 5)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				rawShareFetch(t, cl, group, memberID, topicID, 0)
+				if err := c.DeleteTopic(topic); err != nil {
+					t.Fatal(err)
+				}
+				c.admin(func() {
+					raw, _ := c.fs.ReadFile(filepath.Join(c.cfg.dataDir, "groups.log"))
+					entries, _ := readEntries(raw)
+					if _, ok := replayGroupsLog(entries).shares[glCommitKey{group, topic, 0}]; ok {
+						t.Error("groups.log keeps the deleted topic's share state")
+					}
+				})
+			},
+			want: 0,
+		},
+		{
+			// A partition added to a topic the group knows starts at
+			// 0, also after a crash before its first fetch.
+			name: "new-partition-crash",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				cl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+				joinShareGroupRaw(t, cl, group, topic)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err := kadm.NewClient(cl).CreatePartitions(ctx, 1, topic); err != nil {
+					t.Fatal(err)
+				}
+				for range 5 {
+					if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 1}).FirstErr(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+			want:  5,
+			crash: true,
+		},
+		{
+			// Acquired on the last delivery attempt and never acked.
+			// Like Kafka, the restart forgets the acquisition and the
+			// delivery it counted, so the records go out once more.
+			name: "acquired-last-try",
+			opts: []Opt{BrokerConfigs(map[string]string{
+				"group.share.delivery.count.limit": strconv.Itoa(maxDelivery),
+			})},
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				const total = 5
+				produceShareN(t, c, topic, group, total)
+				cl := newPlainClient(t, c)
+				memberID, topicID := joinShareGroupRaw(t, cl, group, topic)
+				if _, n := rawShareFetch(t, cl, group, memberID, topicID, 0); n != total {
+					t.Fatalf("phase 1: expected %d acquired, got %d", total, n)
+				}
+				if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, total-1, int8(kgo.AckRelease)); code != 0 {
+					t.Fatalf("phase 1 release: %v", kerr.ErrorForCode(code))
+				}
+				// We leave cl open: its disconnect would close the
+				// session, and that archives records on their last
+				// attempt, as in Kafka.
+				if _, n := rawShareFetch(t, cl, group, memberID, topicID, 2); n != total {
+					t.Fatalf("phase 1: expected %d acquired again, got %d", total, n)
+				}
+			},
+			want: 5,
+		},
+		{
 			// Nothing consumed at all: this one is about the group
 			// config surviving, so the fresh consumer starts at 0.
 			name: "config-only",
@@ -3069,6 +3597,15 @@ func TestPersistShareGroupRestart(t *testing.T) {
 				produceN(t, c, topic, 10)
 			},
 			want: 10,
+		},
+		{
+			name: "config-only-crash",
+			before: func(t *testing.T, c *Cluster, topic, group string) {
+				c.SetGroupConfigs(group, map[string]string{"share.auto.offset.reset": "earliest"})
+				produceN(t, c, topic, 10)
+			},
+			want:  10,
+			crash: true,
 		},
 		{
 			// Released until the delivery count limit archived them.
@@ -3121,13 +3658,31 @@ func TestPersistShareGroupRestart(t *testing.T) {
 			tmem := newTestMemFS()
 			topic := "share-persist-" + tc.name
 			group := topic + "-grp"
-			opts := append([]Opt{tmem.opt(), NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
+			opts := func(m *testMemFS) []Opt {
+				return append([]Opt{m.opt(), NumBrokers(1), SeedTopics(1, topic)}, tc.opts...)
+			}
 
-			c := newCluster(t, opts...)
+			c := newCluster(t, opts(tmem)...)
 			tc.before(t, c, topic, group)
-			c.Close()
+			epoch := func() (e int32) {
+				c.admin(func() {
+					if sg := c.shareGroups.gs[group]; sg != nil {
+						e = sg.groupEpoch
+					}
+				})
+				return e
+			}
+			before := epoch()
+			if tc.crash {
+				tmem = tmem.clone() // the first cluster keeps writing to its files
+			} else {
+				c.Close()
+			}
 
-			c = newCluster(t, opts...)
+			c = newCluster(t, opts(tmem)...)
+			if after := epoch(); tc.crash && after != before {
+				t.Errorf("group epoch after a crash: got %d, want %d", after, before)
+			}
 			cl := newShareConsumer(t, c, topic, group)
 			if tc.want == 0 {
 				verifyZeroRecords(t, cl, 500*time.Millisecond)

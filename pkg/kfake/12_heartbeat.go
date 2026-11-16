@@ -9,7 +9,7 @@ import (
 //
 // Version notes:
 // * v1: ThrottleMillis
-// * v3: InstanceID for static membership (KIP-345) - not implemented
+// * v3: InstanceID for static membership (KIP-345)
 // * v4: Flexible versions
 
 func init() { regKey(12, 0, 4) }
@@ -22,9 +22,14 @@ func (c *Cluster) handleHeartbeat(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if kresp, ok := c.groups.handleHeartbeat(creq); ok {
-		return kresp, nil
+	g, err := c.groups.memberReq(creq, req.Group, kmsg.ACLOperationRead)
+	switch {
+	case err != nil:
+		resp.ErrorCode = err.Code
+	case g == nil:
+		resp.ErrorCode = kerr.UnknownMemberID.Code
+	default:
+		return g.handleHeartbeat(creq), nil
 	}
-	resp.ErrorCode = kerr.GroupIDNotFound.Code
 	return resp, nil
 }

@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"time"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -34,6 +36,23 @@ func (c *Cluster) handleSASLHandshake(creq *clientReq) (kmsg.Response, error) {
 		// an illegal state.
 		if creq.cc.saslStage != saslStageComplete || !creq.cc.hasSessionExpiry {
 			resp.ErrorCode = kerr.IllegalSaslState.Code
+			return resp, nil
+		}
+		// Kafka begins at most one re-authentication per second on a
+		// connection; a faster one is processed normally and fails.
+		now := time.Now()
+		if !creq.cc.lastReauth.IsZero() && now.Sub(creq.cc.lastReauth) < time.Second {
+			resp.ErrorCode = kerr.IllegalSaslState.Code
+			return resp, nil
+		}
+		creq.cc.lastReauth = now
+		// Kafka answers a re-authentication that changes the mechanism
+		// as if it took it, then closes the connection on the next
+		// request.
+		switch req.Mechanism {
+		case creq.cc.mechanism:
+		case saslPlain, saslScram256, saslScram512:
+			creq.cc.saslStage = saslStageFailed
 			return resp, nil
 		}
 	}

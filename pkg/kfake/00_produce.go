@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"time"
 
@@ -38,7 +40,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 	}
 	var (
 		tdone = make(map[tpid][]kmsg.ProduceResponseTopicPartition)
-		id    = func(t kmsg.ProduceRequestTopic) tpid { return tpid{t.Topic, t.TopicID} }
+		// v13 names a topic by ID alone, whether or not we have
+		// resolved its name yet.
+		id = func(t kmsg.ProduceRequestTopic) tpid {
+			if req.Version >= 13 {
+				return tpid{id: t.TopicID}
+			}
+			return tpid{t: t.Topic}
+		}
 	)
 
 	if err := c.checkReqVersion(req.Key(), req.Version); err != nil {
@@ -47,13 +56,19 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 
 	// A fault can answer a partition before the work runs. The work's own
 	// answer for that partition must not add an entry or replace the code.
-	answered := make(map[tp]int)
+	// Every unknown v13 topic ID has an empty name, so the ID is part of
+	// the key.
+	type tpidp struct {
+		tpid
+		p int32
+	}
+	answered := make(map[tpidp]int)
 	donep := func(t kmsg.ProduceRequestTopic, p kmsg.ProduceRequestTopicPartition, errCode int16, errMsg string) *kmsg.ProduceResponseTopicPartition {
 		ps := tdone[id(t)]
-		if i, ok := answered[tp{t.Topic, p.Partition}]; ok {
+		if i, ok := answered[tpidp{id(t), p.Partition}]; ok {
 			return &ps[i]
 		}
-		answered[tp{t.Topic, p.Partition}] = len(ps)
+		answered[tpidp{id(t), p.Partition}] = len(ps)
 		sp := kmsg.NewProduceResponseTopicPartition()
 		sp.Partition = p.Partition
 		sp.ErrorCode = errCode
@@ -63,6 +78,16 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		ps = append(ps, sp)
 		tdone[id(t)] = ps
 		return &ps[len(ps)-1]
+	}
+	// fail answers an error from the append itself with the log start
+	// offset, as Kafka does, except MESSAGE_TOO_LARGE, CORRUPT_MESSAGE, and
+	// KAFKA_STORAGE_ERROR, which Kafka answers with -1.
+	fail := func(t kmsg.ProduceRequestTopic, p kmsg.ProduceRequestTopicPartition, pd *partData, errCode int16, errMsg string) *kmsg.ProduceResponseTopicPartition {
+		sp := donep(t, p, errCode, errMsg)
+		if errCode != kerr.MessageTooLarge.Code && errCode != kerr.CorruptMessage.Code && errCode != kerr.KafkaStorageError.Code {
+			sp.LogStartOffset = pd.logStartOffset
+		}
+		return sp
 	}
 	donet := func(t kmsg.ProduceRequestTopic, errCode int16, errMsg string) {
 		for _, p := range t.Partitions {
@@ -75,7 +100,21 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 		}
 	}
 	var includeBrokers bool
-	toresp := func() kmsg.Response {
+	// toresp answers the request. An acks=0 client reads no response, so
+	// on any error, the request's or a partition's, Kafka closes the
+	// connection: that is the only way the client learns to refresh its
+	// metadata.
+	toresp := func() (kmsg.Response, error) {
+		if req.Acks == 0 {
+			for _, ps := range tdone {
+				for _, p := range ps {
+					if p.ErrorCode != 0 {
+						return nil, errors.New("closing the connection after a failed acks=0 produce")
+					}
+				}
+			}
+			return nil, nil
+		}
 		for id, partitions := range tdone {
 			st := kmsg.NewProduceResponseTopic()
 			st.Topic = id.t
@@ -92,14 +131,42 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				resp.Brokers = append(resp.Brokers, sb)
 			}
 		}
-		return resp
+		return resp, nil
+	}
+
+	// If any batch is transactional (a batch's attributes are at byte
+	// 21), Kafka checks the request's transactional ID before anything
+	// else, and fails the whole request if it has none, even without an
+	// authorizer.
+	var anyTxnal bool
+	for _, rt := range req.Topics {
+		for _, rp := range rt.Partitions {
+			anyTxnal = anyTxnal || len(rp.Records) > 22 && binary.BigEndian.Uint16(rp.Records[21:])&0x0010 != 0
+		}
+	}
+	var txnID string
+	if req.TransactionID != nil {
+		txnID = *req.TransactionID
+	}
+	switch {
+	case !anyTxnal:
+	case req.TransactionID == nil:
+		donets(kerr.TransactionalIDAuthorizationFailed.Code, "")
+		return toresp()
+	default:
+		if e := c.deny(creq, txnID, kmsg.ACLResourceTypeTransactionalId, kmsg.ACLOperationWrite, faultKey{txnID: txnID}); e != nil {
+			donets(e.Code, e.Message)
+			if creq.skipsWork(e) { // a timed-out append still appends
+				return toresp()
+			}
+		}
 	}
 
 	switch req.Acks {
 	case -1, 0, 1:
 	default:
 		donets(kerr.InvalidRequiredAcks.Code, "Invalid required acks.")
-		return toresp(), nil
+		return toresp()
 	}
 
 	now := time.Now().UnixMilli()
@@ -108,7 +175,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			topic, ok := c.data.id2t[rt.TopicID]
 			if !ok {
 				for _, rp := range rt.Partitions {
-					if e := creq.faults.check(faultKey{topicID: rt.TopicID}.part(rp.Partition)); e != nil {
+					if e := creq.faults.check(faultKey{topicID: rt.TopicID, txnID: txnID}.part(rp.Partition)); e != nil {
 						donep(rt, rp, e.Code, e.Message)
 						continue
 					}
@@ -118,10 +185,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			}
 			rt.Topic = topic
 		}
-		maxMessageBytes := c.data.maxMessageBytes(rt.Topic)
+		var (
+			maxMessageBytes = c.data.maxMessageBytes(rt.Topic)
+			compacted       = c.data.isCompactTopic(rt.Topic)
+			logAppendTime   = c.data.logAppendTime(rt.Topic)
+		)
 		for _, rp := range rt.Partitions {
 			pd, ok := c.data.tps.getp(rt.Topic, rp.Partition)
-			k := faultKey{topic: rt.Topic, topicID: rt.TopicID, misrouted: ok && pd.leader != b}
+			k := faultKey{topic: rt.Topic, topicID: rt.TopicID, txnID: txnID, misrouted: ok && pd.leader != b}
 			if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationWrite, k.part(rp.Partition)); e != nil {
 				donep(rt, rp, e.Code, e.Message)
 				if creq.skipsWork(e) { // a timed-out append still appends
@@ -142,21 +213,21 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 
 			// Check message size before parsing
 			if len(rp.Records) > maxMessageBytes {
-				donep(rt, rp, kerr.MessageTooLarge.Code, "The message is too large.")
+				fail(rt, rp, pd, kerr.MessageTooLarge.Code, "The message is too large.")
 				continue
 			}
 
 			var b kmsg.RecordBatch
 			if err := b.ReadFrom(rp.Records); err != nil {
-				donep(rt, rp, kerr.CorruptMessage.Code, "Corrupt message.")
+				fail(rt, rp, pd, kerr.CorruptMessage.Code, "Corrupt message.")
 				continue
 			}
 			if b.FirstOffset != 0 {
-				donep(rt, rp, kerr.CorruptMessage.Code, "First offset in batch must be zero.")
+				fail(rt, rp, pd, kerr.InvalidRecord.Code, "First offset in batch must be zero.")
 				continue
 			}
 			if int(b.Length) != len(rp.Records)-12 {
-				donep(rt, rp, kerr.CorruptMessage.Code, "Batch length mismatch.")
+				fail(rt, rp, pd, kerr.CorruptMessage.Code, "Batch length mismatch.")
 				continue
 			}
 			// PartitionLeaderEpoch is not validated: real Kafka brokers
@@ -164,38 +235,80 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 			// send different values (franz-go sends -1, Sarama sends 0).
 
 			if b.Magic != 2 {
-				donep(rt, rp, kerr.CorruptMessage.Code, "Unsupported message format version.")
+				fail(rt, rp, pd, kerr.CorruptMessage.Code, "Unsupported message format version.")
 				continue
 			}
 			if b.CRC != int32(crc32.Checksum(rp.Records[21:], crc32c)) { // crc starts at byte 21
-				donep(rt, rp, kerr.CorruptMessage.Code, "CRC mismatch.")
+				fail(rt, rp, pd, kerr.CorruptMessage.Code, "CRC mismatch.")
 				continue
 			}
 			attrs := uint16(b.Attributes)
 			if attrs&0x0020 != 0 {
-				donep(rt, rp, kerr.InvalidRecord.Code, "Client cannot send control batches.")
+				fail(rt, rp, pd, kerr.InvalidRecord.Code, "Client cannot send control batches.")
 				continue
 			}
 			if attrs&0x0007 > 4 {
-				donep(rt, rp, kerr.CorruptMessage.Code, "Invalid compression type.")
+				fail(rt, rp, pd, kerr.CorruptMessage.Code, "Invalid compression type.")
 				continue
-			}
-			logAppendTime := int64(-1)
-			if attrs&0x0008 > 0 {
-				b.FirstTimestamp = now
-				b.MaxTimestamp = now
-				logAppendTime = now
 			}
 			if b.LastOffsetDelta != b.NumRecords-1 {
-				donep(rt, rp, kerr.CorruptMessage.Code, "Last offset delta mismatch.")
+				fail(rt, rp, pd, kerr.InvalidRecord.Code, "Last offset delta mismatch.")
 				continue
+			}
+
+			// Compaction keeps the last record for each key, so
+			// Kafka rejects a record with no key on a compacted
+			// topic.
+			if compacted {
+				const msg = "Compacted topic cannot accept message without key."
+				var recErrs []kmsg.ProduceResponseTopicPartitionErrorRecord
+				var i int32
+				if err := forEachBatchRecord(b, func(rec kmsg.Record) bool {
+					if rec.Key == nil {
+						re := kmsg.NewProduceResponseTopicPartitionErrorRecord()
+						re.RelativeOffset = i
+						re.ErrorMessage = kmsg.StringPtr(msg)
+						recErrs = append(recErrs, re)
+					}
+					i++
+					return true
+				}); errors.Is(err, errCorruptRecord) {
+					fail(rt, rp, pd, kerr.InvalidRecord.Code, "") // as Kafka answers a record it cannot read
+					continue
+				} else if err != nil {
+					fail(rt, rp, pd, kerr.CorruptMessage.Code, "Corrupt message.")
+					continue
+				}
+				if len(recErrs) > 0 {
+					sp := fail(rt, rp, pd, kerr.InvalidRecord.Code, msg)
+					if req.Version >= 8 {
+						sp.ErrorRecords = recErrs
+					}
+					continue
+				}
+			}
+
+			// Kafka stamps the batch with the topic's timestamp
+			// type, whatever type the client set, and a
+			// LogAppendTime batch with the broker's clock.
+			appendTime := int64(-1)
+			stamped := b.Attributes &^ 0x0008
+			if logAppendTime {
+				stamped |= 0x0008
+				b.FirstTimestamp = now
+				b.MaxTimestamp = now
+				appendTime = now
+			}
+			if stamped != b.Attributes || appendTime >= 0 {
+				b.Attributes = stamped
+				b.CRC = int32(crc32.Checksum(b.AppendTo(nil)[21:], crc32c))
 			}
 
 			txnal := attrs&0x0010 != 0
 
 			// Transactional batches must have a valid producer ID
 			if txnal && b.ProducerID < 0 {
-				donep(rt, rp, kerr.InvalidProducerIDMapping.Code, "Invalid producer ID mapping for transactional batch.")
+				fail(rt, rp, pd, kerr.InvalidProducerIDMapping.Code, "Invalid producer ID mapping for transactional batch.")
 				continue
 			}
 
@@ -205,10 +318,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 
 			if b.ProducerID >= 0 {
 				// Kafka has the coordinator check a transactional
-				// batch's epoch before it adds or verifies the
-				// partition, and answers a mismatch either way with
-				// INVALID_PRODUCER_EPOCH.
-				if p := c.pids.getpid(b.ProducerID); txnal && p != nil && p.epoch != b.ProducerEpoch {
+				// batch's producer ID against the request's
+				// transactional ID, then its epoch, before it adds or
+				// verifies the partition. It answers an epoch mismatch
+				// either way with INVALID_PRODUCER_EPOCH.
+				if p := c.pids.getpid(b.ProducerID); txnal && (p == nil || p.txid != txnID) {
+					donep(rt, rp, kerr.InvalidProducerIDMapping.Code, "")
+					continue
+				} else if txnal && p.epoch != b.ProducerEpoch {
 					donep(rt, rp, kerr.InvalidProducerEpoch.Code, "")
 					continue
 				}
@@ -238,8 +355,19 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					errCode = kerr.InvalidTxnState.Code
 				}
 
+				// A partition not in the transaction. As in Kafka, only
+				// v11 answers TRANSACTION_ABORTABLE: older clients do not
+				// know that error and get INVALID_TXN_STATE, and v12+
+				// adds the partition itself, so it never gets here.
+				// Kafka fails the batch before the append, with no log
+				// start offset.
 				if txnal && window == nil {
-					errCode = kerr.InvalidTxnState.Code
+					code, msg := kerr.InvalidTxnState.Code, "Partition was not added to the transaction"
+					if req.Version == 11 {
+						code, msg = kerr.TransactionAbortable.Code, ""
+					}
+					donep(rt, rp, code, msg)
+					continue
 				}
 
 				// Brokers below 2.5 (KIP-360) reject an append that
@@ -277,7 +405,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 						errCode = kerr.InvalidProducerEpoch.Code
 					default:
 						var seqOk bool
-						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark)
+						seqOk, dup, baseOffset = window.pushAndValidate(b.ProducerEpoch, b.FirstSequence, b.NumRecords, pd.highWatermark, b.MaxTimestamp)
 						if !seqOk {
 							errCode = kerr.OutOfOrderSequenceNumber.Code
 						}
@@ -300,7 +428,7 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 					}
 
 					if c.pushBatch(pd, len(rp.Records), b, txnal) < 0 {
-						errCode = kerr.UnknownServerError.Code
+						errCode = kerr.KafkaStorageError.Code
 					} else if txnal {
 						pidinf.txBatchCount++
 						// Track bytes for readCommitted watcher accounting at commit time
@@ -313,29 +441,32 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				baseOffset = pd.highWatermark
 				lso = pd.logStartOffset
 				if c.pushBatch(pd, len(rp.Records), b, txnal) < 0 {
-					errCode = kerr.UnknownServerError.Code
+					errCode = kerr.KafkaStorageError.Code // as Kafka answers a failed append
 				}
 			}
 
 			if errCode != 0 {
-				donep(rt, rp, errCode, "")
+				fail(rt, rp, pd, errCode, "")
 				continue
 			}
 			if dup {
 				sp := donep(rt, rp, 0, "")
 				sp.BaseOffset = baseOffset // original offset from dup detection
+				sp.LogStartOffset = pd.logStartOffset
+				// Kafka answers the original batch's max timestamp,
+				// whatever the timestamp type.
+				if si, mi, ok, atEnd := pd.searchOffset(baseOffset); ok && !atEnd {
+					sp.LogAppendTime = pd.segments[si].index[mi].maxTimestamp
+				}
 				continue
 			}
 
 			sp := donep(rt, rp, 0, "")
 			sp.BaseOffset = baseOffset
-			sp.LogAppendTime = logAppendTime
+			sp.LogAppendTime = appendTime
 			sp.LogStartOffset = lso
 		}
 	}
 
-	if req.Acks == 0 {
-		return nil, nil
-	}
-	return toresp(), nil
+	return toresp()
 }

@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"strconv"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -13,13 +15,17 @@ import (
 // defaults. Changing a level does not alter request behavior beyond what
 // ApiVersions advertises.
 //
-// Behavior:
-// * Unknown features => FEATURE_UPDATE_FAILED (per feature)
-// * MaxVersionLevel outside the supported range => FEATURE_UPDATE_FAILED
-// * MaxVersionLevel < 1 deletes the feature (returns it to level 0)
-// * Downgrades require AllowDowngrade (v0) or UpgradeType != Upgrade (v1+)
+// Behavior, as Kafka 4.0+:
+// * All or nothing: the first invalid update fails the request with a
+//   top-level INVALID_UPDATE_VERSION and changes nothing
+// * Invalid: an unknown feature, a level outside the supported range or
+//   below 0, an UpgradeType other than 1-3, a downgrade with UpgradeType 1
+//   (upgrade), or an upgrade with UpgradeType 2 or 3 (downgrade)
+// * Level 0 deletes the feature
+// * v0 has no UpgradeType, and Kafka reads it as 1, so a v0 downgrade fails
+// * The last update for a feature wins
 // * ValidateOnly (v1+) returns what would happen without mutating state
-// * v2 drops the per-feature Results list (errors go to top-level)
+// * v0 and v1 list every feature in Results on success
 //
 // Version notes:
 // * v1: UpgradeType replaces AllowDowngrade, ValidateOnly
@@ -35,11 +41,12 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
-		resp.ErrorCode = e.Code
-		if creq.skipsWork(e) { // a timed-out update still updates
-			return resp, nil
-		}
+	// A fault, on the cluster or on any feature, answers the request. A
+	// timed-out update still updates if every feature is valid.
+	fault := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{})
+	if fault != nil && creq.skipsWork(fault) {
+		resp.ErrorCode = fault.Code
+		return resp, nil
 	}
 
 	vs := c.featureVersions()
@@ -47,108 +54,88 @@ func (c *Cluster) handleUpdateFeatures(creq *clientReq) (kmsg.Response, error) {
 	vs.EachSupportedFeature(func(name string, min, max int16) { supported[name] = [2]int16{min, max} })
 	finalized := make(map[string]int16)
 	vs.EachFinalizedFeature(func(name string, level int16) { finalized[name] = level })
-
-	// Build per-feature results, then collapse into the top-level error
-	// for v2 (which no longer carries per-feature Results).
-	results := make([]kmsg.UpdateFeaturesResponseResult, 0, len(req.FeatureUpdates))
-	pending := make(map[string]int16, len(req.FeatureUpdates))
-	seen := make(map[string]bool, len(req.FeatureUpdates))
-
-	// A fault can answer a feature before the work runs. The work's own
-	// answer for that feature must not add an entry or replace the code.
-	answered := make(map[string]bool)
-	fail := func(name string, err *kerr.Error, msg string) {
-		if answered[name] {
-			return
-		}
-		r := kmsg.NewUpdateFeaturesResponseResult()
-		r.Feature = name
-		r.ErrorCode = err.Code
-		if msg != "" {
-			r.ErrorMessage = kmsg.StringPtr(msg)
-		}
-		results = append(results, r)
-	}
-	ok := func(name string) {
-		if answered[name] {
-			return
-		}
-		r := kmsg.NewUpdateFeaturesResponseResult()
-		r.Feature = name
-		results = append(results, r)
+	for name, level := range c.features {
+		finalized[name] = level
 	}
 
+	type update struct {
+		level       int16
+		upgradeType int8
+	}
+	var names []string
+	updates := make(map[string]update, len(req.FeatureUpdates))
 	for _, fu := range req.FeatureUpdates {
-		if e := creq.faults.check(faultKey{resource: fu.Feature}); e != nil {
-			fail(fu.Feature, e, "")
-			answered[fu.Feature] = true
-			if creq.skipsWork(e) { // a timed-out update still updates the feature
-				seen[fu.Feature] = true
-				continue
-			}
+		if _, ok := updates[fu.Feature]; !ok {
+			names = append(names, fu.Feature)
 		}
-		if seen[fu.Feature] {
-			fail(fu.Feature, kerr.InvalidRequest, "duplicate feature update")
-			continue
+		ut := fu.UpgradeType
+		if req.Version == 0 {
+			ut = 1
 		}
-		seen[fu.Feature] = true
-
-		r, known := supported[fu.Feature]
-		if !known {
-			fail(fu.Feature, kerr.FeatureUpdateFailed, "unknown feature")
-			continue
-		}
-
-		newLevel := max(fu.MaxVersionLevel, 0) // below 1 deletes
-		if newLevel > r[1] {
-			fail(fu.Feature, kerr.FeatureUpdateFailed, "level above supported max")
-			continue
-		}
-		if newLevel < r[0] {
-			fail(fu.Feature, kerr.FeatureUpdateFailed, "level below supported min")
-			continue
-		}
-
-		curLevel := finalized[fu.Feature]
-		if set, ok := c.features[fu.Feature]; ok {
-			curLevel = set
-		}
-		downgrade := newLevel < curLevel
-
-		allowDowngrade := fu.AllowDowngrade
-		if req.Version >= 1 {
-			// UpgradeType: 1=upgrade only, 2=safe downgrade, 3=unsafe downgrade
-			allowDowngrade = fu.UpgradeType >= 2
-		}
-		if downgrade && !allowDowngrade {
-			fail(fu.Feature, kerr.InvalidUpdateVersion, "downgrade not allowed")
-			continue
-		}
-
-		pending[fu.Feature] = newLevel
-		ok(fu.Feature)
+		updates[fu.Feature] = update{fu.MaxVersionLevel, ut}
 	}
 
-	validateOnly := req.Version >= 1 && req.ValidateOnly
-	if !validateOnly {
+	var (
+		invalid string
+		pending = make(map[string]int16, len(names))
+	)
+	for _, name := range names {
+		if e := creq.faults.check(faultKey{resource: name}); e != nil && fault == nil {
+			fault = e
+		}
+		u := updates[name]
+		r, known := supported[name]
+		cur := finalized[name]
+		switch {
+		case u.upgradeType < 1 || u.upgradeType > 3:
+			invalid = "The controller does not support the given upgrade type."
+		case u.level < 0:
+			invalid = "A feature version cannot be less than 0."
+		case !known:
+			invalid = "unknown feature"
+		case u.level < r[0] || u.level > r[1]:
+			invalid = "level outside the supported range"
+		case u.level < cur && u.upgradeType == 1:
+			invalid = "Can't downgrade the version of this feature without setting the upgrade type to either safe or unsafe downgrade."
+		case u.level > cur && u.upgradeType != 1:
+			invalid = "Can't downgrade to a newer version."
+		}
+		if invalid != "" {
+			invalid = "Invalid update version " + strconv.Itoa(int(u.level)) + " for feature " + name + ". " + invalid
+			break
+		}
+		pending[name] = u.level
+	}
+
+	switch {
+	case fault != nil:
+		resp.ErrorCode = fault.Code
+		if creq.skipsWork(fault) || invalid != "" {
+			return resp, nil
+		}
+	case invalid != "":
+		resp.ErrorCode = kerr.InvalidUpdateVersion.Code
+		resp.ErrorMessage = kmsg.StringPtr("The update failed for all features since the following feature had an error: " + invalid)
+		return resp, nil
+	}
+
+	if !(req.Version >= 1 && req.ValidateOnly) {
+		var changed bool
 		for name, level := range pending {
+			changed = changed || finalized[name] != level
 			c.features[name] = level
 		}
-	}
-
-	// v2 dropped the per-feature Results list. Promote the first error
-	// (if any) to the top-level code to preserve the failure signal.
-	if req.Version >= 2 {
-		for _, r := range results {
-			if r.ErrorCode != 0 {
-				resp.ErrorCode = r.ErrorCode
-				resp.ErrorMessage = r.ErrorMessage
-				break
-			}
+		if changed {
+			c.featuresEpoch++
+			c.persistDynamicConfigsState()
 		}
-	} else {
-		resp.Results = results
 	}
-
+	if req.Version <= 1 && resp.ErrorCode == 0 {
+		for _, name := range names {
+			r := kmsg.NewUpdateFeaturesResponseResult()
+			r.Feature = name
+			resp.Results = append(resp.Results, r)
+		}
+	}
 	return resp, nil
 }

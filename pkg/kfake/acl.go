@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -44,8 +45,21 @@ func (a *acl) matchesPrincipal(principal string) bool {
 	return a.principal == principal || a.principal == "User:*"
 }
 
+// matchesHost also matches a host inside a CIDR range, which Kafka allows
+// since 4.4.
 func (a *acl) matchesHost(host string) bool {
-	return a.host == host || a.host == "*"
+	if a.host == host || a.host == "*" {
+		return true
+	}
+	if !strings.Contains(a.host, "/") {
+		return false
+	}
+	prefix, err := netip.ParsePrefix(a.host)
+	if err != nil {
+		return false
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && prefix.Contains(addr.Unmap())
 }
 
 func (a *acl) matchesOp(op kmsg.ACLOperation) bool {
@@ -119,18 +133,18 @@ func (a *clusterACLs) add(newACL acl) {
 	a.acls = append(a.acls, newACL)
 }
 
-func (a *clusterACLs) delete(filter aclFilter) []acl {
-	var deleted []acl
+func (a *clusterACLs) remove(rm []acl) {
+	drop := make(map[acl]bool, len(rm))
+	for _, r := range rm {
+		drop[r] = true
+	}
 	kept := a.acls[:0]
 	for _, acl := range a.acls {
-		if filter.matches(&acl) {
-			deleted = append(deleted, acl)
-		} else {
+		if !drop[acl] {
 			kept = append(kept, acl)
 		}
 	}
 	a.acls = kept
-	return deleted
 }
 
 func (a *clusterACLs) describe(filter aclFilter) []acl {
@@ -168,15 +182,21 @@ func (f *aclFilter) matches(a *acl) bool {
 	if f.resourceType != kmsg.ACLResourceTypeAny && f.resourceType != a.resourceType {
 		return false
 	}
-	if f.resourceName != nil && *f.resourceName != a.resourceName {
-		return false
-	}
-	if f.pattern != kmsg.ACLResourcePatternTypeAny {
-		if f.pattern == kmsg.ACLResourcePatternTypeMatch {
-			if a.pattern != kmsg.ACLResourcePatternTypeLiteral && a.pattern != kmsg.ACLResourcePatternTypePrefixed {
-				return false
-			}
-		} else if f.pattern != a.pattern {
+	// MATCH selects every ACL that applies to the named resource: a
+	// literal ACL of that name or "*", and every prefixed ACL whose
+	// prefix the name starts with.
+	if f.pattern == kmsg.ACLResourcePatternTypeMatch {
+		if a.pattern != kmsg.ACLResourcePatternTypeLiteral && a.pattern != kmsg.ACLResourcePatternTypePrefixed {
+			return false
+		}
+		if f.resourceName != nil && !a.matchesResource(a.resourceType, *f.resourceName) {
+			return false
+		}
+	} else {
+		if f.pattern != kmsg.ACLResourcePatternTypeAny && f.pattern != a.pattern {
+			return false
+		}
+		if f.resourceName != nil && *f.resourceName != a.resourceName {
 			return false
 		}
 	}
@@ -255,10 +275,7 @@ func (c *Cluster) anyAllowedACL(creq *clientReq, resourceType kmsg.ACLResourceTy
 
 var (
 	clusterOps = []kmsg.ACLOperation{
-		kmsg.ACLOperationRead,
-		kmsg.ACLOperationWrite,
 		kmsg.ACLOperationCreate,
-		kmsg.ACLOperationDelete,
 		kmsg.ACLOperationAlter,
 		kmsg.ACLOperationDescribe,
 		kmsg.ACLOperationClusterAction,
@@ -280,10 +297,17 @@ var (
 		kmsg.ACLOperationRead,
 		kmsg.ACLOperationDelete,
 		kmsg.ACLOperationDescribe,
+		kmsg.ACLOperationDescribeConfigs,
+		kmsg.ACLOperationAlterConfigs,
 	}
 )
 
+// clusterAuthorizedOps is 0 for a principal that cannot describe the cluster,
+// as in Kafka.
 func (c *Cluster) clusterAuthorizedOps(creq *clientReq) int32 {
+	if !c.allowedClusterACL(creq, kmsg.ACLOperationDescribe) {
+		return 0
+	}
 	return c.authorizedOps(creq, aclClusterName, kmsg.ACLResourceTypeCluster, clusterOps)
 }
 

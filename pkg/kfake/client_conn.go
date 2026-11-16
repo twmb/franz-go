@@ -27,6 +27,13 @@ type (
 		saslStage saslStage
 		s0        *scramServer0
 		user      string // authenticated user, set after SASL completes
+		mechanism string // the mechanism user authenticated with, which re-authentication must keep
+
+		// lastReauth is when the connection last began SASL
+		// re-authentication; Kafka allows one per second.
+		lastReauth time.Time
+
+		swName, swVersion string // client software from ApiVersions v3+, for telemetry subscription matching
 
 		// hasSessionExpiry is set at authenticate time when
 		// connections.max.reauth.ms is positive. Re-authentication is
@@ -46,8 +53,9 @@ type (
 		seq    uint32
 		faults *faultCheck // faults that can match this request, see Fault
 
-		unmuted  bool          // a control slept this request with SleepOutOfOrder, releasing the mute
-		controls []*controlCtx // controls already given this request; tryControlKey skips them
+		unmuted    bool          // a control slept this request with SleepOutOfOrder, releasing the mute
+		controls   []*controlCtx // controls already given this request; tryControlKey skips them
+		closeAfter bool          // the handler's response is the last: write closes the connection after it
 
 		// Pre-validated error topics to merge into the response,
 		// used when TopicID resolution fails for some topics while
@@ -56,12 +64,13 @@ type (
 	}
 
 	clientResp struct {
-		kresp   kmsg.Response
-		corr    int32
-		err     error
-		seq     uint32
-		unmuted bool // the request released the mute already; write does not unmute
-		skip    bool // acks=0 produce: nothing to write, just unmute
+		kresp      kmsg.Response
+		corr       int32
+		err        error
+		seq        uint32
+		unmuted    bool // the request released the mute already; write does not unmute
+		skip       bool // acks=0 produce: nothing to write, just unmute
+		closeAfter bool // close the connection once the response is written
 	}
 )
 
@@ -100,11 +109,14 @@ func (cc *clientConn) read() {
 	defer cc.closeDone()
 	defer cc.conn.Close()
 
-	// The cluster dying closes the connection, which is what returns us
-	// from a blocked read (and write from a blocked write).
+	// The cluster dying, or RemoveNode removing our broker, closes the
+	// connection, which is what returns us from a blocked read (and write
+	// from a blocked write).
 	go func() {
 		select {
 		case <-cc.c.die:
+			cc.conn.Close()
+		case <-cc.b.gone:
 			cc.conn.Close()
 		case <-cc.done:
 		}
@@ -132,6 +144,10 @@ func (cc *clientConn) read() {
 			clientID = reader.NullableString()
 			kreq     = kmsg.RequestForKey(key)
 		)
+		if kreq == nil {
+			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s sent unknown request key %d", who, key)
+			return
+		}
 		kreq.SetVersion(version)
 		if kreq.IsFlexible() {
 			kmsg.SkipTags(&reader)
@@ -234,7 +250,7 @@ func (cc *clientConn) write() {
 		binary.BigEndian.PutUint32(buf[:4], uint32(len(buf)-4))
 		binary.BigEndian.PutUint32(buf[4:8], uint32(resp.corr))
 
-		if _, err := cc.conn.Write(buf); err != nil {
+		if _, err := cc.conn.Write(buf); err != nil || resp.closeAfter {
 			return
 		}
 		if !resp.unmuted {

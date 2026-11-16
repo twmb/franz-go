@@ -68,13 +68,13 @@ func testGroup(assignor string, topics map[string]testTopic, members map[string]
 	}
 	g := &group{
 		c:               c,
-		assignorName:    assignor,
 		consumerMembers: make(map[string]*consumerMember, len(members)),
 		partitionEpochs: make(map[uuid]map[int32]partitionOwner),
 	}
 	for mid, topics := range members {
 		g.consumerMembers[mid] = &consumerMember{
 			memberID:         mid,
+			serverAssignor:   assignor,
 			subscribedTopics: topics,
 			targetAssignment: make(map[uuid][]int32),
 		}

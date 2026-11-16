@@ -1,8 +1,11 @@
 package kfake
 
 import (
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +23,9 @@ type fs interface {
 	ReadDir(name string) ([]os.DirEntry, error)
 	ReadFile(name string) ([]byte, error)
 	Stat(name string) (os.FileInfo, error)
+	// SyncDir makes the entries a rename or create made in a directory
+	// durable.
+	SyncDir(name string) error
 }
 
 // file wraps a writable, seekable file handle.
@@ -32,19 +38,57 @@ type file interface {
 	Sync() error
 }
 
-// osFS is the real-filesystem implementation of fs.
-type osFS struct{}
+// osFS is the real-filesystem implementation of fs. Every method refuses a
+// path outside root, the cleaned absolute DataDir, so a bad name fails
+// rather than touches a file outside it.
+type osFS struct{ root string }
 
-func (osFS) OpenFile(name string, flag int, perm os.FileMode) (file, error) {
-	return os.OpenFile(name, flag, perm)
+func inRoot[T any](o osFS, name string, fn func(string) (T, error)) (T, error) {
+	name = filepath.Clean(name)
+	if rel, err := filepath.Rel(o.root, name); err != nil || !filepath.IsLocal(rel) {
+		var zero T
+		return zero, &os.PathError{Op: "open", Path: name, Err: errors.New("outside the data dir " + o.root)}
+	}
+	return fn(name)
 }
-func (osFS) Rename(oldpath, newpath string) error         { return os.Rename(oldpath, newpath) }
-func (osFS) Remove(name string) error                     { return os.Remove(name) }
-func (osFS) RemoveAll(path string) error                  { return os.RemoveAll(path) }
-func (osFS) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
-func (osFS) ReadDir(name string) ([]os.DirEntry, error)   { return os.ReadDir(name) }
-func (osFS) ReadFile(name string) ([]byte, error)         { return os.ReadFile(name) }
-func (osFS) Stat(name string) (os.FileInfo, error)        { return os.Stat(name) }
+
+func inRoot0(o osFS, name string, fn func(string) error) error {
+	_, err := inRoot(o, name, func(name string) (struct{}, error) { return struct{}{}, fn(name) })
+	return err
+}
+
+func (o osFS) OpenFile(name string, flag int, perm os.FileMode) (file, error) {
+	return inRoot(o, name, func(name string) (file, error) { return os.OpenFile(name, flag, perm) })
+}
+
+func (o osFS) Rename(oldpath, newpath string) error {
+	return inRoot0(o, oldpath, func(oldpath string) error {
+		return inRoot0(o, newpath, func(newpath string) error { return os.Rename(oldpath, newpath) })
+	})
+}
+
+func (o osFS) MkdirAll(path string, perm os.FileMode) error {
+	return inRoot0(o, path, func(path string) error { return os.MkdirAll(path, perm) })
+}
+func (o osFS) Remove(name string) error                   { return inRoot0(o, name, os.Remove) }
+func (o osFS) RemoveAll(path string) error                { return inRoot0(o, path, os.RemoveAll) }
+func (o osFS) ReadDir(name string) ([]os.DirEntry, error) { return inRoot(o, name, os.ReadDir) }
+func (o osFS) ReadFile(name string) ([]byte, error)       { return inRoot(o, name, os.ReadFile) }
+func (o osFS) Stat(name string) (os.FileInfo, error)      { return inRoot(o, name, os.Stat) }
+
+func (o osFS) SyncDir(name string) error {
+	return inRoot0(o, name, func(name string) error {
+		if runtime.GOOS == "windows" { // Windows refuses it, and Kafka skips it there too
+			return nil
+		}
+		d, err := os.Open(name)
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+		return d.Sync()
+	})
+}
 
 // memFS is an in-memory filesystem for testing persistence without
 // touching the real disk. It supports fault injection via fail flags.
@@ -56,6 +100,10 @@ type memFS struct {
 	// Fault injection: set these before an operation to simulate errors.
 	failNextSync  error
 	failNextWrite error
+	failRename    func(oldpath, newpath string) error
+	failPath      func(op, path string) error // op is "sync", "syncdir", or "removeall"
+
+	syncs int // Sync and SyncDir calls
 }
 
 // memFileData is the backing storage for a memFS file.
@@ -85,6 +133,9 @@ func (m *memFS) OpenFile(name string, flag int, _ os.FileMode) (file, error) {
 	defer m.mu.Unlock()
 
 	d, exists := m.files[name]
+	if flag&os.O_CREATE != 0 && flag&os.O_EXCL != 0 && exists {
+		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrExist}
+	}
 	if flag&os.O_CREATE != 0 && !exists {
 		d = &memFileData{modTime: time.Now()}
 		m.files[name] = d
@@ -106,12 +157,33 @@ func (m *memFS) OpenFile(name string, flag int, _ os.FileMode) (file, error) {
 func (m *memFS) Rename(oldpath, newpath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	d, ok := m.files[oldpath]
-	if !ok {
+	if m.failRename != nil {
+		if err := m.failRename(oldpath, newpath); err != nil {
+			return err
+		}
+	}
+	if d, ok := m.files[oldpath]; ok {
+		m.files[newpath] = d
+		delete(m.files, oldpath)
+		return nil
+	}
+	if !m.dirs[oldpath] {
 		return &os.PathError{Op: "rename", Path: oldpath, Err: os.ErrNotExist}
 	}
-	m.files[newpath] = d
-	delete(m.files, oldpath)
+	// A directory moves with everything in it.
+	prefix := oldpath + "/"
+	for k, d := range m.files {
+		if strings.HasPrefix(k, prefix) {
+			m.files[newpath+k[len(oldpath):]] = d
+			delete(m.files, k)
+		}
+	}
+	for k := range m.dirs {
+		if k == oldpath || strings.HasPrefix(k, prefix) {
+			m.dirs[newpath+k[len(oldpath):]] = true
+			delete(m.dirs, k)
+		}
+	}
 	return nil
 }
 
@@ -132,6 +204,11 @@ func (m *memFS) Remove(name string) error {
 func (m *memFS) RemoveAll(path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failPath != nil {
+		if err := m.failPath("removeall", path); err != nil {
+			return err
+		}
+	}
 	prefix := path + "/"
 	for k := range m.files {
 		if k == path || strings.HasPrefix(k, prefix) {
@@ -209,6 +286,16 @@ func (m *memFS) ReadFile(name string) ([]byte, error) {
 	out := make([]byte, len(d.data))
 	copy(out, d.data)
 	return out, nil
+}
+
+func (m *memFS) SyncDir(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncs++
+	if m.failPath != nil {
+		return m.failPath("syncdir", name)
+	}
+	return nil
 }
 
 func (m *memFS) Stat(name string) (os.FileInfo, error) {
@@ -303,6 +390,12 @@ func (f *memFile) Truncate(size int64) error {
 func (f *memFile) Sync() error {
 	f.fs.mu.Lock()
 	defer f.fs.mu.Unlock()
+	f.fs.syncs++
+	if f.fs.failPath != nil {
+		if err := f.fs.failPath("sync", f.name); err != nil {
+			return err
+		}
+	}
 	if err := f.fs.failNextSync; err != nil {
 		f.fs.failNextSync = nil
 		return err

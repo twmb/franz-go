@@ -504,13 +504,6 @@ func (fc *faultCheck) hit(f *fault) bool {
 	return true
 }
 
-// anyHit reports whether anything in this request was faulted. An observing
-// fault takes a unit like any other, but it answers nothing, so a site that
-// changes what it does once something was faulted must not see it.
-func (fc *faultCheck) anyHit() bool {
-	return fc != nil && slices.ContainsFunc(fc.hits, func(f *fault) bool { return !f.observe })
-}
-
 // deny answers the error to fail the entity named by k with, either because
 // the user is not allowed the operation or because a fault matches.
 func (c *Cluster) deny(creq *clientReq, resource string, rt kmsg.ACLResourceType, op kmsg.ACLOperation, k faultKey) *kerr.Error {

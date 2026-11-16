@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -65,14 +66,16 @@ type (
 		acls               clusterACLs
 		bcfgs              map[string]*string
 		quotas             map[string]quotaEntry
-		telem              map[[16]byte]int32
-		telemNextID        int32
-		features           map[string]int16 // finalized levels changed by UpdateFeatures; a feature not here is at the kversion table's default, see 18_api_versions.go
+		telem              map[[16]byte]telemClient // client instance ID -> the client, see telemClientFor
+		telemVersion       int                      // bumped when a client metrics subscription changes, see telemClientFor
+		features           map[string]int16         // finalized levels changed by UpdateFeatures; a feature not here is at the kversion table's default, see 18_api_versions.go
+		featuresEpoch      int64                    // bumped when UpdateFeatures changes a level; ApiVersions answers it
 		fetchSessions      fetchSessions
 		groupConfigs       map[string]map[string]*string // group -> config key -> config value
 		clientMetrics      map[string]map[string]*string // subscription -> config key -> config value, see data.go
 		shareGroups        shareGroups
 		compactTicker      *time.Ticker
+		compactInterval    time.Duration // compactTicker's period, 0 when it is stopped
 		offsetExpireTicker *time.Ticker
 
 		// storageDir is the root directory for segment and index files.
@@ -86,6 +89,14 @@ type (
 		groupsLogSize      int64
 		pidsLogSize        int64
 		needsGroupsCompact bool
+		// The sizes the last compactions of groups.log and pids.log left,
+		// which compactAt doubles.
+		groupsLogCompacted int64
+		pidsLogCompacted   int64
+		// filesClosed stops the state log appends once Close has saved
+		// and closed every file. Until then, a request Close waits on
+		// is logged like any other.
+		filesClosed bool
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -96,6 +107,7 @@ type (
 		ln    net.Listener
 		node  int32
 		bsIdx int
+		gone  chan struct{} // closed by RemoveNode, which closes the broker's connections
 	}
 
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
@@ -145,7 +157,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		listenFn:        net.Listen,
 
 		minSessionTimeout: 6 * time.Second,
-		maxSessionTimeout: 5 * time.Minute,
+		maxSessionTimeout: 30 * time.Minute,
 
 		sasls: make(map[struct{ m, u string }]string),
 	}
@@ -157,6 +169,12 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	if cfg.injectFS != nil && cfg.dataDir == "" {
 		cfg.dataDir = "/kfake"
+	} else if cfg.injectFS == nil && cfg.dataDir != "" {
+		dir, err := filepath.Abs(cfg.dataDir) // a later chdir must not move it
+		if err != nil {
+			return nil, err
+		}
+		cfg.dataDir = dir
 	}
 	if cfg.synthetic != nil {
 		if err := cfg.synthetic.init(); err != nil {
@@ -182,11 +200,11 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			t2id:      make(map[string]uuid),
 			treplicas: make(map[string]int),
 			tcfgs:     make(map[string]map[string]*string),
-			tnorms:    make(map[string]string),
+			tnorms:    make(map[string][]string),
 		},
 		bcfgs:    make(map[string]*string, len(cfg.brokerConfigs)),
 		quotas:   make(map[string]quotaEntry),
-		telem:    make(map[[16]byte]int32),
+		telem:    make(map[[16]byte]telemClient),
 		features: make(map[string]int16),
 
 		die: make(chan struct{}),
@@ -195,7 +213,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		c.fs = cfg.injectFS
 		c.storageDir = cfg.dataDir
 	} else if cfg.dataDir != "" {
-		c.fs = osFS{}
+		c.fs = osFS{root: cfg.dataDir}
 		c.storageDir = cfg.dataDir
 	} else {
 		c.fs = newMemFS()
@@ -206,6 +224,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			c.bcfgs[k] = nil
 		} else {
 			v := v
+			if !validateBrokerConfig(k, &v) {
+				return nil, fmt.Errorf("invalid broker config %s=%q", k, v)
+			}
 			c.bcfgs[k] = &v
 		}
 	}
@@ -282,6 +303,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 			ln:    ln,
 			node:  int32(i),
 			bsIdx: len(c.bs),
+			gone:  make(chan struct{}),
 		}
 		c.bs = append(c.bs, b)
 		defer func() { go b.listen() }() //nolint:gocritic,revive // intentional - each broker's listener starts after loop iter
@@ -454,17 +476,22 @@ func (c *Cluster) run() {
 		}
 		c.offsetExpireTicker.Stop()
 		c.shareGroups.stopSweepTicker()
-		// An unfired timer holds its group, and the group holds the
-		// cluster: without this a closed cluster and all its data stay
-		// reachable until the last session timeout expires.
+		// An unfired timer holds the cluster: without this a closed
+		// cluster and all its data stay reachable until the last session
+		// or telemetry client timeout expires.
 		for _, g := range c.groups.gs {
 			g.stopTimers()
 		}
 		for _, g := range c.shareGroups.gs {
 			g.stopTimers()
 		}
+		for _, tc := range c.telem {
+			tc.t.Stop()
+		}
 	}()
-	c.offsetExpireTicker = time.NewTicker(time.Duration(c.offsetsRetentionCheckIntervalMs()) * time.Millisecond)
+	// A non-positive interval would panic NewTicker. AlterConfigs and
+	// NewCluster refuse one, but an older data dir can still hold it.
+	c.offsetExpireTicker = time.NewTicker(time.Duration(max(c.offsetsRetentionCheckIntervalMs(), 1)) * time.Millisecond)
 	// Loading from disk can create share groups, and it also loads the
 	// broker configs the interval comes from.
 	c.shareGroups.refreshSweepTicker()
@@ -817,7 +844,7 @@ outer:
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq, unmuted: creq.unmuted}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq, unmuted: creq.unmuted, closeAfter: creq.closeAfter}:
 		case <-creq.cc.done:
 		case <-c.die:
 			return
@@ -1386,13 +1413,7 @@ func (c *Cluster) admin(fn func()) {
 func (c *Cluster) MoveTopicPartition(topic string, partition, nodeID int32) error {
 	var err error
 	c.admin(func() {
-		var br *broker
-		for _, b := range c.bs {
-			if b.node == nodeID {
-				br = b
-				break
-			}
-		}
+		br := c.nodeBroker(nodeID)
 		if br == nil {
 			err = fmt.Errorf("node %d not found", nodeID)
 			return
@@ -1403,19 +1424,26 @@ func (c *Cluster) MoveTopicPartition(topic string, partition, nodeID int32) erro
 			return
 		}
 		c.setLeader(topic, partition, pd, br)
+		c.persistTopicsState()
 	})
 	return err
 }
 
 // setLeader moves a partition to leader and bumps its epoch. If the leader
 // changes, share groups drop their acquisitions on the partition, as a new
-// Kafka leader does: acquisitions are never persisted.
+// Kafka leader does: acquisitions are never persisted. The caller persists
+// the topics once it has moved every partition it moves.
 func (c *Cluster) setLeader(t string, p int32, pd *partData, leader *broker) {
 	moved := pd.leader != leader
 	pd.leader = leader
 	pd.epoch++
 	if !moved {
 		return
+	}
+	// Kafka answers a fetch parked on the old leader once it is not the
+	// leader, rather than at MaxWait.
+	for w := range pd.watch {
+		w.do()
 	}
 	for _, g := range c.shareGroups.gs {
 		if sp, ok := g.partitions.getp(t, p); ok && sp.dropAcquired() {
@@ -1468,11 +1496,9 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 	var err error
 	c.admin(func() {
 		if nodeID >= 0 {
-			for _, b := range c.bs {
-				if b.node == nodeID {
-					err = fmt.Errorf("node %d already exists", nodeID)
-					return
-				}
+			if c.nodeBroker(nodeID) != nil {
+				err = fmt.Errorf("node %d already exists", nodeID)
+				return
 			}
 		} else if len(c.bs) > 0 {
 			// We go one higher than the max current node ID. We
@@ -1502,6 +1528,7 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 			ln:    ln,
 			node:  nodeID,
 			bsIdx: len(c.bs),
+			gone:  make(chan struct{}),
 		}
 		c.bs = append(c.bs, b)
 		c.cfg.nbrokers++
@@ -1525,10 +1552,14 @@ func (c *Cluster) RemoveNode(nodeID int32) error {
 				return
 			}
 			b.ln.Close()
+			close(b.gone)
 			c.cfg.nbrokers--
 			c.bs[i] = c.bs[len(c.bs)-1]
 			c.bs[i].bsIdx = i
 			c.bs = c.bs[:len(c.bs)-1]
+			if c.controller == b {
+				c.controller = c.bs[len(c.bs)-1]
+			}
 			c.shufflePartitions()
 			return
 		}
@@ -1556,6 +1587,7 @@ func (c *Cluster) shufflePartitions() {
 		}
 		c.setLeader(t, p, pd, leader)
 	})
+	c.persistTopicsState()
 }
 
 // SetFollowers sets the node IDs of brokers that can also serve fetch requests
@@ -1618,33 +1650,42 @@ func (c *Cluster) compactTickerC() <-chan time.Time {
 	return nil
 }
 
+// compactIntervalMs returns log.cleaner.backoff.ms. Kafka accepts 0, which
+// means the cleaner does not wait between runs; a ticker needs a positive
+// period, so we run every millisecond.
 func (c *Cluster) compactIntervalMs() int64 {
 	if v, ok := c.bcfgs["log.cleaner.backoff.ms"]; ok && v != nil {
 		if n, err := strconv.ParseInt(*v, 10, 64); err == nil {
-			return n
+			return max(n, 1)
 		}
 	}
 	return 3600000
 }
 
-// refreshCompactTicker starts or stops the compaction ticker based on whether
-// any topic has cleanup.policy=compact or a retention limit. Like Kafka, a
-// topic without its own retention config uses log.retention.ms, which
-// defaults to 7 days.
+// refreshCompactTicker starts, stops, or reschedules the compaction ticker
+// based on whether any topic has cleanup.policy=compact or a retention
+// limit, and on log.cleaner.backoff.ms, which is dynamic in Kafka. Like
+// Kafka, a topic without its own retention config uses log.retention.ms,
+// which defaults to 7 days.
 // Must be called from Cluster.run().
 func (c *Cluster) refreshCompactTicker() {
-	needsTicker := false
+	var want time.Duration
 	for t := range c.data.tps {
 		if c.data.isCompactTopic(t) || c.data.retentionMs(t) >= 0 || c.data.retentionBytes(t) >= 0 {
-			needsTicker = true
+			want = time.Duration(c.compactIntervalMs()) * time.Millisecond
 			break
 		}
 	}
-	if needsTicker && c.compactTicker == nil {
-		c.compactTicker = time.NewTicker(time.Duration(c.compactIntervalMs()) * time.Millisecond)
-	} else if !needsTicker && c.compactTicker != nil {
+	if want == c.compactInterval {
+		return
+	}
+	if c.compactTicker != nil {
 		c.compactTicker.Stop()
 		c.compactTicker = nil
+	}
+	c.compactInterval = want
+	if want > 0 {
+		c.compactTicker = time.NewTicker(want)
 	}
 }
 

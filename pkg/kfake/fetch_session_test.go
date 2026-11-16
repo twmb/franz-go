@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -29,11 +30,13 @@ func fetchPartitionErr(t *testing.T, resp *kmsg.FetchResponse, id [16]byte) erro
 // A partition whose topic ID does not resolve stays in the session under its
 // ID: every fetch of the session answers it UNKNOWN_TOPIC_ID, as a real
 // broker does, until the client forgets it. If the topic is created later,
-// the entry resolves and is served.
+// the entry resolves and is served. The unknown ID does not end the wait
+// for data on the known partition.
 func TestFetchSessionUnknownID(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	mfs := newTestMemFS()
+	c := newCluster(t, mfs.opt(), NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -49,9 +52,13 @@ func TestFetchSessionUnknownID(t *testing.T) {
 	fp.CurrentLeaderEpoch = -1
 	ft.Partitions = append(ft.Partitions, fp)
 	req.Topics = append(req.Topics, ft)
+	start := time.Now()
 	full, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Errorf("full fetch answered after %v, want it to wait out its 100ms MaxWait", elapsed)
 	}
 	if full.SessionID <= 0 {
 		t.Fatalf("session not established: err %v", kerr.ErrorForCode(full.ErrorCode))
@@ -88,13 +95,29 @@ func TestFetchSessionUnknownID(t *testing.T) {
 			t.Fatalf("the forgotten unknown ID is still answered: %+v", rt)
 		}
 	}
+
+	// After a clean restart, the session answers the ID of a partition
+	// it serves, and takes a new unknown ID.
+	c.Close()
+	c = newCluster(t, mfs.opt(), NumBrokers(1))
+	produceN(t, c, topic, 1)
+	incr, err = fetchByID(full.SessionID, 3, 100, unknown, 0).RequestWith(ctx, newPlainClient(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fetchPartitionErr(t, incr, known); err != nil {
+		t.Fatalf("restored session: got %v for the known partition", err)
+	}
 }
 
 // A session entry keeps the name it was added under. Once the topic is
 // deleted, the entry reaches the log by name and is answered
 // UNKNOWN_TOPIC_OR_PARTITION, whether the session or a re-send by ID
-// addresses it; only a full fetch, which addresses the topic by ID alone, is
-// answered UNKNOWN_TOPIC_ID.
+// addresses it, until the client forgets the entry by its ID; only a full
+// fetch, which addresses the topic by ID alone, is answered UNKNOWN_TOPIC_ID.
+//
+// The first fetch parks on the empty partition, and its rerun at MaxWait
+// keeps the one session the fetch created.
 func TestFetchSessionDeletedTopic(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
@@ -109,6 +132,11 @@ func TestFetchSessionDeletedTopic(t *testing.T) {
 	}
 	if first.SessionID <= 0 {
 		t.Fatalf("session not established: err %v", kerr.ErrorForCode(first.ErrorCode))
+	}
+	var sessions int
+	c.admin(func() { sessions = len(c.fetchSessions.sessions[0]) })
+	if sessions != 1 {
+		t.Fatalf("got %d fetch sessions after one fetch, want 1", sessions)
 	}
 
 	if err := c.DeleteTopic(topic); err != nil {
@@ -128,6 +156,26 @@ func TestFetchSessionDeletedTopic(t *testing.T) {
 	}
 	if err := fetchPartitionErr(t, resend, id); err != kerr.UnknownTopicOrPartition {
 		t.Fatalf("re-sending the deleted topic's ID got %v, want UNKNOWN_TOPIC_OR_PARTITION", err)
+	}
+
+	forget := fetchByID(first.SessionID, 3, 100, id)
+	fft := kmsg.NewFetchRequestForgottenTopic()
+	fft.TopicID = id
+	fft.Partitions = []int32{0}
+	forget.ForgottenTopics = append(forget.ForgottenTopics, fft)
+	for epoch, req := range []*kmsg.FetchRequest{forget, fetchByID(first.SessionID, 4, 100, id)} {
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("fetch at epoch %d failed: %v", epoch+3, kerr.ErrorForCode(resp.ErrorCode))
+		}
+		for _, rt := range resp.Topics {
+			if rt.TopicID == id {
+				t.Fatalf("fetch at epoch %d still answers the forgotten partition: %+v", epoch+3, rt)
+			}
+		}
 	}
 
 	full, err := fetchByID(0, 0, 100, id, 0).RequestWith(ctx, cl)

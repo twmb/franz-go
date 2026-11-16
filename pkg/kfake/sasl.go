@@ -44,6 +44,7 @@ const (
 	saslStageAuthScram0_512
 	saslStageAuthScram1
 	saslStageComplete
+	saslStageFailed // we close the connection on its next request
 )
 
 func (*Cluster) handleSASL(creq *clientReq) (allow bool) {
@@ -69,6 +70,8 @@ func (*Cluster) handleSASL(creq *clientReq) (allow bool) {
 		}
 	case saslStageComplete:
 		return true
+	case saslStageFailed:
+		return false
 	default:
 		panic("unreachable")
 	}
@@ -78,15 +81,16 @@ func (*Cluster) handleSASL(creq *clientReq) (allow bool) {
 // PLAIN //
 ///////////
 
-func saslSplitPlain(auth []byte) (user, pass string, err error) {
+// saslSplitPlain returns the user and password, or Kafka's failure message.
+func saslSplitPlain(auth []byte) (user, pass, failure string) {
 	parts := strings.SplitN(string(auth), "\x00", 3)
 	if len(parts) != 3 {
-		return "", "", errors.New("invalid plain auth")
+		return "", "", "Invalid SASL/PLAIN response: expected 3 tokens"
 	}
 	if len(parts[0]) != 0 && parts[0] != parts[1] {
-		return "", "", errors.New("authzid is not equal to username") // see below
+		return "", "", "Authentication failed: Client requested an authorization id that is different from username"
 	}
-	return parts[1], parts[2], nil
+	return parts[1], parts[2], ""
 }
 
 ///////////
@@ -161,13 +165,14 @@ func scramServerFirst(client0 scramClient0, auth scramAuth) (scramServer0, []byt
 	serverFirst := []byte(fmt.Sprintf("r=%s,s=%s,i=%d",
 		nonce,
 		base64.StdEncoding.EncodeToString(auth.salt),
-		scramIterations,
+		auth.iterations,
 	))
 	return scramServer0{
 		a:      auth,
 		c0bare: client0.bare,
 		cbind:  client0.cbind,
 		s0:     serverFirst,
+		nonce:  nonce,
 	}, serverFirst
 }
 
@@ -177,6 +182,7 @@ type scramServer0 struct {
 	c0bare []byte
 	cbind  string
 	s0     []byte
+	nonce  []byte // client nonce + server nonce, which client-final must echo
 }
 
 // validates client-final-message and replies with server-final-message
@@ -188,7 +194,8 @@ func (s *scramServer0) serverFinal(clientFinal []byte) ([]byte, error) {
 	var (
 		finalWithoutProof = m[1]
 		channel           = m[2]
-		clientProof64     = m[3]
+		nonce             = m[3]
+		clientProof64     = m[4]
 		h                 = sha256.New
 	)
 	if s.a.mechanism == saslScram512 {
@@ -196,6 +203,9 @@ func (s *scramServer0) serverFinal(clientFinal []byte) ([]byte, error) {
 	}
 	if string(channel) != s.cbind { // "biws" == base64("n,,") without a zid
 		return nil, errors.New("invalid channel binding")
+	}
+	if !bytes.Equal(nonce, s.nonce) {
+		return nil, errors.New("invalid client nonce in the final client message")
 	}
 	clientProof, err := base64.StdEncoding.DecodeString(string(clientProof64))
 	if err != nil {
@@ -286,15 +296,15 @@ func init() {
 	// 6: ext
 	client0 := fmt.Sprintf("^(n,(?:a=(%s))?,)((?:m=%s,)?n=(%s),r=(%s)(%s))$", saslName, value, saslName, printable, ext)
 
-	// We reject extensions in client0. Kafka does not validate the nonce
-	// and some clients may generate it incorrectly (i.e. old franz-go), so
-	// we do not validate it.
+	// We reject extensions in client0. The nonce must be the one our
+	// server-first sent, as Kafka requires.
 	//
 	// 0: entire match
 	// 1: channel-final-message-without-proof
 	// 2: channel binding
-	// 3: proof
-	clientFinal := fmt.Sprintf("^(c=(%s),r=%s),p=(%s)$", b64, printable, b64)
+	// 3: nonce
+	// 4: proof
+	clientFinal := fmt.Sprintf("^(c=(%s),r=(%s)),p=(%s)$", b64, printable, b64)
 
 	reClient0 = regexp.MustCompile(client0)
 	reClientFinal = regexp.MustCompile(clientFinal)

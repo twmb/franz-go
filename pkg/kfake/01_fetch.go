@@ -14,10 +14,12 @@ import (
 // Fetch: v4-18
 //
 // Behavior:
-// * If topic does not exist, we hang
-// * Topic created while waiting is not returned in final response
-// * If any partition is on a different broker, we return immediately
-// * Out of range fetch causes early return
+// * A partition that is unauthorized or that we do not have does not end
+//   the wait; any other partition error, such as a partition on a different
+//   broker or an out of range offset, answers at once
+// * A fetch with no partition we can read answers at once
+// * A topic created while we wait does not end the wait, and the final
+//   response includes it
 // * Raw bytes of batch counts against wait bytes
 //
 // For read_committed (IsolationLevel=1):
@@ -59,7 +61,11 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	// Handle fetch sessions (v7+)
 	var session *fetchSession
 	var newSession bool
-	if req.Version >= 7 {
+	if req.Version >= 7 && w != nil {
+		// A parked fetch comes back with the session it set up when it
+		// arrived; setting up again would create a second session.
+		session, newSession = w.session, w.newSession
+	} else if req.Version >= 7 {
 		var errCode int16
 		session, newSession, errCode = c.fetchSessions.getOrCreate(creq.cc.b.node, req.SessionID, req.SessionEpoch, int(c.fetchSessionCacheSlots()))
 		if errCode != 0 {
@@ -67,24 +73,35 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			return resp, nil
 		}
 
-		// Handle ForgottenTopics - remove partitions from session
+		// Handle ForgottenTopics - remove partitions from session. Kafka
+		// forgets an entry by the ID it was added under, and the entry
+		// of a deleted topic keeps its name, which we find by that ID.
+		var byID map[idp]string
 		for _, ft := range req.ForgottenTopics {
 			topic := ft.Topic
 			if req.Version >= 13 {
 				topic = c.data.id2t[ft.TopicID]
+				if topic == "" && session != nil && byID == nil {
+					byID = make(map[idp]string, len(session.partitions))
+					for key, sp := range session.partitions {
+						byID[idp{sp.topicID, key.p}] = key.t
+					}
+				}
 			}
 			for _, p := range ft.Partitions {
+				name := topic
 				if req.Version >= 13 {
 					session.forgetUnknownID(ft.TopicID, p)
+					if name == "" {
+						name = byID[idp{ft.TopicID, p}]
+					}
 				}
-				session.forgetPartition(topic, p)
+				session.forgetPartition(name, p)
 			}
 		}
-
-		// Set session ID in response
-		if session != nil {
-			resp.SessionID = session.id
-		}
+	}
+	if session != nil {
+		resp.SessionID = session.id
 	}
 
 	// Build the list of partitions to fetch. With sessions, we need to merge:
@@ -183,9 +200,9 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 					// were added with. If it no longer resolves,
 					// the entry keeps the name it was inserted
 					// under, like a real broker: a deleted topic
-					// answers UNKNOWN_TOPIC_ID, a recreated one
-					// INCONSISTENT_TOPIC_ID from a broker hosting
-					// the new incarnation.
+					// answers UNKNOWN_TOPIC_OR_PARTITION, a
+					// recreated one INCONSISTENT_TOPIC_ID from a
+					// broker hosting the new incarnation.
 					if _, ok := c.data.id2t[sp.topicID]; !ok {
 						staleID = true
 					}
@@ -203,6 +220,15 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		}
 	}
 
+	// An unknown v13 topic ID has no name to authorize.
+	denyp := func(fp fetchPartition) *kerr.Error {
+		k := c.fetchFaultKey(creq, fp.topic, fp.topicID, fp.partition)
+		if req.Version >= 13 && fp.topic == "" {
+			return creq.faults.check(k)
+		}
+		return c.deny(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, k)
+	}
+
 	var (
 		readCommitted = req.IsolationLevel == 1
 		nbytes        int
@@ -215,27 +241,31 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		// so there is always data: we answer now rather than waiting.
 		returnEarly = true
 	} else if w == nil {
-		// Any partition that errors completes the fetch at once, as a
-		// real broker's fetch purgatory does; only partitions waiting
-		// on data hold the request for MaxWait.
+		// As on a real broker, a partition that fails before its log
+		// is read (unauthorized, or a topic or partition we do not
+		// have) leaves the rest to wait for data. An error reading the
+		// log answers at once, as does a fetch with nothing to read.
+		var readable bool
 	out:
 		for _, fp := range toFetch {
-			if e := c.deny(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, c.fetchFaultKey(creq, fp.topic, fp.topicID, fp.partition)); e != nil {
-				returnEarly = true // TopicAuthorizationFailed or the fault's error
-				break out
-			}
-			if fp.staleID {
-				returnEarly = true // InconsistentTopicID or UnknownTopicID
+			if e := denyp(fp); e != nil {
+				if !faultEndsWait(e) {
+					continue
+				}
+				returnEarly = true // the fault's error
 				break out
 			}
 			t, ok := c.data.tps.gett(fp.topic)
 			if !ok {
-				returnEarly = true // UnknownTopicID or UnknownTopicOrPartition
-				break out
+				continue // UnknownTopicID or UnknownTopicOrPartition
 			}
 			pd, ok := t[fp.partition]
 			if !ok {
-				returnEarly = true // UnknownTopicID or UnknownTopicOrPartition
+				continue // UnknownTopicOrPartition
+			}
+			readable = true
+			if fp.staleID || pd.failed {
+				returnEarly = true // InconsistentTopicID, NotLeaderForPartition, or KafkaStorageError
 				break out
 			}
 			if pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node) {
@@ -278,16 +308,22 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			}
 			needp.set(fp.topic, fp.partition, int(fp.maxBytes)-pbytes)
 		}
+		if !readable {
+			returnEarly = true
+		}
 	}
 
+	// Like Kafka, the wait starts when we handle the fetch.
 	wait := time.Duration(req.MaxWaitMillis) * time.Millisecond
-	deadline := creq.at.Add(wait)
-	if w == nil && !returnEarly && nbytes < int(req.MinBytes) && time.Now().Before(deadline) {
+	minBytes := int(min(req.MinBytes, req.MaxBytes)) // as Kafka caps it
+	if w == nil && !returnEarly && nbytes < minBytes && wait > 0 {
 		w := &watchFetch{
-			need:          int(req.MinBytes) - nbytes,
+			need:          minBytes - nbytes,
 			needp:         needp,
 			readCommitted: readCommitted,
 			creq:          creq,
+			session:       session,
+			newSession:    newSession,
 		}
 		w.cb = func() {
 			select {
@@ -312,12 +348,12 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	}
 
 	id2t := make(map[uuid]string)
-	tidx := make(map[string]int)
+	tidx := make(map[tkey]int)
 
 	donet := func(t string, id uuid) *kmsg.FetchResponseTopic {
-		key := t
+		key := tkey{t: t}
 		if t == "" {
-			key = string(id[:]) // unresolvable v13 IDs each get their own entry
+			key.id = id // unresolvable v13 IDs each get their own entry
 		}
 		if i, ok := tidx[key]; ok {
 			return &resp.Topics[i]
@@ -361,7 +397,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	nbytes = 0
 full:
 	for _, fp := range toFetch {
-		if e := c.deny(creq, fp.topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationRead, c.fetchFaultKey(creq, fp.topic, fp.topicID, fp.partition)); e != nil {
+		if e := denyp(fp); e != nil {
 			donep(fp.topic, fp.topicID, fp.partition, e.Code)
 			continue
 		}
@@ -375,6 +411,10 @@ full:
 			} else {
 				donep(fp.topic, fp.topicID, fp.partition, kerr.UnknownTopicOrPartition.Code)
 			}
+			continue
+		}
+		if pd.failed {
+			donep(fp.topic, fp.topicID, fp.partition, kerr.KafkaStorageError.Code)
 			continue
 		}
 		if fp.staleID {
@@ -512,6 +552,11 @@ type watchFetch struct {
 
 	readCommitted bool
 
+	// session and newSession are what the fetch set up when it
+	// arrived, for its rerun once it wakes.
+	session    *fetchSession
+	newSession bool
+
 	once    sync.Once
 	cleaned bool
 }
@@ -589,8 +634,9 @@ type idp struct {
 type fetchSessionPartition struct {
 	// topicID is what the requester addressed this partition by (zero
 	// below fetch v13). v13+ sessions are topic-ID addressed: if this ID
-	// stops resolving (topic deleted, or recreated under a new ID), the
-	// entry answers UNKNOWN_TOPIC_ID rather than re-addressing by name.
+	// stops resolving, the entry keeps its name, and answers
+	// UNKNOWN_TOPIC_OR_PARTITION for a deleted topic and
+	// INCONSISTENT_TOPIC_ID for one recreated under a new ID.
 	topicID      uuid
 	fetchOffset  int64
 	maxBytes     int32
@@ -806,4 +852,15 @@ func (c *Cluster) fetchFaultKey(creq *clientReq, topic string, topicID uuid, par
 	pd, ok := c.data.tps.getp(topic, partition)
 	misrouted := ok && pd.leader != creq.cc.b && !slices.Contains(pd.followers, creq.cc.b.node)
 	return faultKey{topic: topic, topicID: topicID, misrouted: misrouted}.part(partition)
+}
+
+// faultEndsWait reports whether a fault answering e answers a fetch or share
+// fetch at once. Kafka answers an unauthorized or unknown topic or partition
+// before it reads the log, which leaves the rest of the request to wait.
+func faultEndsWait(e *kerr.Error) bool {
+	switch e {
+	case kerr.TopicAuthorizationFailed, kerr.UnknownTopicID, kerr.UnknownTopicOrPartition:
+		return false
+	}
+	return true
 }

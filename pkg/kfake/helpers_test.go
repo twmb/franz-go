@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"slices"
 	"strconv"
@@ -20,6 +21,19 @@ type testMemFS struct{ fs fs }
 
 func newTestMemFS() *testMemFS { return &testMemFS{fs: newMemFS()} }
 func (m *testMemFS) opt() Opt  { return withFS(m.fs) }
+
+// clone copies the files as they are now: a cluster opened on the clone
+// restarts as if we crashed now.
+func (m *testMemFS) clone() *testMemFS {
+	src, dst := m.fs.(*memFS), newMemFS()
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	for name, d := range src.files {
+		dst.files[name] = &memFileData{data: slices.Clone(d.data), modTime: d.modTime}
+	}
+	maps.Copy(dst.dirs, src.dirs)
+	return &testMemFS{fs: dst}
+}
 
 func newCluster(t *testing.T, opts ...Opt) *Cluster {
 	t.Helper()
@@ -175,6 +189,40 @@ func groupCommits(c *Cluster, group string) map[string]map[int32]GroupCommit {
 	return g.Commits
 }
 
+// stageTxnOffset opens a transaction for txnID, in which the group commits
+// offset for partition 0 of topic, on broker 0. It returns a function that
+// commits the transaction.
+func stageTxnOffset(t *testing.T, c *Cluster, cl *kgo.Client, txnID, group, topic string, offset int64) (commit func()) {
+	t.Helper()
+	init := kmsg.NewPtrInitProducerIDRequest()
+	init.TransactionalID = &txnID
+	init.TransactionTimeoutMillis = 60000
+	ir := faultReq(t, cl, 0, init).(*kmsg.InitProducerIDResponse)
+	add := kmsg.NewPtrAddOffsetsToTxnRequest()
+	add.TransactionalID, add.ProducerID, add.ProducerEpoch, add.Group = txnID, ir.ProducerID, ir.ProducerEpoch, group
+	ar := faultReq(t, cl, 0, add).(*kmsg.AddOffsetsToTxnResponse)
+	tc := kmsg.NewPtrTxnOffsetCommitRequest()
+	tc.TransactionalID, tc.Group, tc.ProducerID, tc.ProducerEpoch, tc.Generation = txnID, group, ir.ProducerID, ir.ProducerEpoch, -1
+	tt := kmsg.NewTxnOffsetCommitRequestTopic()
+	tt.Topic, tt.TopicID = topic, c.TopicInfo(topic).TopicID
+	tp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+	tp.Offset = offset
+	tt.Partitions = append(tt.Partitions, tp)
+	tc.Topics = append(tc.Topics, tt)
+	tr := faultReq(t, cl, 0, tc).(*kmsg.TxnOffsetCommitResponse)
+	if ir.ErrorCode != 0 || ar.ErrorCode != 0 || tr.Topics[0].Partitions[0].ErrorCode != 0 {
+		t.Fatalf("staging a txn offset: init %d, add offsets %d, txn offset commit %d", ir.ErrorCode, ar.ErrorCode, tr.Topics[0].Partitions[0].ErrorCode)
+	}
+	return func() {
+		t.Helper()
+		end := kmsg.NewPtrEndTxnRequest()
+		end.TransactionalID, end.ProducerID, end.ProducerEpoch, end.Commit = txnID, ir.ProducerID, ir.ProducerEpoch, true
+		if code := faultReq(t, cl, 0, end).(*kmsg.EndTxnResponse).ErrorCode; code != 0 {
+			t.Fatalf("end txn answered %d", code)
+		}
+	}
+}
+
 // produceShareN creates a plain client, sets share.auto.offset.reset=earliest
 // for the given group, produces n string records to the topic, and flushes.
 func produceShareN(t *testing.T, c *Cluster, topic, group string, n int) {
@@ -252,6 +300,30 @@ func rawShareFetch(t *testing.T, cl *kgo.Client, group, memberID string, topicID
 		}
 	}
 	return sfResp, acquired
+}
+
+// rawShareAck acknowledges offsets first through last of partition 0 and
+// returns the top-level error, or else the partition's.
+func rawShareAck(t *testing.T, cl *kgo.Client, group, memberID string, topicID [16]byte, epoch int32, first, last int64, types ...int8) int16 {
+	t.Helper()
+	req := kmsg.NewPtrShareAcknowledgeRequest()
+	req.GroupID, req.MemberID, req.ShareSessionEpoch = &group, &memberID, epoch
+	at := kmsg.NewShareAcknowledgeRequestTopic()
+	at.TopicID = topicID
+	ap := kmsg.NewShareAcknowledgeRequestTopicPartition()
+	ab := kmsg.NewShareAcknowledgeRequestTopicPartitionAcknowledgementBatch()
+	ab.FirstOffset, ab.LastOffset, ab.AcknowledgeTypes = first, last, types
+	ap.AcknowledgementBatches = append(ap.AcknowledgementBatches, ab)
+	at.Partitions = append(at.Partitions, ap)
+	req.Topics = append(req.Topics, at)
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("ShareAcknowledge: %v", err)
+	}
+	if resp.ErrorCode != 0 {
+		return resp.ErrorCode
+	}
+	return resp.Topics[0].Partitions[0].ErrorCode
 }
 
 // newClient848 creates a kgo client that opts into KIP-848.
@@ -502,11 +574,15 @@ func kvRecord() kmsg.Record {
 }
 
 // produceRawV11 sends one batch as a Produce v11, which names the topic
-// rather than identifying it by ID, and returns the partition response.
-func produceRawV11(t *testing.T, cl *kgo.Client, topic string, batch []byte) kmsg.ProduceResponseTopicPartition {
+// rather than identifying it by ID, and returns the partition response. A
+// transactional batch needs its transactional ID.
+func produceRawV11(t *testing.T, cl *kgo.Client, topic string, batch []byte, txid ...string) kmsg.ProduceResponseTopicPartition {
 	t.Helper()
 	req := kmsg.NewProduceRequest()
 	req.Version = 11
+	if len(txid) > 0 {
+		req.TransactionID = &txid[0]
+	}
 	req.Acks = -1
 	req.TimeoutMillis = 5000
 	rt := kmsg.NewProduceRequestTopic()

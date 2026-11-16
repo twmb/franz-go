@@ -9,7 +9,7 @@ import (
 //
 // Behavior:
 // * Returns SCRAM credential info for requested users
-// * If Users is null, returns all users with SCRAM credentials
+// * If Users is null or empty, returns all users with SCRAM credentials
 // * Supports SCRAM-SHA-256 (mechanism 1) and SCRAM-SHA-512 (mechanism 2)
 
 func init() { regKey(50, 0, 0) }
@@ -29,7 +29,7 @@ func (c *Cluster) handleDescribeUserSCRAMCredentials(creq *clientReq) (kmsg.Resp
 		return resp, nil
 	}
 
-	describe := make(map[string]bool) // if false, user was duplicated
+	describe := make(map[string]bool) // true if the user was duplicated
 	for _, u := range req.Users {
 		if _, ok := describe[u.Name]; ok {
 			describe[u.Name] = true
@@ -37,7 +37,7 @@ func (c *Cluster) handleDescribeUserSCRAMCredentials(creq *clientReq) (kmsg.Resp
 			describe[u.Name] = false
 		}
 	}
-	if req.Users == nil { // null returns all
+	if len(req.Users) == 0 { // null or empty returns all
 		for u := range c.sasls.scram256 {
 			describe[u] = false
 		}

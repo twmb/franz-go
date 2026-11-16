@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"math"
 	"math/rand"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -109,7 +113,8 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	adm := kadm.NewClient(newClient848(t, c))
+	admCl := newClient848(t, c)
+	adm := kadm.NewClient(admCl)
 
 	// ListGroupsByType with "consumer" filter should include our group.
 	listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
@@ -120,6 +125,23 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 		t.Fatalf("group %s not found in consumer-type list (got %v)", group, listed.Groups())
 	}
 
+	// Kafka matches the type filter ignoring case and names the
+	// consumer protocol type.
+	lreq := kmsg.NewPtrListGroupsRequest()
+	lreq.TypesFilter = []string{"CONSUMER"}
+	lresp, err := lreq.RequestWith(ctx, admCl)
+	if err != nil || len(lresp.Groups) != 1 || lresp.Groups[0].ProtocolType != "consumer" {
+		t.Fatalf("list by type CONSUMER: %v %+v, want the group with protocol type consumer", err, lresp)
+	}
+
+	// DescribeGroups describes only classic groups.
+	dreq := kmsg.NewPtrDescribeGroupsRequest()
+	dreq.Groups = []string{group}
+	dresp, err := dreq.RequestWith(ctx, admCl)
+	if err != nil || len(dresp.Groups) != 1 || dresp.Groups[0].ErrorCode != kerr.GroupIDNotFound.Code || dresp.Groups[0].ErrorMessage == nil {
+		t.Fatalf("describe a consumer group: %v %+v, want GROUP_ID_NOT_FOUND", err, dresp)
+	}
+
 	// ListGroupsByType with "classic" filter should NOT include our group.
 	classicListed, err := adm.ListGroupsByType(ctx, []string{"classic"})
 	if err != nil {
@@ -128,56 +150,81 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	if _, ok := classicListed[group]; ok {
 		t.Fatalf("group %s should not appear in classic-type list", group)
 	}
+
+	// DescribeConsumerGroups names the assigned topics.
+	described, err := adm.DescribeConsumerGroups(ctx, group)
+	if err != nil {
+		t.Fatalf("describe consumer groups failed: %v", err)
+	}
+	dg := described[group]
+	if got := dg.AssignedPartitions(); len(got) != 1 || len(got[topic]) != 1 {
+		t.Errorf("described assignment %v, want partition 0 of %s", got, topic)
+	}
 }
 
 // Test848DeleteGroup verifies that deleting a non-empty consumer group
-// returns NonEmptyGroup, and deleting an empty group succeeds.
+// returns NonEmptyGroup, and deleting an empty group succeeds. A static
+// member that left at epoch -2 is still a member, as in Kafka.
 func Test848DeleteGroup(t *testing.T) {
 	t.Parallel()
-	topic := "t848-delete"
-	group := "g848-delete"
+	for _, tc := range []struct {
+		name       string
+		opts       []kgo.Opt
+		closedWant error
+	}{
+		{"dynamic", nil, nil},
+		{"static", []kgo.Opt{kgo.InstanceID("i")}, kerr.NonEmptyGroup},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t848-delete"
+			group := "g848-delete"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
-	produceNStrings(t, producer, topic, 10)
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+			producer := newClient848(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, producer, topic, 10)
 
-	consumer := newClient848(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
-	_ = consumeN(t, consumer, 10, 10*time.Second)
+			consumer := newClient848(t, c, append([]kgo.Opt{
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(group),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			}, tc.opts...)...)
+			_ = consumeN(t, consumer, 10, 10*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	adm := kadm.NewClient(newClient848(t, c))
+			adm := kadm.NewClient(newClient848(t, c))
 
-	// Deleting a non-empty group should fail.
-	_, err := adm.DeleteGroup(ctx, group)
-	if err == nil {
-		t.Fatal("expected error deleting non-empty group")
-	}
-	if !errors.Is(err, kerr.NonEmptyGroup) {
-		t.Fatalf("expected NonEmptyGroup error, got %v", err)
-	}
+			// Deleting a non-empty group should fail.
+			_, err := adm.DeleteGroup(ctx, group)
+			if err == nil {
+				t.Fatal("expected error deleting non-empty group")
+			}
+			if !errors.Is(err, kerr.NonEmptyGroup) {
+				t.Fatalf("expected NonEmptyGroup error, got %v", err)
+			}
 
-	// Close consumer (sends leave heartbeat), making the group empty.
-	consumer.Close()
+			// Close consumer (sends leave heartbeat).
+			consumer.Close()
 
-	// Deleting the now-empty group should succeed.
-	_, err = adm.DeleteGroup(ctx, group)
-	if err != nil {
-		t.Fatalf("expected successful delete of empty group, got %v", err)
-	}
+			_, err = adm.DeleteGroup(ctx, group)
+			if !errors.Is(err, tc.closedWant) {
+				t.Fatalf("delete after the consumer closed: got %v, want %v", err, tc.closedWant)
+			}
+			if tc.closedWant != nil {
+				return
+			}
 
-	// Verify group is gone.
-	listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
-	if err != nil {
-		t.Fatalf("list groups failed: %v", err)
-	}
-	if _, ok := listed[group]; ok {
-		t.Fatalf("group %s should not exist after deletion", group)
+			// Verify group is gone.
+			listed, err := adm.ListGroupsByType(ctx, []string{"consumer"})
+			if err != nil {
+				t.Fatalf("list groups failed: %v", err)
+			}
+			if _, ok := listed[group]; ok {
+				t.Fatalf("group %s should not exist after deletion", group)
+			}
+		})
 	}
 }
 
@@ -449,33 +496,79 @@ func Test848RangeAssignorContiguousBlocks(t *testing.T) {
 	poll1FromEachClient(t, 10*time.Second, c1, c2)
 }
 
-// Test848UnsupportedAssignor verifies that an unknown server assignor
-// name is rejected with UnsupportedAssignor.
-func Test848UnsupportedAssignor(t *testing.T) {
+// Test848HeartbeatValidation verifies that we reject a malformed
+// ConsumerGroupHeartbeat with Kafka's error, and that a rejected heartbeat
+// creates no group.
+func Test848HeartbeatValidation(t *testing.T) {
 	t.Parallel()
-	group := "g848-bad-assignor"
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
-
-	// Send a raw ConsumerGroupHeartbeat with an unknown assignor.
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"), BrokerConfigs(map[string]string{"group.consumer.max.size": "1"}))
 	cl := newClient848(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req := kmsg.NewConsumerGroupHeartbeatRequest()
-	req.Group = group
-	req.MemberEpoch = 0
-	req.RebalanceTimeoutMillis = 5000
-	req.ServerAssignor = new("nonexistent")
-	req.SubscribedTopicNames = []string{"t"}
-	// Joins must carry an empty (non-null) owned-partitions list; null is
-	// rejected with INVALID_REQUEST before assignor validation runs.
-	req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*kmsg.ConsumerGroupHeartbeatRequest)
+		want   *kerr.Error
+	}{
+		{"unsupported assignor", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.ServerAssignor = new("nonexistent") }, kerr.UnsupportedAssignor},
+		{"empty member id", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.MemberID = "" }, kerr.InvalidRequest},
+		{"empty group id", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.Group = "" }, kerr.InvalidRequest},
+		{"empty instance id", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.InstanceID = new("") }, kerr.InvalidRequest},
+		{"join without rebalance timeout", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.RebalanceTimeoutMillis = -1 }, kerr.InvalidRequest},
+		{"join without subscription", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.SubscribedTopicNames = nil }, kerr.InvalidRequest},
+		{"join with null owned partitions", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.Topics = nil }, kerr.InvalidRequest},
+		{"epoch below -2", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.MemberEpoch = -3 }, kerr.InvalidRequest},
+		{"invalid regex", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.SubscribedTopicRegex = new("(") }, kerr.InvalidRegularExpression},
+		{"heartbeat to a missing group", func(r *kmsg.ConsumerGroupHeartbeatRequest) { r.MemberEpoch = 3 }, kerr.GroupIDNotFound},
+	} {
+		req := kmsg.NewConsumerGroupHeartbeatRequest()
+		req.Group = "g848-validation-" + strings.ReplaceAll(tc.name, " ", "-")
+		req.MemberID = "m"
+		req.MemberEpoch = 0
+		req.RebalanceTimeoutMillis = 5000
+		req.SubscribedTopicNames = []string{"t"}
+		req.Topics = []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+		tc.mutate(&req)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("%s: request failed: %v", tc.name, err)
+		}
+		if err := kerr.ErrorForCode(resp.ErrorCode); !errors.Is(err, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
+		}
+		if g := c.GroupInfo(req.Group); g != nil {
+			t.Errorf("%s: the rejected heartbeat created group %q", tc.name, req.Group)
+		}
 	}
-	if err := kerr.ErrorForCode(resp.ErrorCode); !errors.Is(err, kerr.UnsupportedAssignor) {
-		t.Fatalf("expected UnsupportedAssignor, got %v", err)
+
+	// A transaction's commit makes an empty classic group, which a
+	// rejected join leaves classic.
+	stageTxnOffset(t, c, cl, "txn", "g848-staged", "t", 9)()
+	req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+	req.Group, req.MemberID, req.RebalanceTimeoutMillis = "g848-staged", "m", 5000
+	req.SubscribedTopicRegex, req.Topics = new("("), []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+	faultReq(t, cl, 0, req)
+	onGroup(t, c, "g848-staged", func(g *group) {
+		if g.typ != "classic" {
+			t.Errorf("after a rejected join, the empty group's type is %s, want classic", g.typ)
+		}
+	})
+
+	// Like Kafka, a full group answers a member it does not know with
+	// GROUP_MAX_SIZE_REACHED, whatever the member's epoch.
+	beat := func(member string, epoch int32) int16 {
+		hb := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+		hb.Group, hb.MemberID, hb.MemberEpoch, hb.RebalanceTimeoutMillis = "g848-full", member, epoch, 5000
+		hb.SubscribedTopicNames, hb.Topics = []string{"t"}, []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+		return faultReq(t, cl, 0, hb).(*kmsg.ConsumerGroupHeartbeatResponse).ErrorCode
+	}
+	if code := beat("m", 0); code != 0 {
+		t.Fatalf("join answered %v", kerr.ErrorForCode(code))
+	}
+	if code := beat("x", 3); code != kerr.GroupMaxSizeReached.Code {
+		t.Errorf("unknown member of a full group: got %v, want GROUP_MAX_SIZE_REACHED", kerr.ErrorForCode(code))
 	}
 }
 
@@ -776,8 +869,9 @@ func Test848CooperativeRevocationDuringConsumption(t *testing.T) {
 // fences a member that does not complete partition revocation in time.
 // Member B joins via raw kmsg so we control exactly when it heartbeats.
 // After a rebalance is triggered, we send B one heartbeat (gets the
-// revocation instruction and schedules the rebalance timeout), then stop.
-// The rebalance timeout fires and fences B.
+// revocation instruction and schedules the rebalance timeout), then keep
+// heartbeating without releasing anything. The heartbeats must not push
+// the timeout back: it fires and fences B.
 func Test848RebalanceTimeout(t *testing.T) {
 	t.Parallel()
 	topic := "t848-rebal-timeout"
@@ -805,6 +899,7 @@ func Test848RebalanceTimeout(t *testing.T) {
 	ctx := context.Background()
 	join := kmsg.NewConsumerGroupHeartbeatRequest()
 	join.Group = group
+	join.MemberID = "b-" + group
 	join.MemberEpoch = 0
 	join.RebalanceTimeoutMillis = 500
 	join.ServerAssignor = new("uniform")
@@ -931,14 +1026,22 @@ func Test848RebalanceTimeout(t *testing.T) {
 		t.Fatalf("B full heartbeat error: %v", kerr.ErrorForCode(fullResp.ErrorCode))
 	}
 
-	// Don't send any more heartbeats for B. The rebalance timeout
-	// (500ms) should fire and fence B.
-	time.Sleep(800 * time.Millisecond)
-
-	dg := c.GroupInfo(group)
-	for _, m := range dg.Members {
-		if m.MemberID == bMemberID {
-			t.Fatalf("member B (%s) should have been fenced by rebalance timeout, but is still in group (state=%s)", bMemberID, dg.State)
+	// B keeps heartbeating, still reporting the partitions it was told
+	// to revoke. The rebalance timeout (500ms) should fire anyway and
+	// fence B, which its next heartbeat sees.
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+		resp, err := full.RequestWith(ctx, raw)
+		if err != nil {
+			t.Fatalf("B heartbeat: %v", err)
+		}
+		if resp.ErrorCode == kerr.UnknownMemberID.Code {
+			break
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("B heartbeat error: %v", kerr.ErrorForCode(resp.ErrorCode))
+		}
+		if time.Since(start) > 2*time.Second {
+			t.Fatalf("member B (%s) is still in the group 2s after its 500ms rebalance timeout started (state=%s)", bMemberID, c.GroupInfo(group).State)
 		}
 	}
 }
@@ -961,11 +1064,12 @@ func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch 
 	return resp
 }
 
-// TestTxnInitProducerIDStaleEpochRecovery verifies that a client can
+// TestTxnInitProducerID verifies that a client can
 // recover after a transaction timeout bumps the epoch. The client
 // sends InitProducerID with its stale epoch and should get a new
-// valid epoch back - not INVALID_PRODUCER_EPOCH.
-func TestTxnInitProducerIDStaleEpochRecovery(t *testing.T) {
+// valid epoch back - not INVALID_PRODUCER_EPOCH. It also checks how
+// InitProducerID matches the request's producer ID to the transactional ID.
+func TestTxnInitProducerID(t *testing.T) {
 	t.Parallel()
 
 	c := newCluster(t, NumBrokers(1))
@@ -996,12 +1100,45 @@ func TestTxnInitProducerIDStaleEpochRecovery(t *testing.T) {
 
 	// Now try to recover with the STALE epoch (the original one).
 	// This is the scenario that used to cause an infinite retry loop.
-	resp3 := initProducerID(t, cl, "txid-stale", pid, epoch, 60000)
+	// The re-init also sets the new transaction timeout.
+	resp3 := initProducerID(t, cl, "txid-stale", pid, epoch, 30000)
 	if resp3.ErrorCode != 0 {
 		t.Fatalf("stale recovery should succeed, got: %v", kerr.ErrorForCode(resp3.ErrorCode))
 	}
 	if resp3.ProducerEpoch <= serverEpoch {
 		t.Fatalf("expected epoch > %d after stale recovery, got %d", serverEpoch, resp3.ProducerEpoch)
+	}
+	var timeout int32
+	c.admin(func() { timeout = c.pids.byTxid["txid-stale"].txTimeout })
+	if timeout != 30000 {
+		t.Fatalf("expected timeout 30000 after re-init, got %d", timeout)
+	}
+
+	// The producer ID of another transactional ID is fenced:
+	// PRODUCER_FENCED from v4, INVALID_PRODUCER_EPOCH below.
+	if code := initProducerID(t, cl, "txid-stale-other", -1, -1, 60000).ErrorCode; code != 0 {
+		t.Fatalf("init other: %v", kerr.ErrorForCode(code))
+	}
+	if code := initProducerID(t, cl, "txid-stale-other", pid, 0, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+		t.Fatalf("another ID's producer: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+	}
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(22, 3) // InitProducerID key = 22
+	if code := initProducerID(t, newPlainClient(t, c, kgo.MaxVersions(v)), "txid-stale-other", pid, 0, 60000).ErrorCode; code != kerr.InvalidProducerEpoch.Code {
+		t.Fatalf("another ID's producer at v3: got %v, want INVALID_PRODUCER_EPOCH", kerr.ErrorForCode(code))
+	}
+
+	// A transactional ID we do not know (here, as if it expired) gets a
+	// fresh producer ID, whatever the request carries.
+	resp4 := initProducerID(t, cl, "txid-stale-expired", pid, resp3.ProducerEpoch, 60000)
+	if resp4.ErrorCode != 0 || resp4.ProducerID == pid || resp4.ProducerEpoch != 0 {
+		t.Fatalf("unknown ID: got %v, producer ID %d epoch %d, want a fresh producer ID at epoch 0",
+			kerr.ErrorForCode(resp4.ErrorCode), resp4.ProducerID, resp4.ProducerEpoch)
+	}
+
+	// A producer ID without an epoch is an invalid request.
+	if code := initProducerID(t, cl, "txid-stale", pid, -1, 60000).ErrorCode; code != kerr.InvalidRequest.Code {
+		t.Fatalf("producer ID without epoch: got %v, want INVALID_REQUEST", kerr.ErrorForCode(code))
 	}
 }
 
@@ -1033,9 +1170,15 @@ func TestTxnInitProducerIDAbortOngoing(t *testing.T) {
 	// it must abort the in-flight transaction before returning a
 	// new PID.
 	resp := initProducerID(t, cl, "txid-abort-ongoing", -1, -1, 60000)
-	if resp.ErrorCode != 0 {
-		t.Fatalf("reinit error: %v", kerr.ErrorForCode(resp.ErrorCode))
+	if resp.ErrorCode != 0 || resp.ProducerEpoch != 2 {
+		t.Fatalf("reinit: got %v epoch %d, want epoch 2", kerr.ErrorForCode(resp.ErrorCode), resp.ProducerEpoch)
 	}
+	// The abort fences the producer, which was at epoch 0.
+	c.admin(func() {
+		if pw, _ := c.pids.byTxid["txid-abort-ongoing"].windows.getp(topic, 0); pw == nil || pw.epoch != 1 {
+			t.Errorf("after the abort: got window %+v, want epoch 1", pw)
+		}
+	})
 
 	// The original txnCl's transaction should be aborted. Consume
 	// with read_committed and verify no records are visible.
@@ -1131,7 +1274,12 @@ func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
 	epoch := initResp.ProducerEpoch
 
 	// First produce: sequence 0, should succeed.
-	p1 := produceRawV11(t, cl, topic, rawBatch(0, pid, epoch, 0, kvRecord()))
+	b1 := rawBatch(0, pid, epoch, 0, kvRecord())
+	var orig kmsg.RecordBatch
+	if err := orig.ReadFrom(b1); err != nil {
+		t.Fatal(err)
+	}
+	p1 := produceRawV11(t, cl, topic, b1)
 	if p1.ErrorCode != 0 {
 		t.Fatalf("produce 1 error: %v", kerr.ErrorForCode(p1.ErrorCode))
 	}
@@ -1147,6 +1295,11 @@ func TestProduceDuplicateReturnsOriginalOffset(t *testing.T) {
 	}
 	if p2.BaseOffset != origOffset {
 		t.Fatalf("dup produce should return original offset %d, got %d", origOffset, p2.BaseOffset)
+	}
+	// Like Kafka, the duplicate answers the original batch's max
+	// timestamp as its LogAppendTime, even on a CreateTime topic.
+	if p2.LogAppendTime != orig.MaxTimestamp {
+		t.Errorf("dup produce LogAppendTime %d, want the original batch's %d", p2.LogAppendTime, orig.MaxTimestamp)
 	}
 }
 
@@ -1250,11 +1403,22 @@ func TestTxnAddOffsetsWithoutGroup(t *testing.T) {
 	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != want.Code {
 		t.Fatalf("expected %s, got: %v", want.Message, kerr.ErrorForCode(ec))
 	}
+
+	// A v4 commit for a group the transaction does not have is refused
+	// and creates no group.
+	v4 := kversion.Stable()
+	v4.SetMaxKeyVersion(int16(kmsg.TxnOffsetCommit), 4)
+	ocReq.Group = "other-group"
+	if ocResp, err = ocReq.RequestWith(ctx, newPlainClient(t, c, kgo.MaxVersions(v4))); err != nil {
+		t.Fatal(err)
+	}
+	if ec := ocResp.Topics[0].Partitions[0].ErrorCode; ec != kerr.InvalidTxnState.Code || c.GroupInfo("other-group") != nil {
+		t.Errorf("v4 commit for a group outside the transaction: got %v, group %+v; want INVALID_TXN_STATE and no group", kerr.ErrorForCode(ec), c.GroupInfo("other-group"))
+	}
 }
 
 // TestTxnDescribeTransactions verifies that DescribeTransactions
-// returns correct state for both ongoing and empty (completed)
-// transactions.
+// returns correct state for empty, ongoing, and completed transactions.
 func TestTxnDescribeTransactions(t *testing.T) {
 	t.Parallel()
 	topic := "t-describe-txn"
@@ -1290,6 +1454,9 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	}
 	if st.ProducerID != pid {
 		t.Fatalf("expected pid %d, got %d", pid, st.ProducerID)
+	}
+	if st.StartTimestamp != -1 {
+		t.Fatalf("expected start -1 before transaction, got %d", st.StartTimestamp)
 	}
 
 	// Start a transaction by adding a partition.
@@ -1338,6 +1505,7 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	if st.State != "Ongoing" {
 		t.Fatalf("expected Ongoing state during transaction, got %q", st.State)
 	}
+	start := st.StartTimestamp
 	if len(st.Topics) == 0 {
 		t.Fatal("expected at least one topic in ongoing transaction")
 	}
@@ -1369,7 +1537,8 @@ func TestTxnDescribeTransactions(t *testing.T) {
 		t.Fatalf("end txn error: %v", kerr.ErrorForCode(endResp.ErrorCode))
 	}
 
-	// After commit: state should be Empty again, no partitions.
+	// After commit: CompleteCommit, no partitions, and the start of the
+	// finished transaction.
 	descResp, err = descReq.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatalf("describe after commit: %v", err)
@@ -1378,11 +1547,23 @@ func TestTxnDescribeTransactions(t *testing.T) {
 	if st.ErrorCode != 0 {
 		t.Fatalf("describe error: %v", kerr.ErrorForCode(st.ErrorCode))
 	}
-	if st.State != "Empty" {
-		t.Fatalf("expected Empty state after commit, got %q", st.State)
+	if st.State != "CompleteCommit" {
+		t.Fatalf("expected CompleteCommit state after commit, got %q", st.State)
 	}
 	if len(st.Topics) != 0 {
 		t.Fatalf("expected no topics after commit, got %d", len(st.Topics))
+	}
+	if st.StartTimestamp != start {
+		t.Fatalf("expected start %d after commit, got %d", start, st.StartTimestamp)
+	}
+
+	// An empty transactional ID is an invalid request.
+	descReq.TransactionalIDs = []string{""}
+	if descResp, err = descReq.RequestWith(ctx, cl); err != nil {
+		t.Fatalf("describe empty ID: %v", err)
+	}
+	if code := descResp.TransactionStates[0].ErrorCode; code != kerr.InvalidRequest.Code {
+		t.Fatalf("describe empty ID: got %v, want INVALID_REQUEST", kerr.ErrorForCode(code))
 	}
 }
 
@@ -1462,22 +1643,196 @@ func TestTxnInitProducerIDMaxTimeout(t *testing.T) {
 	}
 }
 
-// TestProduceControlBatchRejected verifies that client-sent control batches
-// are rejected with INVALID_RECORD.
-func TestProduceControlBatchRejected(t *testing.T) {
+// TestProduceBatch verifies how the broker validates and
+// stamps a batch: client-sent control batches and records without a key on a
+// compacted topic are INVALID_RECORD, and the topic's timestamp type, not the
+// client's, decides the batch's type and the LogAppendTime we answer. Like
+// Kafka, we answer a corrupt batch or a failed append with no log start
+// offset.
+func TestProduceBatch(t *testing.T) {
 	t.Parallel()
-	topic := "t-control-batch"
+	for _, tc := range []struct {
+		name           string
+		configs        map[string]string
+		attrs          int16
+		rec            kmsg.Record
+		mod            func([]byte) []byte // changes the sealed batch
+		want           error
+		wantRecErrs    int
+		wantAppendTime bool
+		failWrite      bool // the append fails
+	}{
+		// Attributes 0x0030 is transactional plus the control bit.
+		{name: "control", attrs: 0x0030, rec: kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}, want: kerr.InvalidRecord},
+		{name: "keyless-compacted", configs: map[string]string{"cleanup.policy": "compact"}, rec: kmsg.Record{Value: []byte("v")}, want: kerr.InvalidRecord, wantRecErrs: 1},
+		{name: "keyed-compacted", configs: map[string]string{"cleanup.policy": "compact,delete"}, rec: kvRecord()},
+		{name: "log-append-time", configs: map[string]string{"message.timestamp.type": "LogAppendTime"}, rec: kmsg.Record{Key: []byte("k"), Value: []byte("v"), TimestampDelta: 5}, wantAppendTime: true},
+		// 0x0008 is the client asking for LogAppendTime on a
+		// CreateTime topic.
+		{name: "client-append-time", attrs: 0x0008, rec: kvRecord()},
+		{name: "crc", rec: kvRecord(), mod: func(b []byte) []byte { b[len(b)-1] ^= 1; return b }, want: kerr.CorruptMessage},
+		{name: "first-offset", rec: kvRecord(), mod: func(b []byte) []byte { b[7] = 1; return b }, want: kerr.InvalidRecord},
+		{name: "last-offset-delta", rec: kvRecord(), mod: func(b []byte) []byte { b[26] = 1; return sealBatch(b) }, want: kerr.InvalidRecord},
+		{name: "append-fails", rec: kvRecord(), want: kerr.KafkaStorageError, failWrite: true},
+		// Byte 61 starts the record: a length varint of 63 runs past
+		// the batch, and one byte more than its fields take pads it.
+		{name: "record-length", configs: map[string]string{"cleanup.policy": "compact"}, rec: kvRecord(), mod: func(b []byte) []byte { b[61] = 0x7e; return sealBatch(b) }, want: kerr.InvalidRecord},
+		{name: "record-padding", configs: map[string]string{"cleanup.policy": "compact"}, rec: kvRecord(), mod: func(b []byte) []byte { b[61] += 2; return sealBatch(append(b, 0)) }, want: kerr.InvalidRecord},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic := "t-produce-validate-" + tc.name
+			c := newCluster(t, NumBrokers(1))
+			if err := c.CreateTopic(topic, 1, tc.configs); err != nil {
+				t.Fatal(err)
+			}
+			v := kversion.Stable()
+			v.SetMaxKeyVersion(0, 11)
+			cl := newPlainClient(t, c, kgo.MaxVersions(v))
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	v := kversion.Stable()
-	v.SetMaxKeyVersion(0, 11)
-	cl := newPlainClient(t, c, kgo.MaxVersions(v))
+			// A transactional batch needs a transactional ID.
+			pid := int64(-1)
+			var txid []string
+			if tc.attrs&0x0010 != 0 {
+				pid, txid = 1, []string{"txid-" + tc.name}
+			}
+			if tc.failWrite {
+				c.admin(func() { c.fs.(*memFS).failNextWrite = &testError{"injected"} })
+			}
+			before := time.Now().UnixMilli()
+			batch := rawBatch(tc.attrs, pid, 0, -1, tc.rec)
+			if tc.mod != nil {
+				batch = tc.mod(batch)
+			}
+			p := produceRawV11(t, cl, topic, batch, txid...)
+			if err := kerr.ErrorForCode(p.ErrorCode); err != tc.want {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			wantStart := int64(0)
+			if tc.want == kerr.CorruptMessage || tc.want == kerr.KafkaStorageError {
+				wantStart = -1
+			}
+			if p.LogStartOffset != wantStart {
+				t.Errorf("got log start offset %d, want %d", p.LogStartOffset, wantStart)
+			}
+			if len(p.ErrorRecords) != tc.wantRecErrs {
+				t.Errorf("got %d record errors, want %d", len(p.ErrorRecords), tc.wantRecErrs)
+			}
+			if tc.want != nil {
+				return
+			}
+			if tc.wantAppendTime && p.LogAppendTime < before || !tc.wantAppendTime && p.LogAppendTime != -1 {
+				t.Errorf("got LogAppendTime %d, want it set %v", p.LogAppendTime, tc.wantAppendTime)
+			}
 
-	// Attributes 0x0030 is transactional plus the control bit.
-	rec := kmsg.Record{Key: []byte{0, 0, 0, 1}, Value: []byte{}}
-	errCode := produceRawV11(t, cl, topic, rawBatch(0x0030, 1, 0, -1, rec)).ErrorCode
-	if errCode != kerr.InvalidRecord.Code {
-		t.Fatalf("expected INVALID_RECORD for control batch, got: %v", kerr.ErrorForCode(errCode))
+			// The stored batch must still pass its CRC, and carry
+			// the topic's timestamp type.
+			var (
+				stored *partBatch
+				err    error
+			)
+			c.admin(func() {
+				pd, _ := c.data.tps.getp(topic, 0)
+				stored, err = c.readBatchFull(pd, 0, &pd.segments[0].index[0])
+			})
+			if err != nil {
+				t.Fatalf("reading the stored batch: %v", err)
+			}
+			if got := stored.Attributes&0x0008 != 0; got != tc.wantAppendTime {
+				t.Errorf("stored batch has the LogAppendTime bit %v, want %v", got, tc.wantAppendTime)
+			}
+			// Compaction keeps a LogAppendTime batch's max timestamp.
+			if got := rebuildBatch(stored, []kmsg.Record{{TimestampDelta: 5}}).MaxTimestamp; tc.wantAppendTime && got != stored.MaxTimestamp {
+				t.Errorf("compacted batch's max timestamp: got %d, want the append time %d", got, stored.MaxTimestamp)
+			}
+			// Every record of a LogAppendTime batch lists at the
+			// batch's time.
+			lo := listOffsetsReq(topic, 0)
+			lo.Topics[0].Partitions[0].Timestamp = -3 // the max timestamp
+			if lp := faultReq(t, cl, 0, lo).(*kmsg.ListOffsetsResponse).Topics[0].Partitions[0]; lp.Offset != 0 || lp.Timestamp != stored.MaxTimestamp {
+				t.Errorf("listing the max timestamp: got offset %d at %d, want 0 at %d", lp.Offset, lp.Timestamp, stored.MaxTimestamp)
+			}
+		})
+	}
+}
+
+// TestConnectionClose verifies that we close a connection as Kafka does: on
+// a request key we do not know, and on an acks=0 produce with a partition
+// error. An acks=0 client reads no response, so the close is how it learns
+// to refresh its metadata.
+func TestConnectionClose(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
+	produce := func(topic string, attrs int16) []byte {
+		req := kmsg.NewPtrProduceRequest()
+		req.Version = 9 // by name
+		req.Acks = 0
+		rt := kmsg.NewProduceRequestTopic()
+		rt.Topic = topic
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Records = rawBatch(attrs, -1, -1, -1, kvRecord())
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return kmsg.NewRequestFormatter().AppendRequest(nil, req, 1)
+	}
+	for _, tc := range []struct {
+		name      string
+		frame     []byte
+		wantClose bool
+	}{
+		// size, key 9999, version 0, correlation ID 1, null client ID
+		{"unknown key", []byte{0, 0, 0, 10, 0x27, 0x0f, 0, 0, 0, 0, 0, 1, 0xff, 0xff}, true},
+		{"acks=0 to a missing topic", produce("missing", 0), true},
+		{"acks=0 transactional without a transactional ID", produce("t", 0x0010), true},
+		{"acks=0", produce("t", 0), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", c.ListenAddrs()[0], 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			// We handle one request at a time per connection, so the
+			// ApiVersions after the frame is answered only if the
+			// frame left the connection open.
+			frames := append(tc.frame, kmsg.NewRequestFormatter().AppendRequest(nil, kmsg.NewPtrApiVersionsRequest(), 2)...)
+			if _, err := conn.Write(frames); err != nil {
+				t.Fatal(err)
+			}
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, err = conn.Read(make([]byte, 1))
+			if closed := errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET); closed != tc.wantClose || !closed && err != nil {
+				t.Errorf("read after the frame: %v, want the connection closed %v", err, tc.wantClose)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := newPlainClient(t, c).Ping(ctx); err != nil {
+		t.Fatalf("cluster stopped serving: %v", err)
+	}
+
+	// RemoveNode closes the removed broker's connections, as a broker
+	// shutdown does. An answer shows the broker took this connection.
+	c2 := newCluster(t, NumBrokers(2))
+	conn, err := net.DialTimeout("tcp", c2.ListenAddrs()[0], 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(kmsg.NewRequestFormatter().AppendRequest(nil, kmsg.NewPtrApiVersionsRequest(), 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.RemoveNode(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, conn); err != nil && !errors.Is(err, syscall.ECONNRESET) {
+		t.Errorf("reading the removed broker's connection: %v, want it closed", err)
 	}
 }
 
@@ -1504,6 +1859,18 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	pid := resp.ProducerID
 	epoch := resp.ProducerEpoch
 
+	// Before the partition is in the transaction, a v11 transactional
+	// produce is TRANSACTION_ABORTABLE, with no log start offset.
+	if p := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during"); p.ErrorCode != kerr.TransactionAbortable.Code || p.LogStartOffset != -1 {
+		t.Fatalf("transactional produce before AddPartitionsToTxn: got %v with log start offset %d, want TRANSACTION_ABORTABLE with -1", kerr.ErrorForCode(p.ErrorCode), p.LogStartOffset)
+	}
+	// Below v11, it is INVALID_TXN_STATE with Kafka's message.
+	v10 := kversion.Stable()
+	v10.SetMaxKeyVersion(0, 10)
+	if p := produceRawV11(t, newPlainClient(t, c, kgo.MaxVersions(v10)), topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during"); p.ErrorCode != kerr.InvalidTxnState.Code || p.ErrorMessage == nil || *p.ErrorMessage != "Partition was not added to the transaction" {
+		t.Fatalf("v10 transactional produce before AddPartitionsToTxn: got %v with message %v, want INVALID_TXN_STATE with Kafka's message", kerr.ErrorForCode(p.ErrorCode), p.ErrorMessage)
+	}
+
 	// Start a transaction by adding a partition.
 	addReq := kmsg.NewAddPartitionsToTxnRequest()
 	addReq.TransactionalID = "txid-non-txn-during"
@@ -1522,7 +1889,7 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	if errCode := produceRawV11(t, cl, added, rawBatch(0, pid, epoch, 0, kvRecord())).ErrorCode; errCode != 0 {
 		t.Fatalf("non-txn produce to a partition with no txn records: %v", kerr.ErrorForCode(errCode))
 	}
-	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord())).ErrorCode; errCode != 0 {
+	if errCode := produceRawV11(t, cl, topic, rawBatch(0x0010, pid, epoch, 0, kvRecord()), "txid-non-txn-during").ErrorCode; errCode != 0 {
 		t.Fatalf("transactional produce: %v", kerr.ErrorForCode(errCode))
 	}
 
@@ -1534,38 +1901,56 @@ func TestTxnNonTransactionalProduceDuringTx(t *testing.T) {
 	}
 }
 
-// TestTxnFencedEpochProduce verifies that a transactional batch from a fenced
-// epoch is rejected before its partition is added, so it does not open a
-// transaction for the producer that fenced it.
+// TestTxnFencedEpochProduce verifies that a transactional batch the
+// coordinator rejects (a fenced epoch, a producer ID that is not the
+// request's transactional ID's) is rejected before its partition is added,
+// so it does not open a transaction for the producer that fenced it.
 func TestTxnFencedEpochProduce(t *testing.T) {
 	t.Parallel()
-	const topic, txid = "t-txn-fenced-epoch", "txid-fenced-epoch"
+	const topic, txid, otherTxid = "t-txn-fenced-epoch", "txid-fenced-epoch", "txid-fenced-epoch-other"
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	old := initProducerID(t, cl, txid, -1, -1, 60000)
-	initProducerID(t, cl, txid, -1, -1, 60000)
+	cur := initProducerID(t, cl, txid, -1, -1, 60000)
+	other := initProducerID(t, cl, otherTxid, -1, -1, 60000)
 
-	req := kmsg.NewPtrProduceRequest()
-	req.Acks = -1
-	req.TimeoutMillis = 5000
-	rt := kmsg.NewProduceRequestTopic()
-	rt.TopicID = c.TopicInfo(topic).TopicID
-	rp := kmsg.NewProduceRequestTopicPartition()
-	rp.Records = rawBatch(0x0010, old.ProducerID, old.ProducerEpoch, 0, kvRecord())
-	rt.Partitions = append(rt.Partitions, rp)
-	req.Topics = append(req.Topics, rt)
-	resp, err := req.RequestWith(context.Background(), cl)
-	if err != nil {
-		t.Fatalf("produce: %v", err)
-	}
-	if code := resp.Topics[0].Partitions[0].ErrorCode; code != kerr.InvalidProducerEpoch.Code {
-		t.Fatalf("got %v, want INVALID_PRODUCER_EPOCH", kerr.ErrorForCode(code))
+	for _, tc := range []struct {
+		name  string
+		txid  *string
+		pid   int64
+		epoch int16
+		want  int16
+	}{
+		{"fenced-epoch", new(txid), old.ProducerID, old.ProducerEpoch, kerr.InvalidProducerEpoch.Code},
+		{"no-transactional-id", nil, cur.ProducerID, cur.ProducerEpoch, kerr.TransactionalIDAuthorizationFailed.Code},
+		{"other-ids-producer", new(txid), other.ProducerID, other.ProducerEpoch, kerr.InvalidProducerIDMapping.Code},
+		// An expired transactional ID: kgo recovers through
+		// InitProducerID with this producer ID.
+		{"unknown-producer", new(txid), cur.ProducerID ^ 1, 0, kerr.InvalidProducerIDMapping.Code},
+	} {
+		req := kmsg.NewPtrProduceRequest()
+		req.TransactionID = tc.txid
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		rt := kmsg.NewProduceRequestTopic()
+		rt.TopicID = c.TopicInfo(topic).TopicID
+		rp := kmsg.NewProduceRequestTopicPartition()
+		rp.Records = rawBatch(0x0010, tc.pid, tc.epoch, 0, kvRecord())
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("%s: produce: %v", tc.name, err)
+		}
+		if code := resp.Topics[0].Partitions[0].ErrorCode; code != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, kerr.ErrorForCode(code), kerr.ErrorForCode(tc.want))
+		}
 	}
 	var open bool
-	c.admin(func() { open = c.pids.byTxid[txid].inTx })
+	c.admin(func() { open = c.pids.byTxid[txid].inTx || c.pids.byTxid[otherTxid].inTx })
 	if open {
-		t.Fatal("the fenced batch opened a transaction")
+		t.Fatal("a rejected batch opened a transaction")
 	}
 }
 
@@ -1636,7 +2021,7 @@ func TestProduceUnknownProducerIDPre360(t *testing.T) {
 			// seen this producer, as a producer whose topic was
 			// deleted and recreated under it does.
 			batch := rawBatch(attrs, initResp.ProducerID, initResp.ProducerEpoch, 7, kvRecord())
-			if got := produceRawV11(t, cl, topic, batch).ErrorCode; got != test.want {
+			if got := produceRawV11(t, cl, topic, batch, txid).ErrorCode; got != test.want {
 				t.Fatalf("got %v, want %v", kerr.ErrorForCode(got), kerr.ErrorForCode(test.want))
 			}
 		})
@@ -1744,7 +2129,8 @@ func TestProduceNeverWrittenPartitionFirstSeq(t *testing.T) {
 // TestProduceEpochPerPartition verifies that producer epochs are checked per
 // partition, as Kafka keeps producer state per partition: after an idempotent
 // producer bumps its epoch on one partition, another accepts the old epoch
-// until it sees the new one.
+// until it sees the new one. The last steps check that sequences wrap from
+// math.MaxInt32 to 0.
 func TestProduceEpochPerPartition(t *testing.T) {
 	t.Parallel()
 	const a, b = "t-epoch-per-partition-a", "t-epoch-per-partition-b"
@@ -1752,19 +2138,28 @@ func TestProduceEpochPerPartition(t *testing.T) {
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, a, b))
 	cl := newPlainClient(t, c)
 	pid, epoch := initIdempotentPID(t, cl)
+	otherPID, otherEpoch := initIdempotentPID(t, cl)
 	for i, s := range []struct {
 		topic string
+		other bool // from a second producer
 		epoch int16
 		seq   int32
 		want  int16
 	}{
-		{a, epoch, 0, 0},
-		{b, epoch, 0, 0},
-		{a, epoch + 1, 0, 0},
-		{b, epoch, 1, 0},
-		{a, epoch, 1, kerr.InvalidProducerEpoch.Code},
+		{a, false, epoch, 0, 0},
+		{b, false, epoch, 0, 0},
+		{a, false, epoch + 1, 0, 0},
+		{b, false, epoch, 1, 0},
+		{a, false, epoch, 1, kerr.InvalidProducerEpoch.Code},
+		{a, true, otherEpoch, math.MaxInt32 - 1, 0},
+		{a, true, otherEpoch, math.MaxInt32, 0},
+		{a, true, otherEpoch, 0, 0},
 	} {
-		if got := idempotentProduceRaw(t, c, cl, s.topic, pid, s.epoch, s.seq); got != s.want {
+		p := pid
+		if s.other {
+			p = otherPID
+		}
+		if got := idempotentProduceRaw(t, c, cl, s.topic, p, s.epoch, s.seq); got != s.want {
 			t.Fatalf("step %d: got %v, want %v", i, kerr.ErrorForCode(got), kerr.ErrorForCode(s.want))
 		}
 	}
@@ -2018,19 +2413,35 @@ func TestClassicIncompatibleProtocolRejected(t *testing.T) {
 
 // TestClassicPendingSyncTimeout verifies that members who receive
 // JoinGroup responses but don't send SyncGroup within the rebalance
-// timeout are removed and a new rebalance is triggered.
+// timeout are removed and a new rebalance is triggered, also after the
+// leader's sync has made the group Stable.
 func TestClassicPendingSyncTimeout(t *testing.T) {
 	t.Parallel()
 	topic := "t-pending-sync"
-	group := "g-pending-sync"
+	groupID := "g-pending-sync"
 
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
+	// waitGone waits until member is not in groupID. Members have a 30s
+	// session timeout, so only the pending sync timer removes one in
+	// time.
+	waitGone := func(groupID, member string) {
+		for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+			dg := c.GroupInfo(groupID)
+			if dg == nil || !slices.ContainsFunc(dg.Members, func(m GroupMember) bool { return m.MemberID == member }) {
+				return
+			}
+			if time.Since(start) > 5*time.Second {
+				t.Fatalf("member %s is still in group %s: %+v", member, groupID, dg)
+			}
+		}
+	}
+
 	// Member A joins with a short rebalance timeout.
 	joinA := kmsg.NewJoinGroupRequest()
-	joinA.Group = group
+	joinA.Group = groupID
 	joinA.SessionTimeoutMillis = 30000
 	joinA.RebalanceTimeoutMillis = 500 // short
 	joinA.ProtocolType = "consumer"
@@ -2055,12 +2466,41 @@ func TestClassicPendingSyncTimeout(t *testing.T) {
 	}
 
 	// Don't send SyncGroup. Wait for the pending sync timeout to fire.
-	time.Sleep(800 * time.Millisecond)
+	waitGone(groupID, respA2.MemberID)
 
-	// The member should have been removed: the group is empty or gone.
-	if dg := c.GroupInfo(group); dg != nil && len(dg.Members) > 0 {
-		t.Fatalf("expected 0 members after pending sync timeout, got %d (state=%s)", len(dg.Members), dg.State)
+	// A and B join group2, and only A, the leader, syncs.
+	group2 := groupID + "-stable"
+	joinReq := func(memberID string) *kmsg.JoinGroupRequest {
+		req := classicJoinReq(group2, memberID)
+		req.RebalanceTimeoutMillis = 500
+		return req
 	}
+	a := faultReq(t, cl, 0, joinReq("")).(*kmsg.JoinGroupResponse)
+	a = faultReq(t, cl, 0, joinReq(a.MemberID)).(*kmsg.JoinGroupResponse)
+	clB := newPlainClient(t, c)
+	b := faultReq(t, clB, 0, joinReq("")).(*kmsg.JoinGroupResponse)
+	bJoined := make(chan *kmsg.JoinGroupResponse, 1)
+	go func() {
+		r, _ := joinReq(b.MemberID).RequestWith(ctx, clB)
+		bJoined <- r
+	}()
+	for start, parked := time.Now(), false; !parked; time.Sleep(5 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("B never waited in its join")
+		}
+		onGroup(t, c, group2, func(g *group) { parked = g.members[b.MemberID] != nil && !g.members[b.MemberID].waitingReply.empty() })
+	}
+	a = faultReq(t, cl, 0, joinReq(a.MemberID)).(*kmsg.JoinGroupResponse)
+	if r := <-bJoined; a.ErrorCode != 0 || r == nil || r.ErrorCode != 0 {
+		t.Fatalf("rejoin of A: %v, join of B: %+v", kerr.ErrorForCode(a.ErrorCode), r)
+	}
+	sync := kmsg.NewPtrSyncGroupRequest()
+	sync.Group, sync.MemberID, sync.Generation = group2, a.MemberID, a.Generation
+	sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
+	if r := faultReq(t, cl, 0, sync).(*kmsg.SyncGroupResponse); r.ErrorCode != 0 {
+		t.Fatalf("leader sync: %v", kerr.ErrorForCode(r.ErrorCode))
+	}
+	waitGone(group2, b.MemberID)
 }
 
 // TestClassicProtocolVoting verifies that protocol selection uses
@@ -2717,10 +3157,10 @@ func TestStaticMemberClassicFencing(t *testing.T) {
 	}
 }
 
-// TestStaticMemberClassicLeaveByInstance verifies that a static member
-// can be removed from a classic group by sending a LeaveGroup request
-// with the instanceID.
-func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
+// TestStaticMemberLeaveByInstance verifies that a LeaveGroup naming a static
+// member's instance ID removes the member from a classic or KIP-848 group,
+// and fences a member ID that no longer holds the instance.
+func TestStaticMemberLeaveByInstance(t *testing.T) {
 	t.Parallel()
 	topic := "static-classic-leave-inst"
 	group := "static-classic-leave-inst-group"
@@ -2741,16 +3181,28 @@ func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
 
 	waitStable(t, c, group, 1)
 
-	// Send a raw LeaveGroup with instanceID (no memberID).
 	raw := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// A member ID that no longer holds the instance is fenced.
+	staleReq := kmsg.NewPtrLeaveGroupRequest()
+	staleReq.Group = group
+	sm := kmsg.NewLeaveGroupRequestMember()
+	sm.MemberID, sm.InstanceID = "stale", &instanceID
+	staleReq.Members = append(staleReq.Members, sm)
+	staleResp, err := staleReq.RequestWith(ctx, raw)
+	if err != nil || len(staleResp.Members) != 1 || staleResp.Members[0].ErrorCode != kerr.FencedInstanceID.Code {
+		t.Fatalf("leave with a stale member ID: %v %+v, want FENCED_INSTANCE_ID", err, staleResp)
+	}
+
+	// Send a raw LeaveGroup with instanceID (no memberID).
 	leaveReq := kmsg.NewPtrLeaveGroupRequest()
 	leaveReq.Group = group
 	leaveReq.Version = 3
 	lm := kmsg.NewLeaveGroupRequestMember()
 	lm.InstanceID = &instanceID
 	leaveReq.Members = append(leaveReq.Members, lm)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	leaveResp, err := leaveReq.RequestWith(ctx, raw)
 	if err != nil {
 		t.Fatalf("leave request failed: %v", err)
@@ -2762,6 +3214,20 @@ func TestStaticMemberClassicLeaveByInstance(t *testing.T) {
 		if m.ErrorCode != 0 {
 			t.Fatalf("leave member error: %v", kerr.ErrorForCode(m.ErrorCode))
 		}
+		// Kafka echoes the member ID from the request.
+		if m.MemberID != "" {
+			t.Fatalf("leave answered member ID %q, want the request's empty one", m.MemberID)
+		}
+	}
+
+	// A KIP-848 member leaves by instance ID as well.
+	leaveReq.Group = group + "-848"
+	member848(ctx, t, raw, topic, leaveReq.Group, "m", &instanceID)("consumer join", 0)
+	if lr := faultReq(t, raw, 0, leaveReq).(*kmsg.LeaveGroupResponse); len(lr.Members) != 1 || lr.Members[0].ErrorCode != 0 {
+		t.Fatalf("leave of the consumer member by instance: %+v", lr.Members)
+	}
+	if g := c.GroupInfo(leaveReq.Group); g != nil && len(g.Members) != 0 {
+		t.Fatalf("the consumer member is still in the group: %+v", g.Members)
 	}
 }
 
@@ -2784,6 +3250,7 @@ func TestClassicStaticRejoinStable(t *testing.T) {
 	}
 	sync := kmsg.NewPtrSyncGroupRequest()
 	sync.Group, sync.MemberID, sync.InstanceID, sync.Generation = groupID, first.MemberID, join.InstanceID, first.Generation
+	sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
 	if _, err := sync.RequestWith(ctx, cl); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -2887,9 +3354,11 @@ func TestClassicStaticReplaceParkedSync(t *testing.T) {
 		return ch
 	}
 	waitGroup := func(cond func(g *group) bool) {
-		for done := false; !done; {
+		t.Helper()
+		waitFor(t, 5*time.Second, "the group never reached the state", func() (done bool) {
 			onGroup(t, c, groupID, func(g *group) { done = cond(g) })
-		}
+			return done
+		})
 	}
 	static := classicJoinReq(groupID, "")
 	static.InstanceID = kmsg.StringPtr("s")
@@ -2905,6 +3374,7 @@ func TestClassicStaticReplaceParkedSync(t *testing.T) {
 
 	sync := kmsg.NewPtrSyncGroupRequest()
 	sync.Group, sync.MemberID, sync.InstanceID, sync.Generation = groupID, s.MemberID, static.InstanceID, s.Generation
+	sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
 	synced := async(sync)
 	waitGroup(func(g *group) bool { return !g.members[s.MemberID].waitingReply.empty() })
 	var expired bool
@@ -2923,6 +3393,210 @@ func TestClassicStaticReplaceParkedSync(t *testing.T) {
 	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	classicJoin(rctx, t, cl, "leader rejoin after the replacement", groupID, leader)
+}
+
+// TestClassicGroupRequests verifies answers to classic group requests that
+// match Kafka and that no client flow above reaches.
+func TestClassicGroupRequests(t *testing.T) {
+	t.Parallel()
+	const topic = "t"
+
+	// commitReq is a simple commit of offset 3 for partition 0.
+	commitReq := func(c *Cluster, group string) *kmsg.OffsetCommitRequest {
+		req := kmsg.NewPtrOffsetCommitRequest()
+		req.Group, req.Generation = group, -1
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.Topic, rt.TopicID = topic, c.TopicInfo(topic).TopicID
+		rp := kmsg.NewOffsetCommitRequestTopicPartition()
+		rp.Offset = 3
+		rt.Partitions = append(rt.Partitions, rp)
+		req.Topics = append(req.Topics, rt)
+		return req
+	}
+	syncReq := func(memberID string, gen int32) *kmsg.SyncGroupRequest {
+		sync := kmsg.NewPtrSyncGroupRequest()
+		sync.Group, sync.MemberID, sync.Generation = "g", memberID, gen
+		sync.ProtocolType, sync.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
+		return sync
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client)
+	}{
+		{"a member of a missing group is unknown", func(_ context.Context, t *testing.T, _ *Cluster, cl *kgo.Client) {
+			hb := kmsg.NewPtrHeartbeatRequest()
+			hb.Group = "missing"
+			sync := syncReq("m", 0)
+			sync.Group = "missing"
+			leave := kmsg.NewPtrLeaveGroupRequest()
+			leave.Group = "missing"
+			leave.Members = []kmsg.LeaveGroupRequestMember{{MemberID: "m"}}
+			hr := faultReq(t, cl, 0, hb).(*kmsg.HeartbeatResponse)
+			sr := faultReq(t, cl, 0, sync).(*kmsg.SyncGroupResponse)
+			lr := faultReq(t, cl, 0, leave).(*kmsg.LeaveGroupResponse)
+			unknown := kerr.UnknownMemberID.Code
+			if hr.ErrorCode != unknown || sr.ErrorCode != unknown || lr.ErrorCode != 0 || len(lr.Members) != 1 || lr.Members[0].ErrorCode != unknown {
+				t.Fatalf("heartbeat %d, sync %d, leave %d %+v: want UNKNOWN_MEMBER_ID, per member for the leave", hr.ErrorCode, sr.ErrorCode, lr.ErrorCode, lr.Members)
+			}
+			fetch := kmsg.NewPtrOffsetFetchRequest()
+			fetch.Groups = []kmsg.OffsetFetchRequestGroup{{Group: "missing", MemberEpoch: -1}}
+			if fg := faultReq(t, cl, 0, fetch).(*kmsg.OffsetFetchResponse).Groups[0]; fg.ErrorCode != 0 || len(fg.Topics) != 0 {
+				t.Fatalf("fetching the offsets of a missing group: %+v, want none and no error", fg)
+			}
+			// From v5, a sync must name the protocol type and protocol.
+			sync.ProtocolType = nil
+			if sr := faultReq(t, cl, 0, sync).(*kmsg.SyncGroupResponse); sr.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+				t.Fatalf("sync without a protocol type: %v, want INCONSISTENT_GROUP_PROTOCOL", kerr.ErrorForCode(sr.ErrorCode))
+			}
+		}},
+
+		{"a classic join takes over an empty consumer group", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			hb := member848(ctx, t, cl, topic, "g", "m", nil)
+			hb("consumer join", 0)
+			if r := faultReq(t, cl, 0, classicJoinReq("g", "")).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.InconsistentGroupProtocol.Code {
+				t.Fatalf("classic join beside a consumer member: %v, want INCONSISTENT_GROUP_PROTOCOL", kerr.ErrorForCode(r.ErrorCode))
+			}
+			hb("consumer leave", -1)
+			faultReq(t, cl, 0, commitReq(c, "g"))
+			classicJoin(ctx, t, cl, "classic join", "g", "")
+			onGroup(t, c, "g", func(g *group) {
+				if g.typ != "classic" || !g.commits.checkp(topic, 0) {
+					t.Errorf("after the classic join: type %s, commits %v; want classic with the offset kept", g.typ, g.commits)
+				}
+			})
+		}},
+
+		{"a refused first join", func(_ context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			// Like Kafka, a new member's refused join keeps the
+			// group it created, and a join naming a member creates
+			// no group.
+			join := classicJoinReq("fresh", "")
+			join.Protocols = nil
+			if r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.InconsistentGroupProtocol.Code || c.GroupInfo("fresh") == nil {
+				t.Errorf("join without protocols to a new group: %v, group %+v; want INCONSISTENT_GROUP_PROTOCOL and an empty group", kerr.ErrorForCode(r.ErrorCode), c.GroupInfo("fresh"))
+			}
+			join = classicJoinReq("missing", "m")
+			join.Protocols = nil
+			if r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.UnknownMemberID.Code || r.MemberID != "m" || c.GroupInfo("missing") != nil {
+				t.Errorf("join naming member m to a missing group: %v for %q, group %+v; want UNKNOWN_MEMBER_ID for m and no group", kerr.ErrorForCode(r.ErrorCode), r.MemberID, c.GroupInfo("missing"))
+			}
+		}},
+
+		{"protocols in an empty group", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			m := classicJoin(ctx, t, cl, "join", "g", "")
+			leave := kmsg.NewPtrLeaveGroupRequest()
+			leave.Group = "g"
+			leave.Members = []kmsg.LeaveGroupRequestMember{{MemberID: m.MemberID}}
+			faultReq(t, cl, 0, leave)
+			join := classicJoinReq("g", "")
+			join.ProtocolType = "connect"
+			if r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse); r.ErrorCode != kerr.MemberIDRequired.Code {
+				t.Fatalf("join of a new protocol type into the empty group: %v, want MEMBER_ID_REQUIRED", kerr.ErrorForCode(r.ErrorCode))
+			}
+
+			// A group restored from disk has a protocol type and no
+			// protocols. A join with none must be refused before
+			// protocol selection.
+			faultReq(t, cl, 0, commitReq(c, "restored"))
+			onGroup(t, c, "restored", func(g *group) { g.protocolType = "consumer" })
+			join = classicJoinReq("restored", "")
+			join.Protocols = nil
+			for range 2 { // the second join names the member ID from the first
+				r := faultReq(t, cl, 0, join).(*kmsg.JoinGroupResponse)
+				if r.ErrorCode == kerr.InconsistentGroupProtocol.Code {
+					return
+				}
+				join.MemberID = r.MemberID
+			}
+			t.Fatal("a join with no protocols was not refused")
+		}},
+
+		{"a parked join or sync that its member replaces is answered", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			// Each parked request needs its own client: we answer
+			// one request at a time per connection. The client must
+			// not retry NOT_COORDINATOR.
+			async := func(req kmsg.Request) <-chan kmsg.Response {
+				ch := make(chan kmsg.Response, 1)
+				acl := newPlainClient(t, c)
+				go func() {
+					resp, _ := acl.Broker(0).Request(ctx, req)
+					ch <- resp
+				}()
+				return ch
+			}
+			parked := func(id string) {
+				for done := false; !done; time.Sleep(5 * time.Millisecond) {
+					if ctx.Err() != nil {
+						t.Fatalf("member %s never parked", id)
+					}
+					onGroup(t, c, "g", func(g *group) { done = g.members[id] != nil && !g.members[id].waitingReply.empty() })
+				}
+			}
+			a := classicJoin(ctx, t, cl, "a join", "g", "")
+			b := faultReq(t, cl, 0, classicJoinReq("g", "")).(*kmsg.JoinGroupResponse).MemberID
+			first := async(classicJoinReq("g", b))
+			parked(b)
+			second := async(classicJoinReq("g", b))
+			if r, _ := (<-first).(*kmsg.JoinGroupResponse); r == nil || r.ErrorCode != kerr.NotCoordinator.Code {
+				t.Fatalf("replaced join got %v, want NOT_COORDINATOR", r)
+			}
+			a = classicJoin(ctx, t, cl, "a rejoin", "g", a.MemberID)
+			if r, _ := (<-second).(*kmsg.JoinGroupResponse); r == nil || r.ErrorCode != 0 {
+				t.Fatalf("replacing join got %v", r)
+			}
+
+			first = async(syncReq(b, a.Generation))
+			parked(b)
+			second = async(syncReq(b, a.Generation))
+			if r, _ := (<-first).(*kmsg.SyncGroupResponse); r == nil || r.ErrorCode != kerr.NotCoordinator.Code {
+				t.Fatalf("replaced sync got %v, want NOT_COORDINATOR", r)
+			}
+			faultReq(t, cl, 0, syncReq(a.MemberID, a.Generation))
+			if r, _ := (<-second).(*kmsg.SyncGroupResponse); r == nil || r.ErrorCode != 0 {
+				t.Fatalf("replacing sync got %v", r)
+			}
+		}},
+
+		{"DescribeGroups during a rebalance", func(ctx context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			a := classicJoin(ctx, t, cl, "join", "g", "")
+			sync := syncReq(a.MemberID, a.Generation)
+			sync.GroupAssignment = []kmsg.SyncGroupRequestGroupAssignment{{MemberID: a.MemberID, MemberAssignment: []byte{1}}}
+			faultReq(t, cl, 0, sync)
+			onGroup(t, c, "g", func(g *group) { g.rebalance() })
+			describe := kmsg.NewPtrDescribeGroupsRequest()
+			describe.Groups = []string{"g"}
+			dg := faultReq(t, cl, 0, describe).(*kmsg.DescribeGroupsResponse).Groups[0]
+			if dg.State != "PreparingRebalance" || len(dg.Members) != 1 {
+				t.Fatalf("described %+v, want one member preparing a rebalance", dg)
+			}
+			// Kafka names the client by IP alone, after a slash.
+			if m := dg.Members[0]; string(m.MemberAssignment) != "\x01" || m.ClientHost != "/127.0.0.1" {
+				t.Fatalf("described member assignment %v, host %q; want the assignment and /127.0.0.1", m.MemberAssignment, m.ClientHost)
+			}
+		}},
+
+		{"deleting a group", func(_ context.Context, t *testing.T, c *Cluster, cl *kgo.Client) {
+			faultReq(t, cl, 0, commitReq(c, "g"))
+			commitTxn := stageTxnOffset(t, c, cl, "txn", "g", topic, 9)
+			del := kmsg.NewPtrDeleteGroupsRequest()
+			del.Groups = []string{"g", "g"}
+			if dr := faultReq(t, cl, 0, del).(*kmsg.DeleteGroupsResponse); len(dr.Groups) != 1 || dr.Groups[0].ErrorCode != 0 {
+				t.Fatalf("deleting g twice in one request: %+v, want it deleted and answered once", dr.Groups)
+			}
+			// The offset in the open transaction went with the group.
+			commitTxn()
+			if c.GroupInfo("g") != nil {
+				t.Fatal("committing the transaction brought the deleted group back")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, cl, ctx := newGuardCluster(t, SeedTopics(1, topic))
+			tc.run(ctx, t, c, cl)
+		})
+	}
 }
 
 // Test848FetchOffsetsStaleEpochRetry verifies that the kgo client retries
@@ -3106,6 +3780,24 @@ func TestElectLeaders(t *testing.T) {
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
+	// expectAll checks that resp answers nparts partitions, each with
+	// code.
+	expectAll := func(name string, resp *kmsg.ElectLeadersResponse, code int16, nparts int) {
+		t.Helper()
+		var n int
+		for _, rt := range resp.Topics {
+			for _, rp := range rt.Partitions {
+				n++
+				if rp.ErrorCode != code {
+					t.Errorf("%s: partition %d: expected %v, got %v", name, rp.Partition, kerr.ErrorForCode(code), kerr.ErrorForCode(rp.ErrorCode))
+				}
+			}
+		}
+		if n != nparts {
+			t.Errorf("%s: expected %d partitions, got %d", name, nparts, n)
+		}
+	}
+
 	// Record original leaders.
 	meta, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
 	if err != nil {
@@ -3138,13 +3830,7 @@ func TestElectLeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rt := range electResp.Topics {
-		for _, rp := range rt.Partitions {
-			if rp.ErrorCode != 0 {
-				t.Fatalf("partition %d error: %v", rp.Partition, kerr.ErrorForCode(rp.ErrorCode))
-			}
-		}
-	}
+	expectAll("elect 0 and 1", electResp, 0, 2)
 
 	// Verify leaders rotated and epochs bumped for 0 and 1.
 	meta2, err := kmsg.NewPtrMetadataRequest().RequestWith(ctx, cl)
@@ -3172,21 +3858,23 @@ func TestElectLeaders(t *testing.T) {
 		}
 	}
 
-	// Elect with unknown partition.
+	// Elect with an unknown partition and an unknown topic; Kafka's
+	// message names which one is missing.
 	electReq2 := kmsg.NewPtrElectLeadersRequest()
 	et2 := kmsg.NewElectLeadersRequestTopic()
 	et2.Topic = topic
 	et2.Partitions = []int32{99}
 	electReq2.Topics = append(electReq2.Topics, et2)
+	et2.Topic = "t-elect-missing"
+	electReq2.Topics = append(electReq2.Topics, et2)
 	electResp2, err := electReq2.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rt := range electResp2.Topics {
-		for _, rp := range rt.Partitions {
-			if rp.ErrorCode != kerr.UnknownTopicOrPartition.Code {
-				t.Fatalf("expected UnknownTopicOrPartition for p99, got %v", kerr.ErrorForCode(rp.ErrorCode))
-			}
+	expectAll("unknown partition", electResp2, kerr.UnknownTopicOrPartition.Code, 2)
+	for i, want := range []string{"No such partition as t-elect-leaders-99", "No such topic as t-elect-missing"} {
+		if got := electResp2.Topics[i].Partitions[0].ErrorMessage; got == nil || *got != want {
+			t.Errorf("unknown partition: topic %d: expected message %q, got %v", i, want, got)
 		}
 	}
 
@@ -3208,6 +3896,66 @@ func TestElectLeaders(t *testing.T) {
 	if totalElected < 3 {
 		t.Fatalf("expected at least 3 partitions elected, got %d", totalElected)
 	}
+
+	// UNCLEAN never needs an election, since every partition has a
+	// leader. Electing all partitions leaves them out but lists each topic.
+	before := c.LeaderFor(topic, 0)
+	unclean := kmsg.NewPtrElectLeadersRequest()
+	unclean.ElectionType = 1
+	unclean.Topics = append(unclean.Topics, et)
+	uresp, err := unclean.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectAll("unclean", uresp, kerr.ElectionNotNeeded.Code, 2)
+	if got := uresp.Topics[0].Partitions[0].ErrorMessage; got == nil || *got != "Leader election not needed for topic partition." {
+		t.Errorf("unclean: expected Kafka's message, got %v", got)
+	}
+	if after := c.LeaderFor(topic, 0); after != before {
+		t.Errorf("unclean: leader moved from %d to %d", before, after)
+	}
+	unclean.Topics = nil
+	if uresp, err = unclean.RequestWith(ctx, cl); err != nil {
+		t.Fatal(err)
+	}
+	if len(uresp.Topics) != 1 || len(uresp.Topics[0].Partitions) != 0 {
+		t.Errorf("unclean all: expected one topic with no partitions, got %+v", uresp.Topics)
+	}
+
+	// An unknown type, and a request-level fault, fail the request and
+	// every named partition; asking for all partitions answers none.
+	bad := kmsg.NewPtrElectLeadersRequest()
+	bad.ElectionType = 2
+	bad.Topics = append(bad.Topics, et)
+	bresp, err := bad.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bresp.ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("unknown type: expected INVALID_REQUEST, got %v", kerr.ErrorForCode(bresp.ErrorCode))
+	}
+	expectAll("unknown type", bresp, kerr.InvalidRequest.Code, 2)
+	if m := bresp.Topics[0].Partitions[0].ErrorMessage; m == nil || *m != "Unknown election type 2" {
+		t.Errorf("unknown type: got message %v, want Kafka's", m)
+	}
+
+	// A timed-out election of all partitions still elects, and answers
+	// no partitions.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, Err: kerr.RequestTimedOut})
+	before = c.LeaderFor(topic, 0)
+	tresp, err := kmsg.NewPtrElectLeadersRequest().RequestWith(ctx, cl)
+	if err != nil || tresp.ErrorCode != kerr.RequestTimedOut.Code || c.LeaderFor(topic, 0) == before {
+		t.Errorf("timed out all: err %v, code %v, leader %d before and after; want REQUEST_TIMED_OUT and a new leader", err, kerr.ErrorForCode(tresp.ErrorCode), before)
+	}
+	expectAll("timed out all", tresp, 0, 0)
+
+	h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, Count: -1, Err: kerr.ClusterAuthorizationFailed})
+	defer h.Remove()
+	fresp, err := electReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectAll("fault named", fresp, kerr.ClusterAuthorizationFailed.Code, 2)
 }
 
 func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
@@ -3317,8 +4065,71 @@ func TestIncrementalAlterConfigAppendSubtract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Resources[0].ErrorCode != kerr.InvalidRequest.Code {
-		t.Fatalf("expected InvalidRequest for APPEND on non-list config, got %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	if resp.Resources[0].ErrorCode != kerr.InvalidConfig.Code {
+		t.Fatalf("expected InvalidConfig for APPEND on non-list config, got %v", kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+	}
+
+	// APPEND adds only values not present, and on an unset config it
+	// starts from the default. Like Java's split, we drop trailing empty
+	// values.
+	for _, step := range []struct {
+		cfg  kmsg.IncrementalAlterConfigsRequestResourceConfig
+		want string
+	}{
+		{mkCfg("cleanup.policy", sp("delete,compact"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+		{mkCfg("cleanup.policy", nil, kmsg.IncrementalAlterConfigOpDelete), "delete"},
+		{mkCfg("cleanup.policy", sp("compact"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+		{mkCfg("cleanup.policy", sp("compact,"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+		{mkCfg("cleanup.policy", sp(",,"), kmsg.IncrementalAlterConfigOpAppend), "delete,compact"},
+	} {
+		resp, err = mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", step.cfg).RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Resources[0].ErrorCode != 0 {
+			t.Fatalf("op %d on cleanup.policy: %v", step.cfg.Op, kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+		}
+		if val := getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "cleanup.policy"); val == nil || *val != step.want {
+			t.Fatalf("after op %d: cleanup.policy is not %q", step.cfg.Op, step.want)
+		}
+	}
+
+	// A known topic config must parse as its type, a name we do not know
+	// is accepted, and a null value, a key named twice, or a resource
+	// listed twice is refused before anything applies.
+	for _, step := range []struct {
+		name string
+		req  *kmsg.IncrementalAlterConfigsRequest
+		want []int16
+	}{
+		{"bad value", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("retention.ms", sp("abc"), kmsg.IncrementalAlterConfigOpSet)), []int16{kerr.InvalidConfig.Code}},
+		{"unknown name", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("custom.thing", sp("abc"), kmsg.IncrementalAlterConfigOpSet)), []int16{0}},
+		{"null value", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("retention.ms", nil, kmsg.IncrementalAlterConfigOpSet)), []int16{kerr.InvalidRequest.Code}},
+		{"key twice", mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg",
+			mkCfg("retention.ms", sp("1"), kmsg.IncrementalAlterConfigOpSet),
+			mkCfg("retention.ms", nil, kmsg.IncrementalAlterConfigOpDelete),
+		), []int16{kerr.InvalidRequest.Code}},
+		{"resource twice", func() *kmsg.IncrementalAlterConfigsRequest {
+			req := mkReq(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", mkCfg("retention.ms", sp("1"), kmsg.IncrementalAlterConfigOpSet))
+			req.Resources = append(req.Resources, req.Resources[0])
+			return req
+		}(), []int16{kerr.InvalidRequest.Code, kerr.InvalidRequest.Code}},
+		{"empty topic", mkReq(kmsg.ConfigResourceTypeTopic, "", mkCfg("retention.ms", sp("1"), kmsg.IncrementalAlterConfigOpSet)), []int16{kerr.InvalidRequest.Code}},
+	} {
+		resp, err := step.req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int16
+		for _, r := range resp.Resources {
+			got = append(got, r.ErrorCode)
+		}
+		if !slices.Equal(got, step.want) {
+			t.Errorf("%s: got %v, want %v", step.name, got, step.want)
+		}
+	}
+	if val := getConfig(kmsg.ConfigResourceTypeTopic, "t-incr-cfg", "retention.ms"); val == nil || *val != "604800000" {
+		t.Error("refused alters changed retention.ms")
 	}
 
 	// APPEND on broker list config.
@@ -3400,6 +4211,210 @@ func TestApiVersionsSupportedFeatures(t *testing.T) {
 	if resp.FinalizedFeaturesEpoch < 0 {
 		t.Fatalf("expected a finalized features epoch, got %d", resp.FinalizedFeaturesEpoch)
 	}
+
+	// Below v4, a supported feature with min 0 is left out, because
+	// clients before 3.8 fail to parse it (KAFKA-17011).
+	cl37 := newPlainClient(t, c, kgo.MaxVersions(kversion.V3_7_0()))
+	resp, err = req.RequestWith(ctx, cl37)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Version != 3 {
+		t.Fatalf("ApiVersions went out at v%d, want v3", resp.Version)
+	}
+	if len(resp.SupportedFeatures) == 0 {
+		t.Fatal("v3 lists no supported features")
+	}
+	for _, f := range resp.SupportedFeatures {
+		if f.MinVersion == 0 {
+			t.Errorf("v3 lists %s with min 0", f.Name)
+		}
+	}
+}
+
+// DescribeCluster answers only a request for brokers, and authorized
+// operations list what Kafka supports for the resource type, only for a
+// resource answered without an error.
+func TestAuthorizedOperationsAndEndpointType(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
+	cl := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	offsets := kadm.Offsets{}
+	offsets.Add(kadm.Offset{Topic: "t", Partition: 0, At: 1})
+	if _, err := kadm.NewClient(cl).CommitOffsets(ctx, "g", offsets); err != nil {
+		t.Fatal(err)
+	}
+
+	ops := func(os ...kmsg.ACLOperation) (n int32) {
+		for _, o := range os {
+			n |= 1 << o
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		endpoint int8
+		code     int16
+		ops      int32
+	}{
+		{1, 0, ops(kmsg.ACLOperationCreate, kmsg.ACLOperationAlter, kmsg.ACLOperationDescribe, kmsg.ACLOperationClusterAction,
+			kmsg.ACLOperationDescribeConfigs, kmsg.ACLOperationAlterConfigs, kmsg.ACLOperationIdempotentWrite)},
+		{2, kerr.MismatchedEndpointType.Code, math.MinInt32},
+		{0, kerr.UnsupportedEndpointType.Code, math.MinInt32},
+	} {
+		req := kmsg.NewPtrDescribeClusterRequest()
+		req.EndpointType, req.IncludeClusterAuthorizedOperations = tc.endpoint, true
+		if r := faultReq(t, cl, 0, req).(*kmsg.DescribeClusterResponse); r.ErrorCode != tc.code || r.ClusterAuthorizedOperations != tc.ops {
+			t.Errorf("endpoint %d: got error %d with operations %b, want error %d with %b", tc.endpoint, r.ErrorCode, r.ClusterAuthorizedOperations, tc.code, tc.ops)
+		}
+	}
+	for _, tc := range []struct {
+		group string
+		code  int16
+		ops   int32
+	}{
+		{"g", 0, ops(kmsg.ACLOperationRead, kmsg.ACLOperationDelete, kmsg.ACLOperationDescribe, kmsg.ACLOperationDescribeConfigs, kmsg.ACLOperationAlterConfigs)},
+		{"missing", kerr.GroupIDNotFound.Code, math.MinInt32},
+	} {
+		req := kmsg.NewPtrDescribeGroupsRequest()
+		req.Groups, req.IncludeAuthorizedOperations = []string{tc.group}, true
+		if dg := faultReq(t, cl, 0, req).(*kmsg.DescribeGroupsResponse).Groups[0]; dg.ErrorCode != tc.code || dg.AuthorizedOperations != tc.ops {
+			t.Errorf("group %s: got error %d with operations %b, want error %d with %b", tc.group, dg.ErrorCode, dg.AuthorizedOperations, tc.code, tc.ops)
+		}
+	}
+	req := kmsg.NewPtrConsumerGroupDescribeRequest()
+	req.Groups, req.IncludeAuthorizedOperations = []string{"missing"}, true
+	if dg := faultReq(t, cl, 0, req).(*kmsg.ConsumerGroupDescribeResponse).Groups[0]; dg.ErrorCode != kerr.GroupIDNotFound.Code || dg.AuthorizedOperations != math.MinInt32 {
+		t.Errorf("missing consumer group: got error %d with operations %b", dg.ErrorCode, dg.AuthorizedOperations)
+	}
+}
+
+// AlterClientQuotas validates entities, keys, and values as Kafka does, and
+// DescribeClientQuotas filters as Kafka does.
+func TestClientQuotas(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	cl := newPlainClient(t, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	alice := "alice"
+	entity := func(kvs ...any) []kmsg.AlterClientQuotasRequestEntryEntity {
+		var es []kmsg.AlterClientQuotasRequestEntryEntity
+		for i := 0; i < len(kvs); i += 2 {
+			e := kmsg.NewAlterClientQuotasRequestEntryEntity()
+			e.Type = kvs[i].(string)
+			e.Name, _ = kvs[i+1].(*string)
+			es = append(es, e)
+		}
+		return es
+	}
+	specified := func(typ string) kmsg.DescribeClientQuotasRequestComponent {
+		comp := kmsg.NewDescribeClientQuotasRequestComponent()
+		comp.EntityType = typ
+		comp.MatchType = 2
+		return comp
+	}
+
+	// The cases run in order against one cluster.
+	for _, tc := range []struct {
+		name string
+
+		entity    []kmsg.AlterClientQuotasRequestEntryEntity // nil skips the alter
+		key       string
+		value     float64
+		twice     bool // the request repeats the entity with value+1
+		wantAlter *kerr.Error
+
+		describe     bool
+		strict       bool
+		faulted      bool // a fault fails alice's entity
+		comps        []kmsg.DescribeClientQuotasRequestComponent
+		wantEntries  int
+		wantDescribe *kerr.Error
+	}{
+		{name: "nothing to describe answers an empty list", describe: true},
+		{name: "set a default user quota", entity: entity("user", nil), key: "producer_byte_rate", value: 1000},
+		{name: "set a user quota", entity: entity("user", &alice), key: "producer_byte_rate", value: 2000},
+		{name: "specified includes the default", describe: true, comps: []kmsg.DescribeClientQuotasRequestComponent{specified("user")}, wantEntries: 2},
+		{name: "strict with no components matches nothing", describe: true, strict: true},
+		{name: "not strict with no components matches everything", describe: true, wantEntries: 2},
+		{name: "a faulted entity fails the describe", describe: true, faulted: true, wantDescribe: kerr.InvalidRequest},
+		{name: "zero", entity: entity("user", &alice), key: "producer_byte_rate", value: 0, wantAlter: kerr.InvalidRequest},
+		{name: "fraction of an integral key", entity: entity("user", &alice), key: "producer_byte_rate", value: 1.5, wantAlter: kerr.InvalidRequest},
+		{name: "not a number", entity: entity("user", &alice), key: "request_percentage", value: math.NaN(), wantAlter: kerr.InvalidRequest},
+		{name: "unknown key", entity: entity("user", &alice), key: "producer_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "ip key on a user", entity: entity("user", &alice), key: "connection_creation_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "empty user", entity: entity("user", new("")), key: "producer_byte_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "ip with a user", entity: entity("ip", nil, "user", &alice), key: "connection_creation_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "unknown entity type", entity: entity("group", &alice), key: "producer_byte_rate", value: 1, wantAlter: kerr.InvalidRequest},
+		{name: "an entity twice keeps the first entry", entity: entity("user", &alice), key: "producer_byte_rate", value: 3000, twice: true, wantAlter: kerr.InvalidRequest},
+		{name: "an entity type twice keeps the last component", entity: entity("user", new(""), "user", &alice), key: "producer_byte_rate", value: 3500},
+		{name: "invalid alters stored nothing", describe: true, wantEntries: 2},
+		{name: "exact match without a name", describe: true, comps: []kmsg.DescribeClientQuotasRequestComponent{{EntityType: "user"}}, wantDescribe: kerr.InvalidRequest},
+		{name: "unknown entity type in a filter", describe: true, comps: []kmsg.DescribeClientQuotasRequestComponent{specified("group")}, wantDescribe: kerr.UnsupportedVersion},
+		{name: "set a quota for a user named <default>", entity: entity("user", new("<default>")), key: "producer_byte_rate", value: 1500},
+		{name: "a user named <default> is not the default user", describe: true, wantEntries: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.entity != nil {
+				req := kmsg.NewPtrAlterClientQuotasRequest()
+				entry := kmsg.NewAlterClientQuotasRequestEntry()
+				entry.Entity = tc.entity
+				op := kmsg.NewAlterClientQuotasRequestEntryOp()
+				op.Key, op.Value = tc.key, tc.value
+				entry.Ops = append(entry.Ops, op)
+				req.Entries = append(req.Entries, entry)
+				if tc.twice {
+					entry.Ops = []kmsg.AlterClientQuotasRequestEntryOp{{Key: tc.key, Value: tc.value + 1}}
+					req.Entries = append(req.Entries, entry)
+				}
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want int16
+				if tc.wantAlter != nil {
+					want = tc.wantAlter.Code
+				}
+				if got := resp.Entries[0].ErrorCode; got != want || len(resp.Entries) != 1 {
+					t.Fatalf("alter: got error %d in %d entries, want %d in one", got, len(resp.Entries), want)
+				}
+				if tc.twice {
+					var got float64
+					c.admin(func() { got = c.quotas[makeQuotaEntity(tc.entity).key()].values[tc.key] })
+					if got != tc.value {
+						t.Errorf("alter twice stored %v, want the first entry's %v", got, tc.value)
+					}
+				}
+			}
+			if tc.describe {
+				if tc.faulted {
+					c.Fault(Fault{Keys: []kmsg.Key{kmsg.DescribeClientQuotas}, Resource: alice, Err: kerr.InvalidRequest})
+				}
+				req := kmsg.NewPtrDescribeClientQuotasRequest()
+				req.Strict = tc.strict
+				req.Components = tc.comps
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantDescribe != nil {
+					if resp.ErrorCode != tc.wantDescribe.Code || resp.Entries != nil {
+						t.Errorf("describe: got error %d with %d entries, want %s and none", resp.ErrorCode, len(resp.Entries), tc.wantDescribe.Message)
+					}
+					return
+				}
+				if resp.Entries == nil {
+					t.Fatal("describe answered null entries")
+				}
+				if len(resp.Entries) != tc.wantEntries {
+					t.Errorf("describe: got %d entries, want %d", len(resp.Entries), tc.wantEntries)
+				}
+			}
+		})
+	}
 }
 
 // featureString renders a response's features one per line, "name min-max
@@ -3469,51 +4484,80 @@ func TestApiVersionsFeatureTable(t *testing.T) {
 				return
 			}
 
-			// updateFeature sends one update and returns its error
-			// code, from Results below v2 and the top level at v2.
-			updateFeature := func(name string, level int16) int16 {
+			// updateFeatures sends the updates, each name=level with
+			// one upgrade type, and returns the error code: the top
+			// level answers a failure, and Results list a success
+			// below v2.
+			type fu struct {
+				name  string
+				level int16
+			}
+			updateFeatures := func(upgradeType int8, updates ...fu) int16 {
 				ureq := kmsg.NewPtrUpdateFeaturesRequest()
-				fu := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
-				fu.Feature = name
-				fu.MaxVersionLevel = level
-				fu.AllowDowngrade = true
-				fu.UpgradeType = 2 // safe downgrade
-				ureq.FeatureUpdates = append(ureq.FeatureUpdates, fu)
+				for _, u := range updates {
+					f := kmsg.NewUpdateFeaturesRequestFeatureUpdate()
+					f.Feature = u.name
+					f.MaxVersionLevel = u.level
+					f.UpgradeType = upgradeType
+					ureq.FeatureUpdates = append(ureq.FeatureUpdates, f)
+				}
 				uresp, err := ureq.RequestWith(ctx, cl)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if uresp.Version >= 2 {
-					return uresp.ErrorCode
+				if uresp.ErrorCode == 0 && uresp.Version < 2 && len(uresp.Results) != len(updates) {
+					t.Fatalf("got %d results for %d updates", len(uresp.Results), len(updates))
 				}
-				for _, r := range uresp.Results {
-					if r.Feature == name {
-						return r.ErrorCode
-					}
-				}
-				t.Fatalf("no result for %s", name)
-				return 0
+				return uresp.ErrorCode
 			}
+			const safeDowngrade = 2
+			invalid := kerr.InvalidUpdateVersion.Code
 
-			// metadata.version below the supported min is refused.
-			if code := updateFeature("metadata.version", 0); code != kerr.FeatureUpdateFailed.Code {
-				t.Errorf("metadata.version 0: got error %d, exp FEATURE_UPDATE_FAILED", code)
+			// metadata.version below the supported min is refused, as
+			// are an unset upgrade type and an upgrade typed as a
+			// downgrade.
+			if code := updateFeatures(safeDowngrade, fu{"metadata.version", 0}); code != invalid {
+				t.Errorf("metadata.version 0: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			if code := updateFeatures(0, fu{"metadata.version", 1}); code != invalid {
+				t.Errorf("upgrade type 0: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			// A timed-out update keeps its answer, even when an update
+			// is invalid.
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.UpdateFeatures}, Err: kerr.RequestTimedOut})
+			if code := updateFeatures(0, fu{"metadata.version", 1}); code != kerr.RequestTimedOut.Code {
+				t.Errorf("timed-out invalid update: got error %d, exp REQUEST_TIMED_OUT", code)
 			}
 
 			// transaction.version downgraded to 0 drops out of the
 			// finalized list; a version without the feature refuses.
 			exp := kversionFeatureString(vs)
 			hasTxn := strings.Contains(exp, "transaction.version ")
-			code := updateFeature("transaction.version", 0)
+			code := updateFeatures(safeDowngrade, fu{"transaction.version", 0})
 			if hasTxn && code != 0 {
 				t.Errorf("transaction.version 0: got error %d, exp none", code)
-			} else if !hasTxn && code != kerr.FeatureUpdateFailed.Code {
-				t.Errorf("transaction.version 0: got error %d, exp FEATURE_UPDATE_FAILED", code)
+			} else if !hasTxn && code != invalid {
+				t.Errorf("transaction.version 0: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			if code := updateFeatures(safeDowngrade, fu{"transaction.version", 1}); hasTxn && code != invalid {
+				t.Errorf("upgrade typed as a downgrade: got error %d, exp INVALID_UPDATE_VERSION", code)
+			}
+			// One invalid update in the request fails it whole: the
+			// valid upgrade beside it does not apply.
+			if hasTxn {
+				if code := updateFeatures(1, fu{"transaction.version", 1}, fu{"nope", 1}); code != invalid {
+					t.Errorf("one bad update: got error %d, exp INVALID_UPDATE_VERSION", code)
+				}
 			}
 
 			resp, err = req.RequestWith(ctx, cl)
 			if err != nil {
 				t.Fatal(err)
+			}
+			// A change bumps the epoch, which is how a Java client
+			// notices it.
+			if wantEpoch := test.epoch + 1; hasTxn && resp.FinalizedFeaturesEpoch != wantEpoch {
+				t.Errorf("epoch after the downgrade: got %d, exp %d", resp.FinalizedFeaturesEpoch, wantEpoch)
 			}
 			for _, f := range resp.FinalizedFeatures {
 				if f.Name == "transaction.version" {
@@ -4665,7 +5709,8 @@ const tombstoneVal = "<tombstone>"
 
 // TestCompact drives log compaction. Every batch is one ProduceSync, so a
 // batch of several records lands on the wire as one record batch; the last
-// batch is the active segment, which compaction never touches.
+// batch is the active segment, which compaction never touches. Compaction
+// never moves the log start offset.
 func TestCompact(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -4673,16 +5718,28 @@ func TestCompact(t *testing.T) {
 		configs   map[string]string
 		batches   [][]compactRec
 		again     [][]compactRec // produced after the first Compact, then compacted again
+		txn       [][]compactRec // produced in a transaction open across Compact, which aborts after it
+		after     [][]compactRec // produced while txn is open
+		keyless   bool           // the topic turns compacted after batches, so a batch can lack a key
 		at        kgo.Offset
 		want      map[string]string
 		wantFirst string // key=value of the first record read, for a case that pins the order
 	}{
 		{
-			// Superseded keys and the null key drop; the active segment stays.
+			// Superseded keys drop; the active segment stays.
 			name:    "dedup",
-			batches: [][]compactRec{{{"a", "1"}}, {{"", "no-key"}}, {{"b", "2"}}, {{"a", "3"}}, {{"c", "4"}}, {{"b", "5"}}},
+			batches: [][]compactRec{{{"a", "1"}}, {{"b", "2"}}, {{"a", "3"}}, {{"c", "4"}}, {{"b", "5"}}},
 			at:      kgo.NewOffset().AtStart(),
 			want:    map[string]string{"a": "3", "b": "5", "c": "4"},
+		},
+		{
+			// A record written before the topic turned compacted can
+			// lack a key, and compaction drops it.
+			name:    "null-key",
+			keyless: true,
+			batches: [][]compactRec{{{"a", "1"}}, {{"", "no-key"}}, {{"b", "2"}}},
+			at:      kgo.NewOffset().AtStart(),
+			want:    map[string]string{"a": "1", "b": "2"},
 		},
 		{
 			// A topic of one batch is all active segment: compaction is a no-op.
@@ -4731,6 +5788,17 @@ func TestCompact(t *testing.T) {
 			at:      kgo.NewOffset().AtStart(),
 			want:    map[string]string{"a": "v3", "b": "v1", "c": "v1"},
 		},
+		{
+			// Nothing at or past the LSO is cleaned: the open
+			// transaction's record must not supersede the committed
+			// one, which survives the abort.
+			name:    "open-txn",
+			batches: [][]compactRec{{{"a", "committed"}}},
+			txn:     [][]compactRec{{{"a", "aborted"}}},
+			after:   [][]compactRec{{{"b", "x"}}, {{"c", "active"}}},
+			at:      kgo.NewOffset().AtStart(),
+			want:    map[string]string{"a": "committed", "b": "x", "c": "active"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -4739,12 +5807,15 @@ func TestCompact(t *testing.T) {
 			cl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 
 			configs := map[string]string{"cleanup.policy": "compact"}
+			if tc.keyless {
+				configs["cleanup.policy"] = "delete"
+			}
 			maps.Copy(configs, tc.configs)
 			if err := c.CreateTopic(topic, 1, configs); err != nil {
 				t.Fatal(err)
 			}
 
-			produce := func(batches [][]compactRec) {
+			produce := func(cl *kgo.Client, batches [][]compactRec) {
 				for _, batch := range batches {
 					var rs []*kgo.Record
 					for _, cr := range batch {
@@ -4760,16 +5831,37 @@ func TestCompact(t *testing.T) {
 					produceSync(t, cl, rs...)
 				}
 			}
-			produce(tc.batches)
+			produce(cl, tc.batches)
+			if tc.keyless {
+				c.admin(func() { c.data.tcfgs[topic]["cleanup.policy"] = kmsg.StringPtr("compact") })
+			}
+			var txn *kgo.Client
+			if tc.txn != nil {
+				txn = newPlainClient(t, c, kgo.TransactionalID(topic), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+				if err := txn.BeginTransaction(); err != nil {
+					t.Fatal(err)
+				}
+				produce(txn, tc.txn)
+				produce(cl, tc.after)
+			}
 			c.Compact()
+			if txn != nil {
+				if err := txn.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tc.again != nil {
-				produce(tc.again)
+				produce(cl, tc.again)
 				c.Compact()
+			}
+			if start := c.PartitionInfo(topic, 0).LogStartOffset; start != 0 {
+				t.Fatalf("log start offset %d after compaction, want 0", start)
 			}
 
 			consumer := newPlainClient(t, c,
 				kgo.ConsumeTopics(topic),
 				kgo.ConsumeResetOffset(tc.at),
+				kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 			)
 			records := consumeN(t, consumer, len(tc.want), 5*time.Second)
 			got := make(map[string]string)
@@ -4779,6 +5871,9 @@ func TestCompact(t *testing.T) {
 					v = tombstoneVal
 				}
 				got[string(r.Key)] = v
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got keys %v, want %v", got, tc.want)
 			}
 			for k, wv := range tc.want {
 				if got[k] != wv {
@@ -4801,6 +5896,7 @@ func TestRetention(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		brokerCfg    map[string]string
+		alter        map[string]string // broker configs altered after the topic exists
 		topicCfg     map[string]string
 		first        []string
 		sleep        time.Duration
@@ -4834,7 +5930,6 @@ func TestRetention(t *testing.T) {
 			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "50"},
 			topicCfg:  map[string]string{"retention.ms": "1"},
 			first:     []string{"old", "keep"},
-			sleep:     200 * time.Millisecond,
 			wantStart: 1,
 		},
 		{
@@ -4848,12 +5943,28 @@ func TestRetention(t *testing.T) {
 			keepAll:  true,
 		},
 		{
+			// Kafka accepts 0, which runs the cleaner without waiting.
+			name:      "ticker-backoff-zero",
+			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "0"},
+			topicCfg:  map[string]string{"retention.ms": "1"},
+			first:     []string{"old", "keep"},
+			wantStart: 1,
+		},
+		{
+			// log.cleaner.backoff.ms is dynamic: the running ticker
+			// takes the new interval.
+			name:      "ticker-altered",
+			alter:     map[string]string{"log.cleaner.backoff.ms": "50"},
+			topicCfg:  map[string]string{"retention.ms": "1"},
+			first:     []string{"old", "keep"},
+			wantStart: 1,
+		},
+		{
 			// No topic config: the ticker still runs, for the broker's
 			// log.retention.ms, as Kafka's does for its 7 day default.
 			name:      "ticker-broker-default",
 			brokerCfg: map[string]string{"log.cleaner.backoff.ms": "50", "log.retention.ms": "1"},
 			first:     []string{"old", "keep"},
-			sleep:     200 * time.Millisecond,
 			wantStart: 1,
 		},
 	} {
@@ -4869,19 +5980,33 @@ func TestRetention(t *testing.T) {
 			if err := c.CreateTopic(topic, 1, tc.topicCfg); err != nil {
 				t.Fatal(err)
 			}
+			for k, v := range tc.alter {
+				rs, err := kadm.NewClient(cl).AlterBrokerConfigs(context.Background(), []kadm.AlterConfig{{Name: k, Value: &v}})
+				if err == nil {
+					err = rs[0].Err
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 
+			// A compacted topic rejects records without a key.
 			for _, v := range tc.first {
-				produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte(v)})
+				produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte(v), Value: []byte(v)})
 			}
 			time.Sleep(tc.sleep)
 			for _, v := range tc.rest {
-				produceSync(t, cl, &kgo.Record{Topic: topic, Value: []byte(v)})
+				produceSync(t, cl, &kgo.Record{Topic: topic, Key: []byte(v), Value: []byte(v)})
 			}
 			if tc.apply {
 				c.ApplyRetention()
 			}
 
 			pi := c.PartitionInfo(topic, 0)
+			for start := time.Now(); !tc.apply && pi.LogStartOffset < tc.wantStart && time.Since(start) < 5*time.Second; {
+				time.Sleep(10 * time.Millisecond)
+				pi = c.PartitionInfo(topic, 0)
+			}
 			if pi.LogStartOffset < tc.wantStart {
 				t.Fatalf("expected logStartOffset >= %d after retention, got %d", tc.wantStart, pi.LogStartOffset)
 			}
@@ -5097,6 +6222,9 @@ func TestShareGroupDescribe(t *testing.T) {
 	if len(m.Assignment.TopicPartitions) == 0 {
 		t.Error("no assignment")
 	}
+	if m.ClientHost != "/127.0.0.1" { // Kafka's format: no port
+		t.Errorf("client host %q, want /127.0.0.1", m.ClientHost)
+	}
 }
 
 // TestShareGroupDescribeEmpty verifies describe on a group with no active
@@ -5281,6 +6409,18 @@ func TestShareGroupOffsetsAdmin(t *testing.T) {
 					t.Fatalf("delete error: %v", err)
 				}
 
+				// Like Kafka, the group stays, and a second delete
+				// finds nothing to delete.
+				if c.GroupInfo(group) == nil {
+					t.Error("deleting the group's offsets dropped the group")
+				}
+				if dresp, err = dreq.RequestWith(ctx, admin); err != nil {
+					t.Fatalf("delete offsets again: %v", err)
+				}
+				if dresp.ErrorCode != 0 || len(dresp.Topics) != 1 || dresp.Topics[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
+					t.Errorf("deleting again: got %+v, want the topic with UNKNOWN_TOPIC_OR_PARTITION", dresp)
+				}
+
 				p := describeShareOffsets(t, admin, group, topic).Groups[0].Topics[0].Partitions[0]
 				if p.StartOffset != -1 {
 					t.Errorf("expected StartOffset -1 after delete, got %d", p.StartOffset)
@@ -5389,15 +6529,19 @@ func TestShareGroupOffsetsAdminNonEmpty(t *testing.T) {
 // MetadataMaxAge row keeps a periodic metadata refresh from racing the
 // heartbeat: the heartbeat then always delivers the assignment before the
 // client learns of the topic itself, so the server has to keep including
-// the assignment until the client confirms it.
+// the assignment until the client confirms it. In the auto-create row, the
+// producer creates the topic with a Metadata request, which must tell the
+// group about the topic as CreateTopics does.
 func Test848TopicCreatedAfterJoin(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		metaMaxAge time.Duration
+		autoCreate bool // the producer creates the topic through Metadata
 	}{
-		{"periodic-meta", 100 * time.Millisecond},
-		{"no-periodic-meta", time.Minute},
+		{"periodic-meta", 100 * time.Millisecond, false},
+		{"no-periodic-meta", time.Minute, false},
+		{"auto-create", time.Minute, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -5407,8 +6551,14 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 			group := "g848-" + tc.name
 			nRecords := 10
 
-			c := newCluster(t, NumBrokers(1), SeedTopics(1, existingTopic))
-			producer := newClient848(t, c)
+			opts := []Opt{NumBrokers(1), SeedTopics(1, existingTopic)}
+			var producerOpts []kgo.Opt
+			if tc.autoCreate {
+				opts = append(opts, AllowAutoTopicCreation())
+				producerOpts = append(producerOpts, kgo.AllowAutoTopicCreation())
+			}
+			c := newCluster(t, opts...)
+			producer := newClient848(t, c, producerOpts...)
 			produceNStrings(t, producer, existingTopic, nRecords)
 
 			consumer := newClient848(t, c,
@@ -5426,8 +6576,10 @@ func Test848TopicCreatedAfterJoin(t *testing.T) {
 				t.Fatalf("expected %d records from existing topic, got %d", nRecords, len(records))
 			}
 
-			if err := c.CreateTopic(newTopic, 1, nil); err != nil {
-				t.Fatalf("create topic failed: %v", err)
+			if !tc.autoCreate {
+				if err := c.CreateTopic(newTopic, 1, nil); err != nil {
+					t.Fatalf("create topic failed: %v", err)
+				}
 			}
 			for i := range nRecords {
 				r := kgo.StringRecord("new-" + strconv.Itoa(i))
@@ -5553,7 +6705,8 @@ type endTxnStep struct {
 	commit   bool
 	wantCode int16
 	// wantEpochUp asserts the response carries an epoch above the one we
-	// sent; wantEpochSame asserts it matches what the first step got back.
+	// sent; wantEpochSame asserts it matches the producer ID and epoch the
+	// first step got back.
 	wantEpochUp   bool
 	wantEpochSame bool
 }
@@ -5567,7 +6720,15 @@ func TestTxnEndTxnRetry(t *testing.T) {
 		name  string
 		tv1   bool // pin EndTxn to v4
 		topic string
-		steps []endTxnStep
+		// epoch, if nonzero, is the producer's epoch before the steps.
+		epoch int16
+		// timeoutMs, if nonzero, is the transaction timeout, and the
+		// steps run after it aborts the transaction.
+		timeoutMs int32
+		// reinit has another producer init the transactional ID
+		// before the steps, which then come from a zombie.
+		reinit bool
+		steps  []endTxnStep
 	}{
 		{
 			// TV1 is idempotent in the same direction and rejects the
@@ -5599,6 +6760,58 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			name:  "tv2-empty-abort",
 			steps: []endTxnStep{{commit: false, wantEpochUp: true}},
 		},
+		{
+			// As is committing one.
+			name:  "tv2-empty-commit",
+			steps: []endTxnStep{{commit: true, wantEpochUp: true}},
+		},
+		{
+			// TV1 has no transaction to end after InitProducerID.
+			name:  "tv1-empty",
+			tv1:   true,
+			steps: []endTxnStep{{commit: false, wantCode: kerr.InvalidTxnState.Code}},
+		},
+		{
+			// A commit at the epoch an abort ended did not happen.
+			name:  "tv2-commit-after-abort",
+			topic: "t-endtxn-v5-commit-after-abort",
+			steps: []endTxnStep{
+				{commit: false},
+				{commit: true, wantCode: kerr.ProducerFenced.Code},
+			},
+		},
+		{
+			// The new producer's InitProducerID aborted the zombie's
+			// transaction; the zombie's end is fenced, not a retry.
+			name:   "tv2-zombie-after-reinit",
+			topic:  "t-endtxn-v5-zombie",
+			reinit: true,
+			steps:  []endTxnStep{{commit: false, wantCode: kerr.ProducerFenced.Code}},
+		},
+		{
+			// A commit at the last epoch moves to a new producer ID,
+			// and a retry from the old one replays it.
+			name:  "tv2-retry-after-overflow",
+			topic: "t-endtxn-v5-overflow",
+			epoch: math.MaxInt16 - 1,
+			steps: []endTxnStep{
+				{commit: true},
+				{commit: true, wantEpochSame: true},
+			},
+		},
+		{
+			// A timeout at the last epoch aborts and moves to a new
+			// producer ID, and a commit then did not happen.
+			name:      "tv2-timeout-at-overflow",
+			topic:     "t-endtxn-v5-timeout-overflow",
+			epoch:     math.MaxInt16 - 1,
+			timeoutMs: 1,
+			steps: []endTxnStep{
+				{commit: false},
+				{commit: true, wantCode: kerr.ProducerFenced.Code},
+				{commit: false, wantEpochSame: true},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -5621,11 +6834,19 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			cl := newPlainClient(t, c, clOpts...)
 			ctx := context.Background()
 
-			initResp := initProducerID(t, cl, txid, -1, -1, 60000)
+			timeoutMs := int32(60000)
+			if tc.timeoutMs != 0 {
+				timeoutMs = tc.timeoutMs
+			}
+			initResp := initProducerID(t, cl, txid, -1, -1, timeoutMs)
 			if initResp.ErrorCode != 0 {
 				t.Fatalf("init: %v", kerr.ErrorForCode(initResp.ErrorCode))
 			}
 			pid, epoch := initResp.ProducerID, initResp.ProducerEpoch
+			if tc.epoch != 0 {
+				epoch = tc.epoch
+				c.admin(func() { c.pids.byTxid[txid].epoch = epoch })
+			}
 
 			if tc.topic != "" {
 				addReq := kmsg.NewAddPartitionsToTxnRequest()
@@ -5640,7 +6861,29 @@ func TestTxnEndTxnRetry(t *testing.T) {
 					t.Fatalf("add partitions: %v", err)
 				}
 			}
+			if tc.reinit {
+				initProducerID(t, cl, txid, -1, -1, 60000)
+			}
+			for start := time.Now(); tc.timeoutMs != 0; {
+				if time.Since(start) > 5*time.Second {
+					t.Fatal("the transaction timeout never aborted the transaction")
+				}
+				// The request fails rather than hangs if the abort
+				// wedges the cluster.
+				descCtx, descCancel := context.WithTimeout(ctx, 5*time.Second)
+				desc := kmsg.NewPtrDescribeTransactionsRequest()
+				desc.TransactionalIDs = []string{txid}
+				resp, err := desc.RequestWith(descCtx, cl)
+				descCancel()
+				if err != nil {
+					t.Fatalf("describe while waiting for the timeout: %v", err)
+				}
+				if resp.TransactionStates[0].State != "Ongoing" {
+					break
+				}
+			}
 
+			var firstPID int64
 			var firstEpoch int16
 			for i, step := range tc.steps {
 				endReq := kmsg.NewEndTxnRequest()
@@ -5657,13 +6900,13 @@ func TestTxnEndTxnRetry(t *testing.T) {
 						kerr.ErrorForCode(step.wantCode), kerr.ErrorForCode(resp.ErrorCode))
 				}
 				if i == 0 {
-					firstEpoch = resp.ProducerEpoch
+					firstPID, firstEpoch = resp.ProducerID, resp.ProducerEpoch
 				}
 				if step.wantEpochUp && resp.ProducerEpoch <= epoch {
 					t.Fatalf("step %d: expected epoch > %d, got %d", i, epoch, resp.ProducerEpoch)
 				}
-				if step.wantEpochSame && resp.ProducerEpoch != firstEpoch {
-					t.Fatalf("step %d: expected epoch %d, got %d", i, firstEpoch, resp.ProducerEpoch)
+				if step.wantEpochSame && (resp.ProducerID != firstPID || resp.ProducerEpoch != firstEpoch) {
+					t.Fatalf("step %d: expected producer ID %d epoch %d, got %d %d", i, firstPID, firstEpoch, resp.ProducerID, resp.ProducerEpoch)
 				}
 			}
 		})

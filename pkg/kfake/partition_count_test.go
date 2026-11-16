@@ -341,10 +341,10 @@ func Test848AssignedNewPartitionStaleMetadata(t *testing.T) {
 }
 
 // Real brokers validate that committed partitions exist (API layer,
-// UNKNOWN_TOPIC_OR_PARTITION) before the coordinator stores offsets; kfake
-// previously accepted any partition blindly. Pinned to OffsetCommit v9: v10
-// addresses topics by ID and unknown IDs take the UNKNOWN_TOPIC_ID path.
-func TestOffsetCommitUnknownPartitionRejected(t *testing.T) {
+// UNKNOWN_TOPIC_OR_PARTITION) before the coordinator stores offsets, and
+// answer group and metadata errors per partition. Pinned to OffsetCommit v9:
+// v10 addresses topics by ID and unknown IDs take the UNKNOWN_TOPIC_ID path.
+func TestOffsetCommitPartitionErrors(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, SeedTopics(1, "t"))
 	v := kversion.Stable()
@@ -355,9 +355,40 @@ func TestOffsetCommitUnknownPartitionRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// commit commits offset 2 for partitions of t and returns each
+	// partition's error.
+	commit := func(group string, gen int32, meta string, parts ...int32) []int16 {
+		req := kmsg.NewPtrOffsetCommitRequest()
+		req.Group, req.Generation = group, gen
+		rt := kmsg.NewOffsetCommitRequestTopic()
+		rt.Topic = "t"
+		for _, p := range parts {
+			rt.Partitions = append(rt.Partitions, kmsg.OffsetCommitRequestTopicPartition{Partition: p, Offset: 2, Metadata: &meta})
+		}
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatalf("offset commit: %v", err)
+		}
+		var codes []int16
+		for _, rp := range resp.Topics[0].Partitions {
+			codes = append(codes, rp.ErrorCode)
+		}
+		return codes
+	}
+	if got := commit(group, 1, "", 0); got[0] != kerr.GroupIDNotFound.Code {
+		t.Errorf("member commit to a missing group: %v, want GROUP_ID_NOT_FOUND", kerr.ErrorForCode(got[0]))
+	}
+	if got := commit(group, -1, strings.Repeat("x", 4097), 0); got[0] != kerr.OffsetMetadataTooLarge.Code || c.GroupInfo(group) != nil {
+		t.Errorf("commit with 4097 bytes of metadata: %v, want OFFSET_METADATA_TOO_LARGE and no group", kerr.ErrorForCode(got[0]))
+	}
+
+	// A commit with no generation is a simple commit, whatever member
+	// it names.
 	req := kmsg.NewPtrOffsetCommitRequest()
 	req.Group = group
 	req.Generation = -1
+	req.InstanceID = kmsg.StringPtr("i")
 	rt := kmsg.NewOffsetCommitRequestTopic()
 	rt.Topic = "t"
 	for _, p := range []int32{0, 5} {
@@ -394,6 +425,21 @@ func TestOffsetCommitUnknownPartitionRejected(t *testing.T) {
 	}
 	if ec := got["does-not-exist"][0]; ec != kerr.UnknownTopicOrPartition.Code {
 		t.Errorf("does-not-exist/0: got error code %d, want UNKNOWN_TOPIC_OR_PARTITION", ec)
+	}
+
+	// A group error goes only on the partitions that pass the topic
+	// checks, whatever the group: a member commit to the empty group, to
+	// a share group, or to a consumer group that does not have the member.
+	// A partition listed twice gets the error twice.
+	joinShareGroupRaw(t, cl, "share", "t")
+	member848(ctx, t, cl, "t", "consumer", "m", nil)("consumer join", 0)
+	for _, tc := range []struct {
+		group string
+		want  *kerr.Error
+	}{{group, kerr.UnknownMemberID}, {"share", kerr.GroupIDNotFound}, {"consumer", kerr.UnknownMemberID}} {
+		if got := commit(tc.group, 1, "", 0, 5, 0); got[0] != tc.want.Code || got[1] != kerr.UnknownTopicOrPartition.Code || got[2] != tc.want.Code {
+			t.Errorf("member commit to %s: %v, want %s, UNKNOWN_TOPIC_OR_PARTITION, and %[3]s", tc.group, got, tc.want.Message)
+		}
 	}
 
 	// Only the valid partition's commit may be stored.

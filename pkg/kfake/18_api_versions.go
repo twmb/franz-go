@@ -18,7 +18,8 @@ import (
 // * Advertises the kversion feature table for the cluster's version (KIP-584)
 // * Auto-downgrades to v0 response on unknown version
 // * v5+: REBOOTSTRAP_REQUIRED if the client names a cluster or node that is
-//   not us (KIP-1242)
+//   not us (KIP-1242), except before SASL authentication completes
+// * Produce is advertised from v0, though we serve v3+ (KAFKA-18659)
 //
 // Version notes:
 // * v1: ThrottleMillis
@@ -63,17 +64,22 @@ func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
 	// (KIP-1242). Both are set or neither is, else INVALID_REQUEST; if
 	// either is not us, REBOOTSTRAP_REQUIRED tells the client its metadata
 	// routed it to the wrong broker and it should start over from its
-	// seeds.
+	// seeds. Kafka answers an ApiVersions before SASL authentication
+	// completes without the cluster and node check.
 	if resp.ErrorCode == 0 && req.Version >= 5 {
 		hasCluster, hasNode := req.ClusterID != nil, req.NodeID != -1
+		preAuth := c.cfg.enableSASL && creq.cc.saslStage != saslStageComplete
 		switch {
 		case hasCluster != hasNode:
 			resp.ErrorCode = kerr.InvalidRequest.Code
 			return resp, nil
-		case hasCluster && (*req.ClusterID != c.cfg.clusterID || req.NodeID != creq.cc.b.node):
+		case hasCluster && !preAuth && (*req.ClusterID != c.cfg.clusterID || req.NodeID != creq.cc.b.node):
 			resp.ErrorCode = kerr.RebootstrapRequired.Code
 			return resp, nil
 		}
+	}
+	if req.Version >= 3 {
+		creq.cc.swName, creq.cc.swVersion = req.ClientSoftwareName, req.ClientSoftwareVersion
 	}
 
 	// We do not checkReqVersion for ApiVersions; if the client uses a
@@ -112,14 +118,25 @@ func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
 		// ApiVersions response process-wide.
 		resp.ApiKeys = slices.Clone(apiVersionsSorted)
 	}
+	// Kafka 4.0 serves Produce from v3 but still advertises v0: librdkafka
+	// fails compressed produce against a broker that does not.
+	for i := range resp.ApiKeys {
+		if resp.ApiKeys[i].ApiKey == 0 {
+			resp.ApiKeys[i].MinVersion = 0
+		}
+	}
 
 	// Features come from the kversion table for the cluster's version:
 	// what a broker of that release supports, and what a cluster it
 	// formats starts at, with any level UpdateFeatures set on top. A real
 	// broker lists a finalized feature only above level 0, with min and
-	// max both at the level.
+	// max both at the level. Below v4, it leaves out a supported feature
+	// whose min is 0, which clients before 3.8 fail to parse (KAFKA-17011).
 	vs := c.featureVersions()
 	vs.EachSupportedFeature(func(name string, min, max int16) {
+		if req.Version < 4 && min == 0 {
+			return
+		}
 		sf := kmsg.NewApiVersionsResponseSupportedFeature()
 		sf.Name = name
 		sf.MinVersion = min
@@ -140,7 +157,7 @@ func (c *Cluster) handleApiVersions(creq *clientReq) (kmsg.Response, error) {
 		resp.FinalizedFeatures = append(resp.FinalizedFeatures, ff)
 	})
 	if len(resp.FinalizedFeatures) > 0 {
-		resp.FinalizedFeaturesEpoch = 1
+		resp.FinalizedFeaturesEpoch = 1 + c.featuresEpoch
 	}
 
 	return resp, nil

@@ -4,7 +4,6 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -13,7 +12,8 @@ import (
 // Behavior:
 // * Returns the Share-Partition Start Offset (SPSO) and lag per partition
 // * Lag = HWM - SPSO - deliveryComplete (records already acknowledged/archived)
-// * When Topics is nil, describes all topics the group has state for
+// * When Topics is nil, describes every partition the group has state for,
+//   including initialized partitions with no start offset yet (-1)
 // * Describe-all silently filters unauthorized topics
 //
 // Version notes:
@@ -37,15 +37,14 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 		rsg := kmsg.NewDescribeShareGroupOffsetsResponseGroup()
 		rsg.GroupID = rg.GroupID
 
-		if c.coordinator(rg.GroupID).node != creq.cc.b.node {
-			rsg.ErrorCode = kerr.NotCoordinator.Code
+		// ACL: require GROUP DESCRIBE.
+		if e := c.deny(creq, rg.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg.GroupID, misrouted: !c.isCoordinator(creq, rg.GroupID)}); e != nil {
+			rsg.ErrorCode = e.Code
 			resp.Groups = append(resp.Groups, rsg)
 			continue
 		}
-
-		// ACL: require GROUP DESCRIBE.
-		if e := c.deny(creq, rg.GroupID, kmsg.ACLResourceTypeGroup, kmsg.ACLOperationDescribe, faultKey{group: rg.GroupID}); e != nil {
-			rsg.ErrorCode = e.Code
+		if ke := c.validateGroup(creq, rg.GroupID); ke != nil {
+			rsg.ErrorCode = ke.Code
 			resp.Groups = append(resp.Groups, rsg)
 			continue
 		}
@@ -88,6 +87,7 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 					// Describe-all: silently filter unauthorized topics.
 					continue
 				}
+				rst.TopicID = uuid{} // Kafka names no ID for a topic it refuses
 				for _, partition := range tr.partitions {
 					rsp := kmsg.NewDescribeShareGroupOffsetsResponseGroupTopicPartition()
 					rsp.Partition = partition
@@ -122,16 +122,16 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 					continue
 				}
 
-				rsp.LeaderEpoch = pd.epoch
-				if sg == nil {
-					// Group doesn't exist -- no share state.
-					rsp.StartOffset = -1
-					rsp.Lag = -1
-				} else if sp, ok := sg.partitions.getp(tr.topic, partition); !ok {
-					// No share state yet -- SPSO not initialized.
+				var sp *sharePartition
+				if sg != nil {
+					sp, _ = sg.partitions.getp(tr.topic, partition)
+				}
+				if sp == nil || sp.spso == -1 {
+					// No share state, or no start offset yet.
 					rsp.StartOffset = -1
 					rsp.Lag = -1
 				} else {
+					rsp.LeaderEpoch = pd.epoch
 					rsp.StartOffset = sp.spso
 					// Lag = HWM - SPSO - deliveryComplete, where
 					// deliveryComplete counts records between SPSO
@@ -145,7 +145,9 @@ func (c *Cluster) handleDescribeShareGroupOffsets(creq *clientReq) (kmsg.Respons
 							deliveryComplete++
 						}
 					}
-					rsp.Lag = max(0, pd.highWatermark-sp.spso-deliveryComplete)
+					// Like Kafka, we do not clamp: a start offset
+					// altered past the HWM gives a negative lag.
+					rsp.Lag = pd.highWatermark - sp.spso - deliveryComplete
 				}
 				rst.Partitions = append(rst.Partitions, rsp)
 			}

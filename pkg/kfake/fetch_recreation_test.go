@@ -53,11 +53,12 @@ func recreateTopicN(t *testing.T, c *Cluster, topic string, partitions int32) {
 }
 
 // A fetch with a partition that errors completes at once, like a real
-// broker's fetch purgatory, rather than holding the request for MaxWait.
+// broker's fetch purgatory, rather than holding the request for MaxWait. A
+// partition that fails before the read leaves the rest to wait.
 func TestFetchPartitionErrorCompletesImmediately(t *testing.T) {
 	t.Parallel()
 	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 	cl := newPlainClient(t, c)
 	ctx := context.Background()
 
@@ -76,6 +77,65 @@ func TestFetchPartitionErrorCompletesImmediately(t *testing.T) {
 	}
 	if ec := resp.Topics[0].Partitions[0].ErrorCode; ec != kerr.UnknownTopicID.Code {
 		t.Errorf("got %v; want UNKNOWN_TOPIC_ID", kerr.ErrorForCode(ec))
+	}
+
+	// An unknown ID whose bytes spell a fetched topic's name is its own
+	// topic.
+	const spelled = "abcdefghijklmnop"
+	if err := c.CreateTopic(spelled, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	both := fetchByID(0, -1, 0, c.TopicInfo(spelled).TopicID, 0)
+	both.Topics = append(both.Topics, kmsg.FetchRequestTopic{TopicID: [16]byte([]byte(spelled)), Partitions: both.Topics[0].Partitions})
+	if resp, err = both.RequestWith(ctx, cl); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Topics) != 2 {
+		t.Errorf("fetch of %s and the ID that spells it: got %d topics, want 2", spelled, len(resp.Topics))
+	}
+
+	// A fault answers as its code: a read error ends the wait for the idle
+	// partition next to it, and an unknown partition does not. A share
+	// fetch waits the same way.
+	known := c.TopicInfo(topic).TopicID
+	memberID, _ := joinShareGroupRaw(t, cl, "g", topic)
+	share := kmsg.NewPtrShareFetchRequest()
+	share.GroupID, share.MemberID, share.MaxRecords = kmsg.StringPtr("g"), &memberID, 500
+	share.Topics = []kmsg.ShareFetchRequestTopic{{TopicID: known, Partitions: []kmsg.ShareFetchRequestTopicPartition{{Partition: 0}, {Partition: 1}}}}
+	for _, tc := range []struct {
+		err     *kerr.Error
+		maxWait int32
+		wait    bool
+	}{{kerr.KafkaStorageError, 5000, false}, {kerr.UnknownTopicOrPartition, 100, true}} {
+		h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch, kmsg.ShareFetch}, Topic: topic, Partitions: []int32{0}, Err: tc.err, Count: -1})
+		share.MaxWaitMillis = tc.maxWait
+		for _, req := range []kmsg.Request{fetchByID(0, -1, tc.maxWait, known, 0, 1), share} {
+			start = time.Now()
+			if _, err := cl.Request(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			if elapsed := time.Since(start); tc.wait && elapsed < 90*time.Millisecond || !tc.wait && elapsed > time.Second {
+				t.Errorf("%s with a %s fault took %v, want waiting %v", kmsg.NameForKey(req.Key()), tc.err.Message, elapsed, tc.wait)
+			}
+		}
+		h.Remove()
+	}
+
+	// As in Kafka, MaxWait counts from when we handle the request: one
+	// held 300ms before we handle it still waits its 200ms.
+	share.MaxWaitMillis = 200
+	for _, req := range []kmsg.Request{fetchByID(0, -1, 200, known, 1), share} {
+		c.ControlKey(req.Key(), func(kmsg.Request) (kmsg.Response, error, bool) {
+			c.SleepControl(func() { time.Sleep(300 * time.Millisecond) })
+			return nil, nil, false
+		})
+		start = time.Now()
+		if _, err := cl.Request(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed < 450*time.Millisecond {
+			t.Errorf("%s held 300ms with a 200ms MaxWait took %v, want at least 500ms", kmsg.NameForKey(req.Key()), elapsed)
+		}
 	}
 }
 

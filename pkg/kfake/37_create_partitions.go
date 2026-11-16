@@ -1,8 +1,6 @@
 package kfake
 
 import (
-	"time"
-
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -11,7 +9,9 @@ import (
 //
 // Behavior:
 // * Must be sent to the controller
-// * Only supports increasing partition count, not decreasing
+// * Only supports increasing partition count; an equal or lower count fails
+// * A duplicated name answers INVALID_REQUEST; the other topics proceed
+// * More than 10000 new partitions in one request fails it with POLICY_VIOLATION
 // * Supports explicit replica assignment (first replica is leader)
 // * ValidateOnly: validates request without creating partitions
 //
@@ -47,45 +47,77 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 		resp.Topics = append(resp.Topics, st)
 		return &resp.Topics[len(resp.Topics)-1]
 	}
-	donets := func(errCode int16) {
+	// failAll answers every topic the request names, a duplicate
+	// included, replacing the answers so far.
+	failAll := func(errCode int16) (kmsg.Response, error) {
+		resp.Topics = resp.Topics[:0]
 		for _, rt := range req.Topics {
-			donet(rt.Topic, errCode)
+			st := kmsg.NewCreatePartitionsResponseTopic()
+			st.Topic = rt.Topic
+			st.ErrorCode = errCode
+			resp.Topics = append(resp.Topics, st)
 		}
-	}
-
-	if b != c.controller {
-		donets(kerr.NotController.Code)
 		return resp, nil
 	}
 
-	uniq := make(map[string]struct{})
+	misrouted := b != c.controller
+
+	// Kafka answers a duplicated name with INVALID_REQUEST and runs the
+	// rest of the request.
+	counts := make(map[string]int)
 	for _, rt := range req.Topics {
-		if _, ok := uniq[rt.Topic]; ok {
-			donets(kerr.InvalidRequest.Code)
-			return resp, nil
+		counts[rt.Topic]++
+	}
+
+	var (
+		alters   []*kmsg.CreatePartitionsRequestTopic
+		newParts int64
+	)
+	for i := range req.Topics {
+		rt := &req.Topics[i]
+		if counts[rt.Topic] > 1 {
+			donet(rt.Topic, kerr.InvalidRequest.Code)
+			continue
 		}
-		uniq[rt.Topic] = struct{}{}
-	}
-
-	// Build broker node ID to broker map for assignment validation
-	brokerByNode := make(map[int32]*broker)
-	for _, b := range c.bs {
-		brokerByNode[b.node] = b
-	}
-
-	for _, rt := range req.Topics {
-		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlter, faultKey{topic: rt.Topic}); e != nil {
+		if e := c.deny(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationAlter, faultKey{topic: rt.Topic, misrouted: misrouted}); e != nil {
 			donet(rt.Topic, e.Code)
 			if creq.skipsWork(e) { // a timed-out create still adds the partitions
 				continue
 			}
 		}
+		if misrouted {
+			donet(rt.Topic, kerr.NotController.Code)
+			continue
+		}
+		alters = append(alters, rt)
+		if t, ok := c.data.tps.gett(rt.Topic); ok && int(rt.Count) > len(t) {
+			newParts += int64(int(rt.Count) - len(t))
+		}
+	}
+
+	if misrouted {
+		return resp, nil
+	}
+
+	// Kafka fails the whole request if its deadline passed before the
+	// controller ran it, or if it would add too many partitions. The
+	// controller runs only if a topic is left.
+	if len(alters) > 0 {
+		switch {
+		case req.TimeoutMillis <= 0:
+			return failAll(kerr.RequestTimedOut.Code)
+		case newParts > int64(c.maxPartitionsPerRequest()):
+			return failAll(kerr.PolicyViolation.Code)
+		}
+	}
+
+	for _, rt := range alters {
 		t, ok := c.data.tps.gett(rt.Topic)
 		if !ok {
 			donet(rt.Topic, kerr.UnknownTopicOrPartition.Code)
 			continue
 		}
-		if rt.Count < int32(len(t)) {
+		if rt.Count <= int32(len(t)) { // Kafka: an equal count is no increase
 			donet(rt.Topic, kerr.InvalidPartitions.Code)
 			continue
 		}
@@ -93,27 +125,13 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 		existingPartitions := len(t)
 		numNewPartitions := int(rt.Count) - existingPartitions
 
-		// Validate assignment if provided
-		if len(rt.Assignment) > 0 {
-			if len(rt.Assignment) != numNewPartitions {
-				donet(rt.Topic, kerr.InvalidReplicaAssignment.Code)
-				continue
-			}
-			valid := true
+		// A non-nil assignment, even an empty one, must give every
+		// new partition a valid replica list of the topic's length.
+		if rt.Assignment != nil {
+			rf := min(c.data.treplicas[rt.Topic], len(c.bs))
+			valid := len(rt.Assignment) == numNewPartitions
 			for _, a := range rt.Assignment {
-				if len(a.Replicas) == 0 {
-					valid = false
-					break
-				}
-				for _, nodeID := range a.Replicas {
-					if _, ok := brokerByNode[nodeID]; !ok {
-						valid = false
-						break
-					}
-				}
-				if !valid {
-					break
-				}
+				valid = valid && c.validReplicas(a.Replicas) && len(a.Replicas) == rf
 			}
 			if !valid {
 				donet(rt.Topic, kerr.InvalidReplicaAssignment.Code)
@@ -124,30 +142,11 @@ func (c *Cluster) handleCreatePartitions(creq *clientReq) (kmsg.Response, error)
 		if !req.ValidateOnly {
 			for i := range numNewPartitions {
 				partNum := int32(existingPartitions) + int32(i)
+				pd := c.data.tps.mkp(rt.Topic, partNum, c.newPartData(partNum))
+				pd.t = rt.Topic
+				// An explicit assignment's first replica is the leader.
 				if len(rt.Assignment) > 0 {
-					// Use explicit assignment: first replica is leader
-					a := rt.Assignment[i]
-					leader := brokerByNode[a.Replicas[0]]
-					var followers []int32
-					if len(a.Replicas) > 1 {
-						followers = a.Replicas[1:]
-					}
-					pd := c.data.tps.mkp(rt.Topic, partNum, func() *partData {
-						return &partData{
-							p:          partNum,
-							dir:        defLogDir,
-							leader:     leader,
-							followers:  followers,
-							watch:      make(map[*watchFetch]struct{}),
-							shareWatch: make(map[*watchShareFetch]struct{}),
-							createdAt:  time.Now(),
-							rolledAt:   time.Now(),
-						}
-					})
-					pd.t = rt.Topic
-				} else {
-					pd := c.data.tps.mkp(rt.Topic, partNum, c.newPartData(partNum))
-					pd.t = rt.Topic
+					pd.leader = c.nodeBroker(rt.Assignment[i].Replicas[0])
 				}
 			}
 		}

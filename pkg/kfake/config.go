@@ -157,7 +157,7 @@ func GroupMinSessionTimeout(d time.Duration) Opt {
 }
 
 // GroupMaxSessionTimeout sets the cluster's maximum session timeout allowed
-// for groups, overriding the default 5 minutes.
+// for groups, overriding the default 30 minutes.
 func GroupMaxSessionTimeout(d time.Duration) Opt {
 	return opt{func(cfg *cfg) { cfg.maxSessionTimeout = d }}
 }
@@ -223,7 +223,9 @@ func MaxVersions(v *kversion.Versions) Opt {
 // EnableACLs enables ACL checking. When enabled, all requests are checked
 // against ACLs. By default, no ACLs exist, so all requests will be denied
 // unless you configure superusers (via Superuser option) and then add ACLs
-// via CreateACLs as that user.
+// via CreateACLs as that user. Without this option, DescribeACLs, CreateACLs,
+// and DeleteACLs answer SECURITY_DISABLED, as a broker with no authorizer
+// does.
 func EnableACLs() Opt {
 	return opt{func(cfg *cfg) { cfg.enableACLs = true }}
 }
@@ -235,9 +237,11 @@ type ACL struct {
 	Principal string
 	// Resource type: kmsg.ACLResourceTypeTopic, Group, Cluster, TransactionalId
 	Resource kmsg.ACLResourceType
-	// Name of the resource (topic name, group name, "*" for cluster, etc.)
+	// Name of the resource (topic name, group name, "kafka-cluster" for
+	// the cluster, etc.)
 	Name string
-	// Pattern type: kmsg.ACLResourcePatternTypeLiteral or Prefixed
+	// Pattern type: kmsg.ACLResourcePatternTypeLiteral (the default) or
+	// Prefixed
 	Pattern kmsg.ACLResourcePatternType
 	// Operation: kmsg.ACLOperationRead, Write, Create, Delete, Alter, Describe, etc.
 	Operation kmsg.ACLOperation
@@ -248,7 +252,8 @@ type ACL struct {
 }
 
 // BrokerConfigs sets initial broker-level dynamic configs. Empty values are
-// treated as deletes (reset to default). Configs most relevant for testing:
+// treated as deletes (reset to default). NewCluster fails for a value that
+// AlterConfigs would refuse. Configs most relevant for testing:
 //
 //   - group.consumer.heartbeat.interval.ms - heartbeat interval for KIP-848
 //     consumer groups (default 5000, lowered to 100 in test binaries)
@@ -261,6 +266,8 @@ type ACL struct {
 //   - message.max.bytes - max produce batch size (default 1048588)
 //   - transaction.max.timeout.ms - max transaction timeout (default 900000)
 //   - max.incremental.fetch.session.cache.slots - max fetch sessions per broker (default 1000)
+//   - log.dirs - comma separated log dirs every broker has, which
+//     AlterReplicaLogDirs moves replicas between (default log.dir, /mem/kfake)
 //
 // Other accepted configs include compression.type, default.replication.factor,
 // min.insync.replicas, log.retention.bytes, log.retention.ms, and
@@ -278,17 +285,19 @@ func BrokerConfigs(configs map[string]string) Opt {
 
 // DataDir enables disk persistence: the cluster continuously writes state
 // to the given directory, and on NewCluster it reloads persisted state from
-// that directory if it exists. The directory is created if needed.
+// that directory if it exists. The directory is created if needed. Give the
+// cluster a directory of its own: we write files under fixed names, such as
+// topics.json and groups.log, and replace or truncate a file already there
+// under one of those names.
 func DataDir(dir string) Opt {
 	return opt{func(cfg *cfg) { cfg.dataDir = dir }}
 }
 
-// SyncWrites enables per-batch fsync for segment and index files.
-// Without this, writes rely on the OS page cache and are only explicitly
-// synced on segment roll and shutdown, matching real Kafka's default
-// (log.flush.interval.messages=MAX_VALUE). This is much faster but
-// in-flight batches can be lost on a crash. With SyncWrites, every
-// produce is durable immediately at the cost of throughput.
+// SyncWrites enables per-batch fsync for segment and index files, so every
+// produce is durable immediately, at the cost of throughput. Without this,
+// we fsync a segment when it rolls, when compaction rewrites it, and at
+// Close: a crash of the process keeps every write, and a power loss can lose
+// recent batches.
 func SyncWrites() Opt {
 	return opt{func(c *cfg) { c.syncWrites = true }}
 }
@@ -315,12 +324,16 @@ func User(method, user, pass string, acls ...ACL) Opt {
 			if a.Allow {
 				perm = kmsg.ACLPermissionTypeAllow
 			}
+			pattern := a.Pattern
+			if pattern == kmsg.ACLResourcePatternTypeUnknown {
+				pattern = kmsg.ACLResourcePatternTypeLiteral
+			}
 			cfg.seedACLs = append(cfg.seedACLs, acl{
 				principal:    "User:" + user,
 				host:         host,
 				resourceType: a.Resource,
 				resourceName: a.Name,
-				pattern:      a.Pattern,
+				pattern:      pattern,
 				operation:    a.Operation,
 				permission:   perm,
 			})

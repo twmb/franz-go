@@ -148,6 +148,7 @@ func coverageReq(key int16, topic string, id [16]byte, group, txnID string) kmsg
 		req := kmsg.NewPtrSyncGroupRequest()
 		req.Group = group
 		req.Generation = -1
+		req.ProtocolType, req.Protocol = kmsg.StringPtr("consumer"), kmsg.StringPtr("range")
 		return req
 	case kmsg.DescribeGroups:
 		req := kmsg.NewPtrDescribeGroupsRequest()
@@ -573,33 +574,54 @@ func joinGroup(t *testing.T, cl *kgo.Client, group string) {
 // A partition selector fails that partition and leaves the rest alone.
 func TestFaultPartition(t *testing.T) {
 	t.Parallel()
-	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(3, topic))
-	cl := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
-
-	h := c.Fault(Fault{
-		Keys:       []kmsg.Key{kmsg.Produce},
-		Topic:      topic,
-		Partitions: []int32{2},
-		Err:        kerr.PolicyViolation,
-		Count:      -1,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for p := int32(0); p < 3; p++ {
-		r := &kgo.Record{Topic: topic, Partition: p, Value: []byte("v")}
-		err := cl.ProduceSync(ctx, r).FirstErr()
-		if p == 2 {
-			if !errors.Is(err, kerr.PolicyViolation) {
-				t.Errorf("partition 2: got %v, want policy violation", err)
+	for _, tc := range []struct {
+		name  string
+		txnID string // produce in this transaction, and select it too
+	}{
+		{name: "topic"},
+		{name: "transaction", txnID: "x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "t"
+			c := newCluster(t, NumBrokers(1), SeedTopics(3, topic))
+			opts := []kgo.Opt{kgo.RecordPartitioner(kgo.ManualPartitioner())}
+			if tc.txnID != "" {
+				opts = append(opts, kgo.TransactionalID(tc.txnID))
 			}
-		} else if err != nil {
-			t.Errorf("partition %d: %v", p, err)
-		}
-	}
-	if n := h.Hits(); n == 0 {
-		t.Error("fault never fired")
+			cl := newPlainClient(t, c, opts...)
+
+			h := c.Fault(Fault{
+				Keys:       []kmsg.Key{kmsg.Produce},
+				Topic:      topic,
+				Partitions: []int32{2},
+				TxnID:      tc.txnID,
+				Err:        kerr.PolicyViolation,
+				Count:      -1,
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if tc.txnID != "" {
+				if err := cl.BeginTransaction(); err != nil {
+					t.Fatalf("begin: %v", err)
+				}
+			}
+			for p := int32(0); p < 3; p++ {
+				r := &kgo.Record{Topic: topic, Partition: p, Value: []byte("v")}
+				err := cl.ProduceSync(ctx, r).FirstErr()
+				if p == 2 {
+					if !errors.Is(err, kerr.PolicyViolation) {
+						t.Errorf("partition 2: got %v, want policy violation", err)
+					}
+				} else if err != nil {
+					t.Errorf("partition %d: %v", p, err)
+				}
+			}
+			if n := h.Hits(); n == 0 {
+				t.Error("fault never fired")
+			}
+		})
 	}
 }
 
@@ -676,6 +698,15 @@ func TestFaultGroupHeartbeat(t *testing.T) {
 	}
 	if n := h.Hits(); n != 1 {
 		t.Errorf("fault fired %d times != 1", n)
+	}
+
+	// A topic a consumer group heartbeat subscribes to carries the group.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ConsumerGroupHeartbeat}, Group: "g848", Topic: "t", Err: kerr.CoordinatorLoadInProgress})
+	hb := kmsg.NewPtrConsumerGroupHeartbeatRequest()
+	hb.Group, hb.MemberID, hb.RebalanceTimeoutMillis = "g848", "m", 5000
+	hb.SubscribedTopicNames, hb.Topics = []string{"t"}, []kmsg.ConsumerGroupHeartbeatRequestTopic{}
+	if code := faultReq(t, cl, 0, hb).(*kmsg.ConsumerGroupHeartbeatResponse).ErrorCode; code != kerr.CoordinatorLoadInProgress.Code {
+		t.Errorf("faulted subscription answered %d", code)
 	}
 }
 
@@ -768,7 +799,7 @@ func TestFaultTopLevel(t *testing.T) {
 func TestFaultTxnID(t *testing.T) {
 	t.Parallel()
 	const topic, txnID, group = "t", "x", "g"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, topic))
 	cl := newPlainClient(t, c)
 
 	h := c.Fault(Fault{TxnID: txnID, Err: kerr.ProducerFenced, Count: -1})
@@ -803,8 +834,43 @@ func TestFaultTxnID(t *testing.T) {
 		t.Errorf("txn offset commit answered %v", tcr.Topics)
 	}
 
-	if n := h.Hits(); n != 3 {
-		t.Errorf("fault fired %d times != 3", n)
+	// A transactional produce fails on every partition.
+	prod := kmsg.NewPtrProduceRequest()
+	prod.TransactionID = kmsg.StringPtr(txnID)
+	prod.Acks = -1
+	prod.TimeoutMillis = 1000
+	prt := kmsg.NewProduceRequestTopic()
+	prt.Topic, prt.TopicID = topic, c.TopicInfo(topic).TopicID
+	for p := range int32(2) {
+		prp := kmsg.NewProduceRequestTopicPartition()
+		prp.Partition = p
+		prp.Records = rawBatch(0x0010, 1, 0, 0, kvRecord())
+		prt.Partitions = append(prt.Partitions, prp)
+	}
+	prod.Topics = append(prod.Topics, prt)
+	presp := faultReq(t, cl, 0, prod).(*kmsg.ProduceResponse)
+	if len(presp.Topics) != 1 || len(presp.Topics[0].Partitions) != 2 {
+		t.Errorf("produce answered %v", presp.Topics)
+	}
+	for _, rt := range presp.Topics {
+		for _, rp := range rt.Partitions {
+			if rp.ErrorCode != kerr.ProducerFenced.Code {
+				t.Errorf("produce partition %d answered %d", rp.Partition, rp.ErrorCode)
+			}
+		}
+	}
+
+	if n := h.Hits(); n != 4 {
+		t.Errorf("fault fired %d times != 4", n)
+	}
+
+	// A timed-out transactional produce, which goes on to the append,
+	// still answers each partition once.
+	h.Remove()
+	c.Fault(Fault{TxnID: txnID, Err: kerr.RequestTimedOut})
+	presp = faultReq(t, cl, 0, prod).(*kmsg.ProduceResponse)
+	if len(presp.Topics) != 1 || len(presp.Topics[0].Partitions) != 2 {
+		t.Errorf("timed-out produce v%d answered %+v, want one topic with two partitions", presp.Version, presp.Topics)
 	}
 }
 
@@ -942,7 +1008,9 @@ func TestFaultResourceACLs(t *testing.T) {
 	if resp.Results[0].ErrorCode != kerr.InvalidRequest.Code {
 		t.Errorf("faulted creation answered %d", resp.Results[0].ErrorCode)
 	}
-	if resp.Results[1].ErrorCode != 0 {
+	// Without EnableACLs, an unfaulted creation answers as a broker with
+	// no authorizer does.
+	if resp.Results[1].ErrorCode != kerr.SecurityDisabled.Code {
 		t.Errorf("other creation answered %d", resp.Results[1].ErrorCode)
 	}
 }
@@ -1442,6 +1510,7 @@ func TestFaultAfterApplyProduce(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		opts      []kgo.Opt
+		txnID     string // produce in this transaction, and select it rather than the topic
 		err       *kerr.Error
 		wantHWM   int64
 		wantHits  int  // 0 skips the check
@@ -1468,6 +1537,17 @@ func TestFaultAfterApplyProduce(t *testing.T) {
 			err:     kerr.NotEnoughReplicasAfterAppend,
 			wantHWM: 1,
 		},
+		{
+			// A transaction selector answers the whole produce, and the
+			// append still happens.
+			name:      "transaction",
+			opts:      []kgo.Opt{kgo.TransactionalID("x")},
+			txnID:     "x",
+			err:       kerr.RequestTimedOut,
+			wantHWM:   1,
+			wantHits:  1,
+			checkZero: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1476,10 +1556,19 @@ func TestFaultAfterApplyProduce(t *testing.T) {
 			opts := append(tc.opts, kgo.RetryBackoffFn(func(int) time.Duration { return 50 * time.Millisecond }))
 			cl := newPlainClient(t, c, opts...)
 
-			h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: tc.err})
+			f := Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: tc.err}
+			if tc.txnID != "" {
+				f.Topic, f.TxnID = "", tc.txnID
+			}
+			h := c.Fault(f)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			if tc.txnID != "" {
+				if err := cl.BeginTransaction(); err != nil {
+					t.Fatalf("begin: %v", err)
+				}
+			}
 			r := &kgo.Record{Topic: topic, Value: []byte("v")}
 			if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
 				t.Fatalf("produce: %v", err)

@@ -10,6 +10,9 @@ import (
 // Behavior:
 // * Advances log start offset for partitions
 // * Offset -1 means delete up to high watermark
+// * An offset at or below the log start offset changes nothing and succeeds
+// * A topic whose cleanup.policy is compact without delete is
+//   POLICY_VIOLATION
 //
 // Version notes:
 // * v1: ThrottleMillis
@@ -51,6 +54,7 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 		sp := kmsg.NewDeleteRecordsResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
+		sp.LowWatermark = -1 // Kafka's answer with an error
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}
@@ -96,17 +100,21 @@ func (c *Cluster) handleDeleteRecords(creq *clientReq) (kmsg.Response, error) {
 // offset of -1 truncates to the high watermark. We return the new log start
 // offset, which the response reports as the low watermark.
 func (c *Cluster) deleteRecords(pd *partData, offset int64) (int64, *kerr.Error) {
+	if c.data.isCompactTopic(pd.t) && !c.data.isDeleteTopic(pd.t) {
+		return 0, kerr.PolicyViolation
+	}
 	to := offset
 	if to == -1 {
 		to = pd.highWatermark
 	}
-	if to < pd.logStartOffset || to > pd.highWatermark {
+	if to < 0 || to > pd.highWatermark {
 		return 0, kerr.OffsetOutOfRange
 	}
-	// logStartOffset is not persisted live. On crash recovery without a
-	// snapshot it resets to 0, matching real Kafka unclean leader
-	// election. The snapshot captures it on clean shutdown.
-	pd.logStartOffset = to
-	c.trimLeft(pd)
+	if to <= pd.logStartOffset {
+		return pd.logStartOffset, nil
+	}
+	if !c.trimLeft(pd, to) {
+		return 0, kerr.KafkaStorageError
+	}
 	return to, nil
 }

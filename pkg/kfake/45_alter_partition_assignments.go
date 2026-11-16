@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"slices"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -13,7 +15,9 @@ import (
 // * ACL: ALTER on CLUSTER
 // * If Replicas is null, this is a cancel request and returns NO_REASSIGNMENT_IN_PROGRESS
 //   (kfake never has reassignments in progress)
-// * Since kfake is single-node, we don't actually perform reassignment, just validate
+// * A reassignment completes at once. Replicas are not tracked per partition
+//   (they follow the leader), so the only effect is that a leader outside the
+//   new replicas hands off to the first of them
 //
 // Version notes:
 // * v1: AllowReplicationFactorChange
@@ -28,37 +32,69 @@ func (c *Cluster) handleAlterPartitionAssignments(creq *clientReq) (kmsg.Respons
 		return nil, err
 	}
 
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
-		resp.ErrorCode = e.Code
-		if creq.skipsWork(e) {
-			return resp, nil
+	// A request-level error goes at the top level and on every
+	// partition, as Kafka does.
+	errResp := func(code int16) (kmsg.Response, error) {
+		resp.ErrorCode = code
+		for _, rt := range req.Topics {
+			st := kmsg.NewAlterPartitionAssignmentsResponseTopic()
+			st.Topic = rt.Topic
+			for _, rp := range rt.Partitions {
+				sp := kmsg.NewAlterPartitionAssignmentsResponseTopicPartition()
+				sp.Partition = rp.Partition
+				sp.ErrorCode = code
+				st.Partitions = append(st.Partitions, sp)
+			}
+			resp.Topics = append(resp.Topics, st)
 		}
+		return resp, nil
 	}
+
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
+		if creq.skipsWork(e) {
+			return errResp(e.Code)
+		}
+		resp.ErrorCode = e.Code
+	}
+	if len(req.Topics) == 0 {
+		return resp, nil
+	}
+	if req.TimeoutMillis <= 0 { // the deadline passed before the controller ran it
+		return errResp(kerr.RequestTimedOut.Code)
+	}
+	resp.AllowReplicationFactorChange = req.AllowReplicationFactorChange
+	defer c.persistTopicsState() // the leaders and epochs we move
 
 	for _, rt := range req.Topics {
 		st := kmsg.NewAlterPartitionAssignmentsResponseTopic()
 		st.Topic = rt.Topic
 
-		t, ok := c.data.tps.gett(rt.Topic)
+		t := c.data.tps[rt.Topic]
+		rf := min(c.data.treplicas[rt.Topic], len(c.bs))
 		for _, rp := range rt.Partitions {
 			sp := kmsg.NewAlterPartitionAssignmentsResponseTopicPartition()
 			sp.Partition = rp.Partition
 
-			// If replicas is non-nil, we "accept" the reassignment request
-			// but do nothing since kfake doesn't actually support multi-broker
-			// reassignment. ErrorCode stays 0 (success).
-			if e := creq.faults.check(faultKey{topic: rt.Topic}.part(rp.Partition)); e != nil {
-				sp.ErrorCode = e.Code
-			} else if !ok {
+			e := creq.faults.check(faultKey{topic: rt.Topic}.part(rp.Partition))
+			pd, ok := t[rp.Partition]
+			switch {
+			case e != nil && creq.skipsWork(e):
+			case !ok:
 				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
-			} else if _, pok := t[rp.Partition]; !pok {
-				sp.ErrorCode = kerr.UnknownTopicOrPartition.Code
-			} else if rp.Replicas == nil {
+			case rp.Replicas == nil:
 				// Null replicas means cancel reassignment; kfake never has
 				// any reassignments in progress.
 				sp.ErrorCode = kerr.NoReassignmentInProgress.Code
+			case !c.validReplicas(rp.Replicas):
+				sp.ErrorCode = kerr.InvalidReplicaAssignment.Code
+			case !req.AllowReplicationFactorChange && len(rp.Replicas) != rf:
+				sp.ErrorCode = kerr.InvalidReplicationFactor.Code
+			case !slices.Contains(rp.Replicas, pd.leader.node):
+				c.setLeader(rt.Topic, rp.Partition, pd, c.nodeBroker(rp.Replicas[0]))
 			}
-
+			if e != nil {
+				sp.ErrorCode = e.Code
+			}
 			st.Partitions = append(st.Partitions, sp)
 		}
 

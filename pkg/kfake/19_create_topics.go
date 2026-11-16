@@ -1,6 +1,9 @@
 package kfake
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -11,7 +14,10 @@ import (
 // * Must be sent to the controller
 // * ReplicaAssignment: uses len(assignment) as partition count; NumPartitions
 //   and ReplicationFactor must be -1 when provided
-// * Topic name collision detection: topics that differ only in . vs _ are rejected
+// * A name that differs only in . vs _ from an existing topic, or from an
+//   earlier topic in the request, is rejected
+// * A duplicated name answers INVALID_REQUEST; the other topics proceed
+// * More than 10000 new partitions in one request fails it with POLICY_VIOLATION
 // * ValidateOnly (v1+): performs validation without creating topics
 //
 // Version notes:
@@ -51,35 +57,40 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 		resp.Topics = append(resp.Topics, st)
 		return &resp.Topics[len(resp.Topics)-1]
 	}
-	donets := func(errCode int16) {
+	// failAll answers every topic the request names, a duplicate
+	// included, replacing the answers so far.
+	failAll := func(errCode int16) (kmsg.Response, error) {
+		resp.Topics = resp.Topics[:0]
 		for _, rt := range req.Topics {
-			donet(rt.Topic, errCode)
+			st := kmsg.NewCreateTopicsResponseTopic()
+			st.Topic = rt.Topic
+			st.ErrorCode = errCode
+			resp.Topics = append(resp.Topics, st)
 		}
-	}
-
-	if b != c.controller {
-		donets(kerr.NotController.Code)
 		return resp, nil
 	}
 
-	uniq := make(map[string]struct{})
+	misrouted := b != c.controller
+
+	// Kafka answers a duplicated name with INVALID_REQUEST before
+	// checking anything else, and creates the rest.
+	counts := make(map[string]int)
 	for _, rt := range req.Topics {
-		if _, ok := uniq[rt.Topic]; ok {
-			donets(kerr.InvalidRequest.Code)
-			return resp, nil
+		counts[rt.Topic]++
+	}
+
+	var (
+		creates  []*kmsg.CreateTopicsRequestTopic
+		newParts int64
+	)
+	for i := range req.Topics {
+		rt := &req.Topics[i]
+		if counts[rt.Topic] > 1 {
+			donet(rt.Topic, kerr.InvalidRequest.Code)
+			continue
 		}
-		uniq[rt.Topic] = struct{}{}
-	}
-
-	// Build normalized name map for collision detection within request
-	normalizedInReq := make(map[string]string) // normalized -> original
-	for _, rt := range req.Topics {
-		normalizedInReq[normalizeTopicName(rt.Topic)] = rt.Topic
-	}
-
-	for _, rt := range req.Topics {
-		// ACL check: cluster CREATE or topic CREATE
-		tk := faultKey{topic: rt.Topic}
+		// ACL check: cluster CREATE or topic CREATE, then routing
+		tk := faultKey{topic: rt.Topic, misrouted: misrouted}
 		var e *kerr.Error
 		if clusterCreate {
 			e = creq.faults.check(tk)
@@ -92,28 +103,61 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 				continue
 			}
 		}
-		var (
-			nparts    int
-			nreplicas int
-			configs   map[string]*string
-		)
-		if nparts, nreplicas, configs, e = c.createTopic(&rt, normalizedInReq, req.ValidateOnly); e != nil {
-			donet(rt.Topic, e.Code)
+		if misrouted {
+			donet(rt.Topic, kerr.NotController.Code)
 			continue
 		}
+		creates = append(creates, rt)
+		switch {
+		case len(rt.ReplicaAssignment) > 0:
+			newParts += int64(len(rt.ReplicaAssignment))
+		case rt.NumPartitions == -1:
+			newParts += int64(c.cfg.defaultNumParts)
+		case rt.NumPartitions > 0:
+			newParts += int64(rt.NumPartitions)
+		}
+	}
 
+	if misrouted {
+		return resp, nil
+	}
+
+	// Kafka fails the whole request if its deadline passed before the
+	// controller ran it, or if it would create too many partitions. The
+	// controller runs only if a topic is left.
+	if len(creates) > 0 {
+		switch {
+		case req.TimeoutMillis <= 0:
+			return failAll(kerr.RequestTimedOut.Code)
+		case newParts > int64(c.maxPartitionsPerRequest()):
+			return failAll(kerr.PolicyViolation.Code)
+		}
+	}
+
+	claimed := make(map[string]string) // normalized name => the entry that took it
+	for _, rt := range creates {
+		nparts, nreplicas, configs, e := c.createTopic(rt, claimed, req.ValidateOnly)
+		if e != nil {
+			st := donet(rt.Topic, e.Code)
+			if other := c.collidesWith(rt.Topic, claimed); e == kerr.InvalidTopicException && other != "" && st.ErrorCode == e.Code {
+				st.ErrorMessage = kmsg.StringPtr("Topic '" + rt.Topic + "' collides with existing topic: " + other)
+			}
+			continue
+		}
+		claimed[normalizeTopicName(rt.Topic)] = rt.Topic
 		st := donet(rt.Topic, 0)
 		if !req.ValidateOnly {
 			st.TopicID = c.data.t2id[rt.Topic]
 		}
+		// Without DESCRIBE_CONFIGS on the topic, Kafka leaves out what
+		// the topic was created with.
+		if !c.allowedACL(creq, rt.Topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribeConfigs) {
+			st.ConfigErrorCode = kerr.TopicAuthorizationFailed.Code
+			continue
+		}
 		st.NumPartitions = int32(nparts)
 		st.ReplicationFactor = int16(nreplicas)
-		for k, v := range configs {
-			c := kmsg.NewCreateTopicsResponseTopicConfig()
-			c.Name = k
-			c.Value = v
-			st.Configs = append(st.Configs, c)
-		}
+		st.Configs = c.createdTopicConfigs(rt.Topic, configs, req.ValidateOnly)
 	}
 
 	if !req.ValidateOnly {
@@ -125,9 +169,35 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 	return resp, nil
 }
 
+// createdTopicConfigs returns every config a newly created topic has, sorted
+// by name, as CreateTopics v5+ answers. A validate-only create stores nothing,
+// so we add the request's configs ourselves.
+func (c *Cluster) createdTopicConfigs(t string, reqConfigs map[string]*string, validateOnly bool) []kmsg.CreateTopicsResponseTopicConfig {
+	var cfgs []kmsg.CreateTopicsResponseTopicConfig
+	idx := make(map[string]int)
+	add := func(k string, v *string, src kmsg.ConfigSource, _ bool) {
+		rc := kmsg.NewCreateTopicsResponseTopicConfig()
+		rc.Name, rc.Value, rc.Source = k, v, int8(src)
+		if i, ok := idx[k]; ok { // a later source overrides
+			cfgs[i] = rc
+			return
+		}
+		idx[k] = len(cfgs)
+		cfgs = append(cfgs, rc)
+	}
+	c.data.configs(t, add)
+	if validateOnly {
+		for k, v := range reqConfigs {
+			add(k, v, kmsg.ConfigSourceDynamicTopicConfig, false)
+		}
+	}
+	slices.SortFunc(cfgs, func(l, r kmsg.CreateTopicsResponseTopicConfig) int { return strings.Compare(l.Name, r.Name) })
+	return cfgs
+}
+
 // createTopic runs CreateTopics's per-topic work: it validates the name, the
 // counts and any manual assignment, then creates the topic. inReq maps a
-// normalized name to the name another topic in the same request claimed, and
+// normalized name to the earlier entry of the same request that took it, and
 // is nil outside a request. A validate-only create runs every check and
 // creates nothing.
 //
@@ -135,16 +205,13 @@ func (c *Cluster) handleCreateTopics(creq *clientReq) (kmsg.Response, error) {
 // reports. The caller runs notifyTopicChange, refreshCompactTicker and
 // persistTopicsState once, after its whole batch.
 func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[string]string, validateOnly bool) (int, int, map[string]*string, *kerr.Error) {
+	if !validTopicName(rt.Topic) {
+		return 0, 0, nil, kerr.InvalidTopicException
+	}
 	if _, ok := c.data.tps.gett(rt.Topic); ok {
 		return 0, 0, nil, kerr.TopicAlreadyExists
 	}
-	// Topics that differ only in . vs _ collide, either with an existing
-	// topic or with another topic in the same request.
-	normalized := normalizeTopicName(rt.Topic)
-	if existing, ok := c.data.tnorms[normalized]; ok && existing != rt.Topic {
-		return 0, 0, nil, kerr.InvalidTopicException
-	}
-	if orig, ok := inReq[normalized]; ok && orig != rt.Topic {
+	if c.collidesWith(rt.Topic, inReq) != "" {
 		return 0, 0, nil, kerr.InvalidTopicException
 	}
 	var nparts, nreplicas int
@@ -154,39 +221,33 @@ func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[strin
 		if rt.NumPartitions != -1 || rt.ReplicationFactor != -1 {
 			return 0, 0, nil, kerr.InvalidRequest
 		}
-		// Validate: consecutive 0-based partition IDs, non-empty replicas.
-		valid := true
+		// Every partition needs a valid replica list of the same
+		// length, and the IDs are consecutive from 0.
 		ids := make(map[int32]struct{}, len(rt.ReplicaAssignment))
 		for _, ra := range rt.ReplicaAssignment {
 			if _, dup := ids[ra.Partition]; dup {
-				valid = false
-				break
+				return 0, 0, nil, kerr.InvalidReplicaAssignment
 			}
 			ids[ra.Partition] = struct{}{}
-			if len(ra.Replicas) == 0 {
-				valid = false
-				break
+			if !c.validReplicas(ra.Replicas) || len(ra.Replicas) != len(rt.ReplicaAssignment[0].Replicas) {
+				return 0, 0, nil, kerr.InvalidReplicaAssignment
 			}
 		}
-		if valid {
-			for i := range int32(len(rt.ReplicaAssignment)) {
-				if _, ok := ids[i]; !ok {
-					valid = false
-					break
-				}
+		for i := range int32(len(rt.ReplicaAssignment)) {
+			if _, ok := ids[i]; !ok {
+				return 0, 0, nil, kerr.InvalidReplicaAssignment
 			}
-		}
-		if !valid {
-			return 0, 0, nil, kerr.InvalidReplicaAssignment
 		}
 		nparts = len(rt.ReplicaAssignment)
 		nreplicas = len(rt.ReplicaAssignment[0].Replicas)
 	} else {
-		if int(rt.ReplicationFactor) > len(c.bs) {
+		switch {
+		case rt.ReplicationFactor == 0 || rt.ReplicationFactor < -1:
 			return 0, 0, nil, kerr.InvalidReplicationFactor
-		}
-		if rt.NumPartitions == 0 {
+		case rt.NumPartitions == 0 || rt.NumPartitions < -1:
 			return 0, 0, nil, kerr.InvalidPartitions
+		case int(rt.ReplicationFactor) > len(c.bs):
+			return 0, 0, nil, kerr.InvalidReplicationFactor
 		}
 		nparts = int(rt.NumPartitions)
 		if nparts < 0 {
@@ -194,21 +255,74 @@ func (c *Cluster) createTopic(rt *kmsg.CreateTopicsRequestTopic, inReq map[strin
 		}
 		nreplicas = int(rt.ReplicationFactor)
 		if nreplicas < 0 {
-			nreplicas = 3
-			if nreplicas > len(c.bs) {
-				nreplicas = len(c.bs)
-			}
+			nreplicas = min(3, len(c.bs))
 		}
+	}
+	// A request caps the partitions it adds before it gets here; this
+	// caps a create from Metadata or Cluster.CreateTopic.
+	if nparts > int(c.maxPartitionsPerRequest()) {
+		return 0, 0, nil, kerr.PolicyViolation
 	}
 
 	configs := make(map[string]*string)
 	for _, rc := range rt.Configs {
+		if !validTopicConfig(rc.Name, rc.Value) {
+			return 0, 0, nil, kerr.InvalidConfig
+		}
 		configs[rc.Name] = rc.Value
 	}
 
 	// ValidateOnly (v1+): skip actual creation
 	if !validateOnly {
 		c.data.mkt(rt.Topic, nparts, nreplicas, configs)
+		// The first replica of a manual assignment leads, as in Kafka.
+		t := c.data.tps[rt.Topic]
+		for _, ra := range rt.ReplicaAssignment {
+			t[ra.Partition].leader = c.nodeBroker(ra.Replicas[0])
+		}
 	}
 	return nparts, nreplicas, configs, nil
+}
+
+// collidesWith returns the topic that t collides with, or "": an existing
+// topic, or an earlier entry of the same request, whose name differs from t
+// only in . and _. Unlike Kafka, which creates both of two such names in one
+// request, we refuse the later one.
+func (c *Cluster) collidesWith(t string, inReq map[string]string) string {
+	normalized := normalizeTopicName(t)
+	for _, other := range c.data.tnorms[normalized] {
+		if other != t {
+			return other
+		}
+	}
+	if other, ok := inReq[normalized]; ok && other != t {
+		return other
+	}
+	return ""
+}
+
+// validReplicas reports whether replicas is a manual assignment Kafka
+// accepts: not empty, every broker exists, and no broker twice.
+func (c *Cluster) validReplicas(replicas []int32) bool {
+	if len(replicas) == 0 {
+		return false
+	}
+	for i, r := range replicas {
+		// The unknown-broker check first bounds the duplicate scan
+		// to the broker count.
+		if c.nodeBroker(r) == nil || slices.Contains(replicas[:i], r) {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeBroker returns the broker with the given node ID, or nil.
+func (c *Cluster) nodeBroker(node int32) *broker {
+	for _, b := range c.bs {
+		if b.node == node {
+			return b
+		}
+	}
+	return nil
 }

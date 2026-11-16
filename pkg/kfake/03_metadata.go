@@ -8,9 +8,10 @@ import (
 // Metadata: v0-13
 //
 // Behavior:
-// * Null topics returns all topics (v1+)
+// * Null topics returns all topics (v1+), as do empty topics at v0
 // * Empty topics returns no topics
-// * AllowAutoTopicCreation is respected if cluster config allows it
+// * AllowAutoTopicCreation is respected if cluster config allows it, and is
+//   always on below v4; creating needs cluster or topic CREATE
 // * Topics can be requested by name or by ID (v10+)
 //
 // Version notes:
@@ -45,26 +46,31 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 	resp.ClusterID = &c.cfg.clusterID
 	resp.ControllerID = c.controller.node
 
-	id2t := make(map[uuid]string)
-	tidx := make(map[string]int)
+	tidx := make(map[tkey]int)
 
 	donet := func(t string, id uuid, errCode int16) *kmsg.MetadataResponseTopic {
-		if i, ok := tidx[t]; ok {
+		key := tkey{t: t}
+		if t == "" {
+			key.id = id // each nameless ID gets its own entry
+		}
+		if i, ok := tidx[key]; ok {
 			return &resp.Topics[i]
 		}
-		id2t[id] = t
-		tidx[t] = len(resp.Topics)
+		tidx[key] = len(resp.Topics)
 		st := kmsg.NewMetadataResponseTopic()
 		if t != "" {
 			st.Topic = kmsg.StringPtr(t)
 		}
 		st.TopicID = id
-		if v, ok := c.data.tcfgs[t]["kfake.is_internal"]; ok && v != nil && *v == "true" {
-			st.IsInternal = true
-		}
 		st.ErrorCode = errCode
-		if req.IncludeTopicAuthorizedOperations {
-			st.AuthorizedOperations = c.topicAuthorizedOps(creq, t)
+		// We say nothing more about a topic you may not describe.
+		if t != "" && errCode != kerr.TopicAuthorizationFailed.Code {
+			if v, ok := c.data.tcfgs[t]["kfake.is_internal"]; ok && v != nil && *v == "true" {
+				st.IsInternal = true
+			}
+			if req.IncludeTopicAuthorizedOperations {
+				st.AuthorizedOperations = c.topicAuthorizedOps(creq, t)
+			}
 		}
 		resp.Topics = append(resp.Topics, st)
 		return &resp.Topics[len(resp.Topics)-1]
@@ -79,7 +85,7 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 	}
 	okp := func(t string, id uuid, p int32, pd *partData) {
 		if e := creq.faults.check(faultKey{topic: t, topicID: id}.part(p)); e != nil {
-			donep(t, id, p, e.Code)
+			donep(t, id, p, e.Code).Leader = -1
 			return
 		}
 		nreplicas := c.data.treplicas[t]
@@ -98,7 +104,8 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 		sp.ISR = sp.Replicas
 	}
 
-	allowAuto := req.AllowAutoTopicCreation && c.cfg.allowAutoTopic
+	allowAuto := (req.AllowAutoTopicCreation || req.Version < 4) && c.cfg.allowAutoTopic
+	var created bool
 	// Dedupe after name resolution so a request that specifies both a
 	// topic name and its TopicID produces one response entry with one
 	// set of partitions (not a merged entry with partitions duplicated).
@@ -124,17 +131,43 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 		}
 
 		if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}); e != nil {
-			donet(topic, rt.TopicID, e.Code)
+			if rt.TopicID != noID && e == kerr.TopicAuthorizationFailed {
+				donet("", rt.TopicID, e.Code) // asked by ID, denied without the name
+			} else {
+				donet(topic, rt.TopicID, e.Code)
+			}
 			continue
 		}
 
 		ps, ok := c.data.tps.gett(topic)
 		if !ok {
-			if !allowAuto {
-				donet(topic, rt.TopicID, kerr.UnknownTopicOrPartition.Code)
+			if allowAuto && !c.allowedClusterACL(creq, kmsg.ACLOperationCreate) {
+				if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationCreate, faultKey{topic: topic}); e != nil {
+					donet(topic, noID, e.Code)
+					continue
+				}
+			}
+			if !validTopicName(topic) {
+				donet(topic, noID, kerr.InvalidTopicException.Code)
 				continue
 			}
-			c.data.mkt(topic, -1, -1, nil)
+			if !allowAuto {
+				donet(topic, noID, kerr.UnknownTopicOrPartition.Code)
+				continue
+			}
+			// Kafka checks the name, then asks the controller to
+			// create the topic and answers UNKNOWN_TOPIC_OR_PARTITION
+			// while it does. We create the topic at once, and answer
+			// a topic the controller would refuse the same way.
+			ct := kmsg.NewCreateTopicsRequestTopic()
+			ct.Topic = topic
+			ct.NumPartitions = -1
+			ct.ReplicationFactor = -1
+			if _, _, _, e := c.createTopic(&ct, nil, false); e != nil {
+				donet(topic, noID, kerr.UnknownTopicOrPartition.Code)
+				continue
+			}
+			created = true
 			ps, _ = c.data.tps.gett(topic)
 		}
 
@@ -148,10 +181,14 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 			okp(topic, id, p, pd)
 		}
 	}
-	if req.Topics == nil && c.data.tps != nil {
+	if (req.Topics == nil || req.Version == 0 && len(req.Topics) == 0) && c.data.tps != nil {
 		for topic, ps := range c.data.tps {
-			// For listing all topics, filter to only authorized topics
+			// Listing all topics leaves out a topic you may not
+			// describe; a fault answers the topic with its error.
 			if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}); e != nil {
+				if e != kerr.TopicAuthorizationFailed {
+					donet(topic, c.data.t2id[topic], e.Code)
+				}
 				continue
 			}
 			id := c.data.t2id[topic]
@@ -165,5 +202,34 @@ func (c *Cluster) handleMetadata(creq *clientReq) (kmsg.Response, error) {
 		resp.AuthorizedOperations = c.clusterAuthorizedOps(creq)
 	}
 
+	if created {
+		c.notifyTopicChange()
+		c.refreshCompactTicker()
+		c.persistTopicsState()
+	}
+
 	return resp, nil
+}
+
+// validTopicName reports whether Kafka accepts t as a topic name: 1 to 249
+// of [a-zA-Z0-9._-], other than "." and "..".
+func validTopicName(t string) bool {
+	if t == "" || t == "." || t == ".." || len(t) > 249 {
+		return false
+	}
+	for i := range len(t) {
+		switch b := t[i]; {
+		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '.', b == '_', b == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// tkey keys a response's topic entries: a topic by its name, or by its ID if
+// it has no name, so that no name collides with an ID.
+type tkey struct {
+	t  string
+	id uuid
 }

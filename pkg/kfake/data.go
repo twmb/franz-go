@@ -3,16 +3,19 @@ package kfake
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"math/rand"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -34,7 +37,7 @@ type (
 		t2id      map[string]uuid               // topic name => topic IDs
 		treplicas map[string]int                // topic name => # replicas
 		tcfgs     map[string]map[string]*string // topic name => config name => config value
-		tnorms    map[string]string             // normalized name (. replaced with _) => topic name
+		tnorms    map[string][]string           // normalized name (. replaced with _) => topic names
 	}
 
 	abortedTxnEntry struct {
@@ -100,13 +103,13 @@ type (
 		epoch               int32
 		numRecords          int32
 		inTx                bool // in an uncommitted transaction
+		control             bool // a transaction marker
 	}
 
 	partData struct {
 		abortedTxns []abortedTxnEntry // sorted by lastOffset, for read_committed fetch
 		t           string
 		p           int32
-		dir         string
 
 		highWatermark    int64
 		lastStableOffset int64
@@ -121,8 +124,26 @@ type (
 		// values, or HWM if empty. Replaces per-batch inTx scanning.
 		uncommittedPIDs map[int64]int64
 
+		// dirs is the log dir each broker, by node ID, keeps its
+		// replica in, which the log dir requests report and move; a
+		// broker not here uses the first configured dir.
+		dirs map[int32]string
+
 		leader    *broker
 		followers followers
+
+		// failed is set when a compaction swap leaves the partition's
+		// directories in a state we cannot settle. Like Kafka for a
+		// partition on an offline log dir, we then answer produce and
+		// fetch with KAFKA_STORAGE_ERROR, and we write nothing to it.
+		failed bool
+
+		// swapRetry is set when the next compaction tries to finish the
+		// swap that failed the partition. swapSegs and swapBytes are the
+		// new files' while they are still beside the live directory.
+		swapRetry bool
+		swapSegs  []segmentInfo
+		swapBytes int64
 
 		watch      map[*watchFetch]struct{}
 		shareWatch map[*watchShareFetch]struct{}
@@ -192,6 +213,7 @@ func (b *partBatch) meta(segPos int64) batchMeta {
 		epoch:               b.epoch,
 		numRecords:          b.NumRecords,
 		inTx:                b.inTx,
+		control:             b.Attributes&0x0020 != 0,
 	}
 }
 
@@ -199,6 +221,14 @@ func (b *partBatch) meta(segPos int64) batchMeta {
 // Kafka considers topics that differ only in . vs _ as colliding.
 func normalizeTopicName(t string) string {
 	return strings.ReplaceAll(t, ".", "_")
+}
+
+func (d *data) dropNorm(t string) {
+	norm := normalizeTopicName(t)
+	d.tnorms[norm] = slices.DeleteFunc(d.tnorms[norm], func(n string) bool { return n == t })
+	if len(d.tnorms[norm]) == 0 {
+		delete(d.tnorms, norm)
+	}
 }
 
 func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) {
@@ -224,7 +254,8 @@ func (d *data) mkt(t string, nparts, nreplicas int, configs map[string]*string) 
 	d.id2t[id] = t
 	d.t2id[t] = id
 	d.treplicas[t] = nreplicas
-	d.tnorms[normalizeTopicName(t)] = t
+	norm := normalizeTopicName(t)
+	d.tnorms[norm] = append(d.tnorms[norm], t)
 	if configs != nil {
 		d.tcfgs[t] = configs
 	}
@@ -246,7 +277,6 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 	return func() *partData {
 		return &partData{
 			p:          p,
-			dir:        defLogDir,
 			leader:     c.bs[rand.Intn(len(c.bs))],
 			watch:      make(map[*watchFetch]struct{}),
 			shareWatch: make(map[*watchShareFetch]struct{}),
@@ -553,9 +583,26 @@ func (pd *partData) searchOffset(o int64) (segIdx, metaIdx int, found, atEnd boo
 	return si, mi, true, false
 }
 
-func (c *Cluster) trimLeft(pd *partData) {
-	// Trim batchMeta segments, deleting fully-trimmed segment + index files.
-	pdir := partDir(c.storageDir, pd.t, pd.p)
+// trimLeft moves the log start offset to start and drops what lies below it,
+// and returns whether it did. We save the log start offset before we delete
+// any segment file, so a crash never restarts the log below it; if the save
+// fails, nothing moves.
+func (c *Cluster) trimLeft(pd *partData, start int64) bool {
+	prev := pd.logStartOffset
+	pd.logStartOffset = start
+	if !c.persistLogStart(pd) {
+		pd.logStartOffset = prev
+		return false
+	}
+	c.dropBelowLogStart(pd)
+	pd.recalculateLSO()
+	return true
+}
+
+// dropBelowLogStart drops the batches below the log start offset from the
+// index, and deletes the segment and index files left with none.
+func (c *Cluster) dropBelowLogStart(pd *partData) {
+	pdir := c.partDir(pd)
 outer:
 	for len(pd.segments) > 0 {
 		seg := &pd.segments[0]
@@ -583,7 +630,6 @@ outer:
 	}
 	pd.rebuildMaxTimestampMeta()
 	pd.trimAbortedTxns()
-	c.shareGroups.logStartMoved(pd)
 }
 
 // legacyOffsetsBefore answers ListOffsets v0 the way a broker that still
@@ -650,19 +696,17 @@ func (pd *partData) closeAllFiles(doSync bool) {
 }
 
 // recalculateLSO recalculates the last stable offset from uncommittedPIDs.
-// LSO = min of all uncommittedPIDs values, or HWM if empty.
+// LSO = min of all uncommittedPIDs values, or HWM if empty. Like Kafka, we
+// never put it below the log start offset: a read_committed consumer
+// listing the latest offset must get one it can fetch.
 func (pd *partData) recalculateLSO() {
-	if len(pd.uncommittedPIDs) == 0 {
-		pd.lastStableOffset = pd.highWatermark
-		return
-	}
 	lso := pd.highWatermark
 	for _, off := range pd.uncommittedPIDs {
 		if off < lso {
 			lso = off
 		}
 	}
-	pd.lastStableOffset = lso
+	pd.lastStableOffset = max(lso, pd.logStartOffset)
 }
 
 /////////////
@@ -674,14 +718,9 @@ func (pd *partData) recalculateLSO() {
 //   - default configs
 //   - dynamic broker configs
 func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kmsg.ConfigSource, sensitive bool)) {
-	if node >= 0 {
-		for _, b := range c.bs {
-			if b.node == node {
-				id := strconv.Itoa(int(node))
-				fn("broker.id", &id, kmsg.ConfigSourceStaticBrokerConfig, false)
-				break
-			}
-		}
+	if node >= 0 && c.nodeBroker(node) != nil {
+		id := strconv.Itoa(int(node))
+		fn("broker.id", &id, kmsg.ConfigSourceStaticBrokerConfig, false)
 	}
 	for _, c := range []struct {
 		k    string
@@ -698,9 +737,20 @@ func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kms
 
 	for k, v := range configDefaults {
 		if _, ok := validBrokerConfigs[k]; ok {
-			v := v
+			// The session timeout options change these defaults.
+			switch k {
+			case "group.min.session.timeout.ms":
+				v = strconv.Itoa(int(c.cfg.minSessionTimeout.Milliseconds()))
+			case "group.max.session.timeout.ms":
+				v = strconv.Itoa(int(c.cfg.maxSessionTimeout.Milliseconds()))
+			}
 			fn(k, &v, kmsg.ConfigSourceDefaultConfig, false)
 		}
+	}
+	// Kafka has no default for these two, and falls back to
+	// log.retention.hours and log.roll.hours.
+	for _, k := range []string{"log.retention.ms", "log.roll.ms"} {
+		fn(k, nil, kmsg.ConfigSourceDefaultConfig, false)
 	}
 
 	for k, v := range c.bcfgs {
@@ -724,7 +774,7 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 	}
 	for k, v := range d.c.bcfgs {
 		if topicEquiv, ok := validBrokerConfigs[k]; ok && topicEquiv != "" {
-			fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
+			fn(topicEquiv, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
 		}
 	}
 	for k, v := range d.tcfgs[t] {
@@ -732,31 +782,76 @@ func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSou
 	}
 }
 
-// configListAppend appends val to a comma-separated list config value.
-func configListAppend(current, val *string) *string {
-	if val == nil {
-		return current
-	}
-	if current == nil || *current == "" {
-		return val
-	}
-	s := *current + "," + *val
-	return &s
+// alterResource is one resource of an AlterConfigs or IncrementalAlterConfigs
+// request, for alterConfigsPrecheck: its config names, and the names whose
+// op sets a null value.
+type alterResource struct {
+	typ   kmsg.ConfigResourceType
+	name  string
+	keys  []string
+	nulls []string
 }
 
-// configListSubtract removes val from a comma-separated list config value.
-func configListSubtract(current, val *string) *string {
-	if val == nil || current == nil {
-		return current
+// alterConfigsPrecheck returns, per resource, the INVALID_REQUEST message
+// Kafka answers before it authorizes the resource, or "": every copy of a
+// resource listed twice, a config named twice, and a null value.
+func alterConfigsPrecheck(rs []alterResource) []string {
+	msgs := make([]string, len(rs))
+	type id struct {
+		typ  kmsg.ConfigResourceType
+		name string
 	}
-	parts := strings.Split(*current, ",")
-	out := parts[:0]
-	for _, p := range parts {
-		if p != *val {
-			out = append(out, p)
+	first := make(map[id]int, len(rs))
+	for i, r := range rs {
+		if j, ok := first[id{r.typ, r.name}]; ok {
+			msgs[i] = "Each resource must appear at most once."
+			msgs[j] = msgs[i]
+			continue
+		}
+		first[id{r.typ, r.name}] = i
+	}
+	for i, r := range rs {
+		if msgs[i] != "" {
+			continue
+		}
+		if len(r.keys) != len(slices.Compact(slices.Sorted(slices.Values(r.keys)))) {
+			msgs[i] = "Error due to duplicate config keys"
+		} else if len(r.nulls) > 0 {
+			msgs[i] = "Null value not supported for : " + strings.Join(r.nulls, ", ")
 		}
 	}
-	s := strings.Join(out, ",")
+	return msgs
+}
+
+// configListOp applies an APPEND or SUBTRACT of val, a comma separated list,
+// to the list config current, which is def when unset. As in Kafka, APPEND
+// adds each value not already present, and SUBTRACT removes one occurrence of
+// each value. The caller rejects a nil val.
+func configListOp(op kmsg.IncrementalAlterConfigOp, current *string, def string, val *string) *string {
+	cur := def
+	if current != nil {
+		cur = *current
+	}
+	var parts []string
+	for _, p := range strings.Split(cur, ",") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	var vals []string // like Java's split, which drops trailing empty values
+	if t := strings.TrimRight(*val, ","); t != "" || *val == "" {
+		vals = strings.Split(t, ",")
+	}
+	for _, v := range vals {
+		i := slices.Index(parts, v)
+		switch {
+		case op == kmsg.IncrementalAlterConfigOpAppend && i < 0:
+			parts = append(parts, v)
+		case op == kmsg.IncrementalAlterConfigOpSubtract && i >= 0:
+			parts = slices.Delete(parts, i, i+1)
+		}
+	}
+	s := strings.Join(parts, ",")
 	return &s
 }
 
@@ -766,26 +861,60 @@ func isListConfig(name string) bool {
 	return ok && ct == kmsg.ConfigTypeList
 }
 
-// validateBrokerConfig returns whether v is a valid value for broker config k.
+// validateBrokerConfig returns whether v is a valid value for broker config k:
+// a value of the key's type, and for the two intervals we start tickers with
+// and producer.id.expiration.ms, one Kafka accepts. A key we do not know
+// accepts any value.
 func validateBrokerConfig(k string, v *string) bool {
 	if v == nil {
 		return true
 	}
-	if ct, ok := configTypes[k]; ok {
-		switch ct {
-		case kmsg.ConfigTypeInt, kmsg.ConfigTypeLong:
-			if _, err := strconv.ParseInt(*v, 10, 64); err != nil {
-				return false
-			}
-		default: // Boolean, String, List, etc. accept any string value
-		}
+	if !validConfigType(k, *v) {
+		return false
+	}
+	switch k {
+	case "log.cleaner.backoff.ms": // Kafka: at least 0
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n >= 0
+	case "controller.max.records.per.batch", "offsets.retention.minutes", "offsets.retention.check.interval.ms", "producer.id.expiration.ms": // Kafka: at least 1
+		n, _ := strconv.ParseInt(*v, 10, 64)
+		return n >= 1
 	}
 	return true
 }
 
+// validConfigType returns whether v parses as the type of config k. A key
+// with no type, or a type we do not parse, accepts any value.
+func validConfigType(k, v string) bool {
+	var err error
+	switch configTypes[k] {
+	case kmsg.ConfigTypeInt:
+		_, err = strconv.ParseInt(v, 10, 32)
+	case kmsg.ConfigTypeLong:
+		_, err = strconv.ParseInt(v, 10, 64)
+	default: // Boolean, String, List, etc. accept any string value
+	}
+	return err == nil
+}
+
+// validTopicConfig returns whether v is a valid value for topic config k:
+// non-nil, and of the key's type if we know the key. We accept any name,
+// so that you can stub configs we do not model.
+func validTopicConfig(k string, v *string) bool {
+	if v == nil {
+		return false
+	}
+	if _, ok := validTopicConfigs[k]; !ok {
+		return true
+	}
+	return validConfigType(k, *v)
+}
+
+// setTopicConfig sets a topic config, or with dry, only returns whether the
+// value is valid.
 func (d *data) setTopicConfig(t, k string, v *string, dry bool) bool {
 	if dry {
-		return true
+		return validTopicConfig(k, v)
 	}
 	if _, ok := d.tcfgs[t]; !ok {
 		d.tcfgs[t] = make(map[string]*string)
@@ -801,13 +930,33 @@ var validTopicConfigs = map[string]string{
 	"compression.type":       "compression.type",
 	"delete.retention.ms":    "",
 	"kfake.is_internal":      "",
-	"max.message.bytes":      "log.message.max.bytes",
+	"max.message.bytes":      "message.max.bytes",
 	"message.timestamp.type": "log.message.timestamp.type",
 	"min.insync.replicas":    "min.insync.replicas",
 	"retention.bytes":        "log.retention.bytes",
 	"retention.ms":           "log.retention.ms",
 	"segment.bytes":          "log.segment.bytes",
 	"segment.ms":             "log.roll.ms",
+}
+
+// topicDefaultSynonyms names the broker static default each topic config
+// falls back to in Kafka, which is at our default for the topic config. Kafka
+// lists log.retention.hours and log.roll.hours, 168 by default, only after a
+// log.retention.ms or log.roll.ms synonym, since those two have no default.
+var topicDefaultSynonyms = map[string]struct {
+	k     string
+	hours bool
+}{
+	"cleanup.policy":         {k: "log.cleanup.policy"},
+	"compression.type":       {k: "compression.type"},
+	"delete.retention.ms":    {k: "log.cleaner.delete.retention.ms"},
+	"max.message.bytes":      {k: "message.max.bytes"},
+	"message.timestamp.type": {k: "log.message.timestamp.type"},
+	"min.insync.replicas":    {k: "min.insync.replicas"},
+	"retention.bytes":        {k: "log.retention.bytes"},
+	"retention.ms":           {k: "log.retention.hours", hours: true},
+	"segment.bytes":          {k: "log.segment.bytes"},
+	"segment.ms":             {k: "log.roll.hours", hours: true},
 }
 
 // All valid broker configs we support, as well as their equivalent
@@ -817,11 +966,13 @@ var validBrokerConfigs = map[string]string{
 	"broker.rack":                               "",
 	"compression.type":                          "compression.type",
 	"connections.max.reauth.ms":                 "",
+	"controller.max.records.per.batch":          "",
 	"default.replication.factor":                "",
 	"fetch.max.bytes":                           "",
 	"max.incremental.fetch.session.cache.slots": "",
 	"group.consumer.heartbeat.interval.ms":      "",
 	"group.consumer.session.timeout.ms":         "",
+	"group.consumer.max.size":                   "",
 	"group.max.size":                            "",
 	"group.min.session.timeout.ms":              "",
 	"group.max.session.timeout.ms":              "",
@@ -830,6 +981,7 @@ var validBrokerConfigs = map[string]string{
 	"log.message.timestamp.type":                "message.timestamp.type",
 	"transaction.max.timeout.ms":                "",
 	"transactional.id.expiration.ms":            "",
+	"producer.id.expiration.ms":                 "",
 	"log.retention.bytes":                       "retention.bytes",
 	"log.retention.ms":                          "retention.ms",
 	"log.segment.bytes":                         "segment.bytes",
@@ -868,6 +1020,14 @@ var validGroupConfigs = map[string]bool{
 	"share.heartbeat.interval.ms":      true,
 	"share.partition.max.record.locks": true,
 	"share.renew.acknowledge.enable":   true,
+}
+
+// groupConfigDefaults are the defaults of the group configs that have no
+// broker config to fall back to.
+var groupConfigDefaults = map[string]string{
+	"share.auto.offset.reset":        "latest",
+	"share.isolation.level":          "read_uncommitted",
+	"share.renew.acknowledge.enable": "true",
 }
 
 // validClientMetricsConfigs is the set of keys a KIP-714 client metrics
@@ -914,20 +1074,14 @@ func validateClientMetricsConfig(k string, v *string) *kerr.Error {
 			return kerr.InvalidRequest
 		}
 	case "match":
-		if strings.TrimSpace(*v) == "" {
-			return nil
-		}
-		for _, m := range strings.Split(*v, ",") {
-			// Kafka splits on every = and drops trailing empty
-			// pieces, so a=b=c and a= are both illegal.
-			parts := strings.Split(m, "=")
-			for len(parts) > 0 && parts[len(parts)-1] == "" {
-				parts = parts[:len(parts)-1]
-			}
-			if len(parts) != 2 || !validClientMetricsMatchKeys[strings.TrimSpace(parts[0])] {
+		for _, m := range splitConfigList(v) {
+			// Kafka splits at the first =, so the regex can hold
+			// one (KAFKA-21041).
+			k, re, ok := strings.Cut(m, "=")
+			if !ok || !validClientMetricsMatchKeys[strings.TrimSpace(k)] {
 				return kerr.InvalidConfig
 			}
-			if _, err := regexp.Compile(strings.TrimSpace(parts[1])); err != nil {
+			if _, err := regexp.Compile(strings.TrimSpace(re)); err != nil {
 				return kerr.InvalidConfig
 			}
 		}
@@ -966,25 +1120,26 @@ var configDefaults = map[string]string{
 
 	"transaction.max.timeout.ms":     "900000",
 	"transactional.id.expiration.ms": "604800000",
+	"producer.id.expiration.ms":      "86400000",
 
 	"state.log.compact.bytes": "10485760",
 
 	"connections.max.reauth.ms":                 "0",
+	"controller.max.records.per.batch":          "10000",
 	"default.replication.factor":                "3",
 	"fetch.max.bytes":                           "57671680",
 	"log.cleaner.backoff.ms":                    "3600000",
 	"max.incremental.fetch.session.cache.slots": strconv.Itoa(defMaxFetchSessionCacheSlots),
 	"group.consumer.heartbeat.interval.ms":      strconv.Itoa(defHeartbeatInterval),
 	"group.consumer.session.timeout.ms":         strconv.Itoa(defSessionTimeout),
+	"group.consumer.max.size":                   "2147483647",
 	"group.max.size":                            "2147483647",
 	"group.min.session.timeout.ms":              "6000",
-	"group.max.session.timeout.ms":              "300000",
+	"group.max.session.timeout.ms":              "1800000",
 	"log.dir":                                   defLogDir,
 	"log.segment.bytes":                         strconv.Itoa(100 << 20),
-	"log.roll.ms":                               "604800000",
 	"log.message.timestamp.type":                "CreateTime",
 	"log.retention.bytes":                       "-1",
-	"log.retention.ms":                          "604800000",
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 	"offsets.retention.minutes":                 "10080",
 	"offsets.retention.check.interval.ms":       "600000",
@@ -1005,15 +1160,27 @@ var configTypes = map[string]kmsg.ConfigType{
 	"cleanup.policy":                            kmsg.ConfigTypeList,
 	"compression.type":                          kmsg.ConfigTypeString,
 	"connections.max.reauth.ms":                 kmsg.ConfigTypeLong,
+	"controller.max.records.per.batch":          kmsg.ConfigTypeInt,
 	"default.replication.factor":                kmsg.ConfigTypeInt,
 	"delete.retention.ms":                       kmsg.ConfigTypeLong,
 	"fetch.max.bytes":                           kmsg.ConfigTypeInt,
 	"max.incremental.fetch.session.cache.slots": kmsg.ConfigTypeInt,
 	"group.consumer.heartbeat.interval.ms":      kmsg.ConfigTypeInt,
 	"interval.ms":                               kmsg.ConfigTypeInt,
+	"consumer.session.timeout.ms":               kmsg.ConfigTypeInt,
+	"consumer.heartbeat.interval.ms":            kmsg.ConfigTypeInt,
+	"share.auto.offset.reset":                   kmsg.ConfigTypeString,
+	"share.isolation.level":                     kmsg.ConfigTypeString,
+	"share.record.lock.duration.ms":             kmsg.ConfigTypeInt,
+	"share.delivery.count.limit":                kmsg.ConfigTypeInt,
+	"share.session.timeout.ms":                  kmsg.ConfigTypeInt,
+	"share.heartbeat.interval.ms":               kmsg.ConfigTypeInt,
+	"share.partition.max.record.locks":          kmsg.ConfigTypeInt,
+	"share.renew.acknowledge.enable":            kmsg.ConfigTypeBoolean,
 	"match":                                     kmsg.ConfigTypeList,
 	"metrics":                                   kmsg.ConfigTypeList,
 	"group.consumer.session.timeout.ms":         kmsg.ConfigTypeInt,
+	"group.consumer.max.size":                   kmsg.ConfigTypeInt,
 	"group.max.size":                            kmsg.ConfigTypeInt,
 	"group.min.session.timeout.ms":              kmsg.ConfigTypeInt,
 	"group.max.session.timeout.ms":              kmsg.ConfigTypeInt,
@@ -1048,6 +1215,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"super.users":                               kmsg.ConfigTypeList,
 	"transaction.max.timeout.ms":                kmsg.ConfigTypeInt,
 	"transactional.id.expiration.ms":            kmsg.ConfigTypeInt,
+	"producer.id.expiration.ms":                 kmsg.ConfigTypeInt,
 }
 
 var brokerRack = "krack"
@@ -1089,25 +1257,27 @@ func (c *Cluster) segmentBytes(topic string) int64 {
 	return 100 << 20 // 100MiB default
 }
 
-func (c *Cluster) consumerHeartbeatIntervalMs() int32 {
-	return c.brokerConfigInt("group.consumer.heartbeat.interval.ms", defHeartbeatInterval)
-}
-
-func (c *Cluster) consumerSessionTimeoutMs() int32 {
-	return c.brokerConfigInt("group.consumer.session.timeout.ms", defSessionTimeout)
-}
-
 func (c *Cluster) consumerSessionTimeoutMsForGroup(group string) int32 {
-	if v := c.groupConfig(group, "consumer.session.timeout.ms"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return int32(n)
-		}
-	}
-	return c.consumerSessionTimeoutMs()
+	return c.groupConfigInt(group, "consumer.session.timeout.ms", defSessionTimeout)
+}
+
+func (c *Cluster) consumerHeartbeatIntervalMsForGroup(group string) int32 {
+	return c.groupConfigInt(group, "consumer.heartbeat.interval.ms", defHeartbeatInterval)
 }
 
 func (c *Cluster) groupMaxSize() int32 {
 	return c.brokerConfigInt("group.max.size", 2147483647)
+}
+
+// maxPartitionsPerRequest is the most partitions a CreateTopics or
+// CreatePartitions may add, 10000 by default. Kafka's limit is
+// controller.max.records.per.batch, so we use that config.
+func (c *Cluster) maxPartitionsPerRequest() int32 {
+	return c.brokerConfigInt("controller.max.records.per.batch", 10000)
+}
+
+func (c *Cluster) consumerGroupMaxSize() int32 {
+	return c.brokerConfigInt("group.consumer.max.size", 2147483647)
 }
 
 func (c *Cluster) groupMinSessionTimeoutMs() int32 {
@@ -1130,6 +1300,10 @@ func (c *Cluster) txnIDExpirationMs() int32 {
 	return c.brokerConfigInt("transactional.id.expiration.ms", defTxnIDExpirationMs)
 }
 
+func (c *Cluster) producerIDExpirationMs() int32 {
+	return c.brokerConfigInt("producer.id.expiration.ms", 86400000)
+}
+
 func (c *Cluster) fetchSessionCacheSlots() int32 {
 	return c.brokerConfigInt("max.incremental.fetch.session.cache.slots", defMaxFetchSessionCacheSlots)
 }
@@ -1150,9 +1324,9 @@ func (c *Cluster) offsetsRetentionCheckIntervalMs() int64 {
 	return int64(c.brokerConfigInt("offsets.retention.check.interval.ms", 600000))
 }
 
-// shareGroupConfigInt returns the group's config key, falling back to the
-// broker's "group."+key and then def, as Kafka does for share groups.
-func (c *Cluster) shareGroupConfigInt(group, key string, def int) int32 {
+// groupConfigInt returns the group's config key, falling back to the
+// broker's "group."+key and then def, as Kafka does.
+func (c *Cluster) groupConfigInt(group, key string, def int) int32 {
 	if v := c.groupConfig(group, key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return int32(n)
@@ -1162,11 +1336,11 @@ func (c *Cluster) shareGroupConfigInt(group, key string, def int) int32 {
 }
 
 func (c *Cluster) shareHeartbeatIntervalMs(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.heartbeat.interval.ms", defHeartbeatInterval)
+	return c.groupConfigInt(group, "share.heartbeat.interval.ms", defHeartbeatInterval)
 }
 
 func (c *Cluster) shareSessionTimeoutMs(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.session.timeout.ms", 45000)
+	return c.groupConfigInt(group, "share.session.timeout.ms", 45000)
 }
 
 func (c *Cluster) shareLockSweepIntervalMs() int32 {
@@ -1174,15 +1348,15 @@ func (c *Cluster) shareLockSweepIntervalMs() int32 {
 }
 
 func (c *Cluster) shareRecordLockDurationMs(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.record.lock.duration.ms", 30000)
+	return c.groupConfigInt(group, "share.record.lock.duration.ms", 30000)
 }
 
 func (c *Cluster) shareMaxDeliveryAttempts(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.delivery.count.limit", 5)
+	return c.groupConfigInt(group, "share.delivery.count.limit", 5)
 }
 
 func (c *Cluster) shareMaxRecordLocks(group string) int32 {
-	return c.shareGroupConfigInt(group, "share.partition.max.record.locks", 2000)
+	return c.groupConfigInt(group, "share.partition.max.record.locks", 2000)
 }
 
 // shareRenewEnabled returns whether the group accepts renew acks
@@ -1266,6 +1440,18 @@ func (d *data) maxMessageBytes(t string) int {
 	return defMaxMessageBytes
 }
 
+// logAppendTime returns whether the topic's message.timestamp.type is
+// LogAppendTime, falling back to the broker's log.message.timestamp.type.
+func (d *data) logAppendTime(t string) bool {
+	if v, ok := d.tcfgs[t]["message.timestamp.type"]; ok && v != nil {
+		return *v == "LogAppendTime"
+	}
+	if v, ok := d.c.bcfgs["log.message.timestamp.type"]; ok && v != nil {
+		return *v == "LogAppendTime"
+	}
+	return false
+}
+
 // retentionMs returns the retention.ms for a topic, falling back to
 // broker config then defaults.
 func (d *data) retentionMs(t string) int64 {
@@ -1309,21 +1495,54 @@ func forEachBatchRecord(batch kmsg.RecordBatch, fn func(kmsg.Record) bool) error
 		return err
 	}
 	for range batch.NumRecords {
+		length, amt := binary.Varint(records)
+		if amt <= 0 || length < 0 || length > int64(len(records)-amt) {
+			return fmt.Errorf("%w: record length %d with %d bytes left", errCorruptRecord, length, len(records)-amt)
+		}
+		end := amt + int(length)
+		if !recordBodyExact(records[amt:end]) {
+			return fmt.Errorf("%w: record fields do not take its length of %d bytes", errCorruptRecord, length)
+		}
 		rec := kmsg.NewRecord()
-		err := rec.ReadFrom(records)
-		if err != nil {
-			return fmt.Errorf("corrupt batch: %w", err)
+		if err := rec.ReadFrom(records[:end]); err != nil {
+			return fmt.Errorf("%w: %v", errCorruptRecord, err)
 		}
 		if !fn(rec) {
 			return nil
 		}
-		length, amt := binary.Varint(records)
-		records = records[length+int64(amt):]
+		records = records[end:]
 	}
 	if len(records) > 0 {
-		return fmt.Errorf("corrupt batch, extra left over bytes after parsing batch: %v", len(records))
+		return fmt.Errorf("%w: extra left over bytes after parsing batch: %v", errCorruptRecord, len(records))
 	}
 	return nil
+}
+
+// errCorruptRecord is a record that does not parse as its batch and its
+// length say, which Kafka answers INVALID_RECORD.
+var errCorruptRecord = errors.New("corrupt record")
+
+// recordBodyExact reports whether a record body's fields take exactly its
+// bytes. Like Kafka, we refuse a record with a negative header count or a
+// null header key.
+func recordBodyExact(body []byte) bool {
+	b := kbin.Reader{Src: body}
+	b.Int8()        // attributes
+	b.Varlong()     // timestamp delta
+	b.Varint()      // offset delta
+	b.VarintBytes() // key
+	b.VarintBytes() // value
+	n := b.Varint()
+	if n < 0 {
+		return false
+	}
+	for ; n > 0 && b.Ok(); n-- {
+		if b.VarintBytes() == nil && b.Ok() {
+			return false // a null header key
+		}
+		b.VarintBytes()
+	}
+	return b.Ok() && len(b.Src) == 0
 }
 
 // BatchRecords returns the raw kmsg.Record's within a record batch, or an error
@@ -1385,11 +1604,32 @@ func (pd *partData) isBatchAborted(batch *partBatch) bool {
 
 // compact removes superseded records from a compactable partition.
 // The last batch is treated as the active segment and is never compacted.
+// Like Kafka, we never move the log start offset here: a fetch below the
+// first surviving batch reads from that batch.
 func (c *Cluster) compact(pd *partData, topic string) {
-	if !pd.hasNBatches(2) { // need at least 2 batches: compaction keeps the last batch unconditionally
+	if pd.swapRetry {
+		c.finishSwap(pd)
+		return
+	}
+	if pd.failed || !pd.hasNBatches(2) { // need at least 2 batches: compaction keeps the last batch unconditionally
 		return
 	}
 	total := pd.totalBatches()
+
+	// Kafka cleans neither the active segment nor at or past the LSO. A
+	// record in an open transaction must not supersede a committed one:
+	// the transaction can still abort.
+	var cleanableEnd int
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		if cleanableEnd == total-1 || m.firstOffset+int64(m.lastOffsetDelta) >= pd.lastStableOffset {
+			return false
+		}
+		cleanableEnd++
+		return true
+	})
+	if cleanableEnd == 0 {
+		return
+	}
 
 	// Read delete.retention.ms from topic config, falling back to default.
 	deleteRetentionMs := int64(86400000)
@@ -1402,10 +1642,8 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	}
 	now := time.Now().UnixMilli()
 
-	// Cleanable range is all batches except the last (active) batch.
 	// We stream batches from disk in each pass to avoid holding all
 	// decoded batches in memory at once.
-	cleanableEnd := total - 1
 
 	// Pass 1: stream batches to build key => highest offset map.
 	keyOffsets := make(map[string]int64)
@@ -1442,10 +1680,27 @@ func (c *Cluster) compact(pd *partData, topic string) {
 		return
 	}
 
+	// Like Kafka, we keep the last data batch of each producer we still
+	// have, empty if no record survives: a restart rebuilds the
+	// producer's sequences from the log.
+	lastData := make(map[int64]int64) // producer ID => first offset
+	pd.eachBatchMeta(func(_, _ int, m *batchMeta) bool {
+		if m.producerID >= 0 && !m.control {
+			lastData[m.producerID] = m.firstOffset
+		}
+		return true
+	})
+	isLastData := func(b *partBatch) bool {
+		off, ok := lastData[b.ProducerID]
+		return ok && off == b.FirstOffset && c.pids.ids[b.ProducerID] != nil
+	}
+
 	// Pass 2: stream batches again, filtering and keeping survivors.
-	// Also track which PIDs still have surviving data batches.
+	// Also track which PIDs still have surviving data batches, and
+	// whether we remove anything at all.
 	survivingPIDs := make(map[int64]bool)
 	var kept []*partBatch
+	var removed bool
 	n = 0
 	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
 		if n >= cleanableEnd {
@@ -1464,6 +1719,10 @@ func (c *Cluster) compact(pd *partData, topic string) {
 			return true
 		}
 		if pd.isBatchAborted(batch) {
+			removed = true
+			if isLastData(batch) {
+				kept = append(kept, rebuildBatch(batch, nil))
+			}
 			return true
 		}
 
@@ -1492,7 +1751,11 @@ func (c *Cluster) compact(pd *partData, topic string) {
 			return true
 		})
 
+		removed = removed || len(surviving) < int(batch.NumRecords)
 		if len(surviving) == 0 {
+			if isLastData(batch) {
+				kept = append(kept, rebuildBatch(batch, nil))
+			}
 			return true
 		}
 
@@ -1516,33 +1779,45 @@ func (c *Cluster) compact(pd *partData, topic string) {
 	for _, batch := range kept {
 		isControl := batch.Attributes&0x0020 != 0
 		if isControl && !survivingPIDs[batch.ProducerID] {
+			removed = true
 			continue
 		}
 		filtered = append(filtered, batch)
 	}
 	kept = filtered
-
-	// Read the last (active) batch - always kept unconditionally.
-	lastSeg := &pd.segments[len(pd.segments)-1]
-	lastIdx := len(lastSeg.index) - 1
-	lastBatch, err := c.readBatchFull(pd, len(pd.segments)-1, &lastSeg.index[lastIdx])
-	if err != nil {
-		c.cfg.logger.Logf(LogLevelWarn, "compact %s-%d: read last batch: %v", pd.t, pd.p, err)
+	if !removed {
 		return
 	}
-	kept = append(kept, lastBatch)
 
-	// Rebuild partition metadata.
+	// The batches past the cleanable range are kept as they are.
+	n = 0
+	pd.eachBatchMeta(func(si, _ int, m *batchMeta) bool {
+		n++
+		if n <= cleanableEnd {
+			return true
+		}
+		batch, err := c.readBatchFull(pd, si, m)
+		if err != nil {
+			c.cfg.logger.Logf(LogLevelWarn, "compact %s-%d: read uncleanable batch: %v", pd.t, pd.p, err)
+			ok = false
+			return false
+		}
+		kept = append(kept, batch)
+		return true
+	})
+	if !ok {
+		return
+	}
+
+	// Rebuild segments, batchMeta, and partition metadata from compacted
+	// batches.
+	if !c.rebuildSegments(pd, kept) {
+		return
+	}
 	pd.nbytes = 0
 	for _, b := range kept {
 		pd.nbytes += int64(b.nbytes)
 	}
-	if len(kept) > 0 {
-		pd.logStartOffset = kept[0].FirstOffset
-	}
-
-	// Rebuild segments and batchMeta from compacted batches.
-	c.rebuildSegments(pd, kept)
 
 	// Prune aborted txn entries that are now before logStartOffset.
 	pd.trimAbortedTxns()
@@ -1608,8 +1883,7 @@ func (c *Cluster) applyRetention(pd *partData, topic string) {
 	}
 
 	if newLogStart > pd.logStartOffset {
-		pd.logStartOffset = newLogStart
-		c.trimLeft(pd)
+		c.trimLeft(pd, newLogStart) // a failed save retries at the next pass
 	}
 }
 
@@ -1627,7 +1901,7 @@ func rebuildBatch(orig *partBatch, kept []kmsg.Record) *partBatch {
 		PartitionLeaderEpoch: orig.PartitionLeaderEpoch,
 		Magic:                2,
 		Attributes:           orig.Attributes &^ 0x0007, // clear compression bits (uncompressed)
-		LastOffsetDelta:      kept[len(kept)-1].OffsetDelta,
+		LastOffsetDelta:      orig.LastOffsetDelta,      // as Kafka, so the batch keeps its producer's last sequence
 		FirstTimestamp:       orig.FirstTimestamp,
 		MaxTimestamp:         orig.FirstTimestamp,
 		ProducerID:           orig.ProducerID,
@@ -1643,6 +1917,11 @@ func rebuildBatch(orig *partBatch, kept []kmsg.Record) *partBatch {
 		if ts > b.MaxTimestamp {
 			b.MaxTimestamp = ts
 		}
+	}
+	// A LogAppendTime batch keeps its time, which clients stamp every
+	// record with, and so does a batch with no records left, as in Kafka.
+	if orig.Attributes&0x0008 != 0 || len(kept) == 0 {
+		b.MaxTimestamp = orig.MaxTimestamp
 	}
 
 	benc := b.AppendTo(nil)

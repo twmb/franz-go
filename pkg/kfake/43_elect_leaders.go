@@ -1,6 +1,8 @@
 package kfake
 
 import (
+	"fmt"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -8,8 +10,9 @@ import (
 // ElectLeaders: v0-2
 //
 // Behavior:
-// * Rotates partition leader to the next broker, bumps epoch
-// * Single-broker clusters are a no-op (leader stays the same)
+// * PREFERRED rotates partition leader to the next broker, bumps epoch
+// * Single-broker clusters keep the leader, but still bump the epoch
+// * UNCLEAN answers ELECTION_NOT_NEEDED: every partition has a leader
 // * Null topics triggers election for all partitions
 // * ACL: Cluster ALTER required
 //
@@ -28,94 +31,100 @@ func (c *Cluster) handleElectLeaders(creq *clientReq) (kmsg.Response, error) {
 		return nil, err
 	}
 
-	// v0 has no top-level ErrorCode on the wire, so there we answer the
-	// error on every partition instead, as Kafka does.
-	var v0Err *kerr.Error
-	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
-		resp.ErrorCode = e.Code
-		if creq.skipsWork(e) { // a timed-out election still elects
-			if req.Version >= 1 {
-				return resp, nil
-			}
-			v0Err = e
-		}
-	}
-
-	answered := make(map[tp]bool)
-	donep := func(topic string, partition int32, errCode int16) {
-		// A fault can answer a partition before the work runs. The
-		// work's own answer for that partition must not add an entry or
-		// replace the code.
-		if answered[tp{topic, partition}] {
-			return
-		}
-		for i := range resp.Topics {
-			if resp.Topics[i].Topic == topic {
-				sp := kmsg.NewElectLeadersResponseTopicPartition()
-				sp.Partition = partition
-				sp.ErrorCode = errCode
-				resp.Topics[i].Partitions = append(resp.Topics[i].Partitions, sp)
-				return
-			}
-		}
-		st := kmsg.NewElectLeadersResponseTopic()
-		st.Topic = topic
-		sp := kmsg.NewElectLeadersResponseTopicPartition()
-		sp.Partition = partition
-		sp.ErrorCode = errCode
-		st.Partitions = append(st.Partitions, sp)
-		resp.Topics = append(resp.Topics, st)
-	}
-
-	if v0Err != nil {
-		if req.Topics == nil {
-			c.data.tps.each(func(t string, p int32, _ *partData) { donep(t, p, v0Err.Code) })
-		}
+	// A request-level error goes at the top level and on every named
+	// partition, as Kafka does; asking for all partitions answers none.
+	errResp := func(code int16, msg *string) (kmsg.Response, error) {
+		resp.ErrorCode = code
 		for _, rt := range req.Topics {
+			st := kmsg.NewElectLeadersResponseTopic()
+			st.Topic = rt.Topic
 			for _, p := range rt.Partitions {
-				donep(rt.Topic, p, v0Err.Code)
+				sp := kmsg.NewElectLeadersResponseTopicPartition()
+				sp.Partition = p
+				sp.ErrorCode, sp.ErrorMessage = code, msg
+				st.Partitions = append(st.Partitions, sp)
 			}
+			resp.Topics = append(resp.Topics, st)
 		}
 		return resp, nil
 	}
 
-	elect := func(t string, p int32, pd *partData) {
-		next := (pd.leader.bsIdx + 1) % len(c.bs)
-		c.setLeader(t, p, pd, c.bs[next])
-		donep(t, p, 0)
+	if e := c.denyCluster(creq, kmsg.ACLOperationAlter, faultKey{}); e != nil {
+		if creq.skipsWork(e) {
+			return errResp(e.Code, nil)
+		}
+		// A timed-out election still elects, and then answers the
+		// request-level error.
+		defer func() {
+			resp.Topics = nil
+			errResp(e.Code, nil)
+		}()
+	}
+	switch {
+	case req.Topics != nil && len(req.Topics) == 0:
+		return resp, nil
+	case req.TimeoutMillis <= 0: // the deadline passed before the controller ran it
+		return errResp(kerr.RequestTimedOut.Code, nil)
+	case req.ElectionType != 0 && req.ElectionType != 1:
+		return errResp(kerr.InvalidRequest.Code, kmsg.StringPtr(fmt.Sprintf("Unknown election type %d", req.ElectionType)))
+	}
+	unclean := req.ElectionType == 1
+	defer c.persistTopicsState() // the leaders and epochs we elect
+
+	// elect answers one partition. A fault answers first; the work's own
+	// answer does not replace it.
+	elect := func(st *kmsg.ElectLeadersResponseTopic, t string, ps map[int32]*partData, p int32, all bool) {
+		sp := kmsg.NewElectLeadersResponseTopicPartition()
+		sp.Partition = p
+		e := creq.faults.check(faultKey{topic: t}.part(p))
+		pd, ok := ps[p]
+		switch {
+		case e != nil && creq.skipsWork(e):
+		case !ok:
+			// Kafka names what it does not have.
+			msg := "No such topic as " + t
+			if _, exists := c.data.tps.gett(t); exists {
+				msg = fmt.Sprintf("No such partition as %s-%d", t, p)
+			}
+			sp.ErrorCode, sp.ErrorMessage = kerr.UnknownTopicOrPartition.Code, &msg
+		case unclean:
+			// Electing all partitions leaves out those that
+			// need no election.
+			if all && e == nil {
+				return
+			}
+			sp.ErrorCode, sp.ErrorMessage = kerr.ElectionNotNeeded.Code, kmsg.StringPtr("Leader election not needed for topic partition.")
+		default:
+			// A deliberate test hook that differs from Kafka, which
+			// answers ELECTION_NOT_NEEDED when the preferred replica
+			// already leads.
+			c.setLeader(t, p, pd, c.bs[(pd.leader.bsIdx+1)%len(c.bs)])
+		}
+		if e != nil {
+			sp.ErrorCode, sp.ErrorMessage = e.Code, nil
+		}
+		st.Partitions = append(st.Partitions, sp)
 	}
 
 	if req.Topics == nil {
-		c.data.tps.each(func(t string, p int32, pd *partData) {
-			if e := creq.faults.check(faultKey{topic: t}.part(p)); e != nil {
-				donep(t, p, e.Code)
-				answered[tp{t, p}] = true
-				if creq.skipsWork(e) { // a timed-out election still elects
-					return
-				}
+		for t, ps := range c.data.tps {
+			st := kmsg.NewElectLeadersResponseTopic()
+			st.Topic = t
+			for p := range ps {
+				elect(&st, t, ps, p, true)
 			}
-			elect(t, p, pd)
-		})
-	} else {
-		for i := range req.Topics {
-			rt := &req.Topics[i]
-			for _, p := range rt.Partitions {
-				if e := creq.faults.check(faultKey{topic: rt.Topic}.part(p)); e != nil {
-					donep(rt.Topic, p, e.Code)
-					answered[tp{rt.Topic, p}] = true
-					if creq.skipsWork(e) { // a timed-out election still elects
-						continue
-					}
-				}
-				pd, ok := c.data.tps.getp(rt.Topic, p)
-				if !ok {
-					donep(rt.Topic, p, kerr.UnknownTopicOrPartition.Code)
-					continue
-				}
-				elect(rt.Topic, p, pd)
-			}
+			resp.Topics = append(resp.Topics, st)
 		}
+		return resp, nil
 	}
-
+	for _, rt := range req.Topics {
+		st := kmsg.NewElectLeadersResponseTopic()
+		st.Topic = rt.Topic
+		ps, _ := c.data.tps.gett(rt.Topic)
+		for _, p := range rt.Partitions {
+			elect(&st, rt.Topic, ps, p, false)
+		}
+		resp.Topics = append(resp.Topics, st)
+	}
 	return resp, nil
 }

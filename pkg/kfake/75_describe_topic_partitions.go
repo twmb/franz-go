@@ -20,7 +20,8 @@ import (
 // * ResponsePartitionLimit caps the total partitions across all topics
 // * Unknown topics get UNKNOWN_TOPIC_OR_PARTITION; auto-create is not used
 // * Topics not authorized for DESCRIBE return TOPIC_AUTHORIZATION_FAILED
-//   when explicitly requested, and are silently omitted otherwise
+//   when explicitly requested, and are silently omitted otherwise; either
+//   way they are not paginated
 
 func init() { regKey(75, 0, 0) }
 
@@ -32,13 +33,25 @@ func (c *Cluster) handleDescribeTopicPartitions(creq *clientReq) (kmsg.Response,
 		return nil, err
 	}
 
+	// Kafka answers an invalid cursor with INVALID_REQUEST on every
+	// requested topic.
+	invalid := func() (kmsg.Response, error) {
+		for _, rt := range req.Topics {
+			st := kmsg.NewDescribeTopicPartitionsResponseTopic()
+			st.ErrorCode = kerr.InvalidRequest.Code
+			st.Topic = kmsg.StringPtr(rt.Topic)
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil
+	}
+
 	var cursorTopic string
 	var cursorPartition int32
 	if req.Cursor != nil {
 		cursorTopic = req.Cursor.Topic
 		cursorPartition = req.Cursor.Partition
 		if cursorPartition < 0 {
-			return nil, kerr.InvalidRequest
+			return invalid()
 		}
 	}
 
@@ -68,10 +81,36 @@ func (c *Cluster) handleDescribeTopicPartitions(creq *clientReq) (kmsg.Response,
 			}
 		}
 		if !cursorListed {
-			return nil, kerr.InvalidRequest
+			return invalid()
 		}
 	}
 	slices.Sort(topics)
+
+	addTopic := func(name string, errCode int16, id uuid, internal bool) *kmsg.DescribeTopicPartitionsResponseTopic {
+		st := kmsg.NewDescribeTopicPartitionsResponseTopic()
+		st.ErrorCode = errCode
+		st.Topic = kmsg.StringPtr(name)
+		st.TopicID = id
+		st.IsInternal = internal
+		if errCode != kerr.TopicAuthorizationFailed.Code {
+			st.AuthorizedOperations = c.topicAuthorizedOps(creq, name)
+		}
+		resp.Topics = append(resp.Topics, st)
+		return &resp.Topics[len(resp.Topics)-1]
+	}
+
+	// Kafka drops the topics you may not describe before it paginates,
+	// so a cursor never names one.
+	authorized := topics[:0]
+	for _, topic := range topics {
+		if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}); e != nil {
+			if !fetchAll {
+				addTopic(topic, e.Code, noID, false)
+			}
+			continue
+		}
+		authorized = append(authorized, topic)
+	}
 
 	limit := req.ResponsePartitionLimit
 	if limit < 1 {
@@ -85,31 +124,13 @@ func (c *Cluster) handleDescribeTopicPartitions(creq *clientReq) (kmsg.Response,
 	emitted := int32(0)
 	var nextCursor *kmsg.DescribeTopicPartitionsResponseNextCursor
 
-	addTopic := func(name string, errCode int16, id uuid, internal bool) *kmsg.DescribeTopicPartitionsResponseTopic {
-		st := kmsg.NewDescribeTopicPartitionsResponseTopic()
-		st.ErrorCode = errCode
-		st.Topic = kmsg.StringPtr(name)
-		st.TopicID = id
-		st.IsInternal = internal
-		st.AuthorizedOperations = c.topicAuthorizedOps(creq, name)
-		resp.Topics = append(resp.Topics, st)
-		return &resp.Topics[len(resp.Topics)-1]
-	}
-
-	for _, topic := range topics {
+	for _, topic := range authorized {
 		if emitted >= limit {
 			nc := kmsg.NewDescribeTopicPartitionsResponseNextCursor()
 			nextCursor = &nc
 			nextCursor.Topic = topic
 			nextCursor.Partition = 0
 			break
-		}
-
-		if e := c.deny(creq, topic, kmsg.ACLResourceTypeTopic, kmsg.ACLOperationDescribe, faultKey{topic: topic}); e != nil {
-			if !fetchAll {
-				addTopic(topic, e.Code, noID, false)
-			}
-			continue
 		}
 
 		ps, ok := c.data.tps.gett(topic)
@@ -161,6 +182,10 @@ func (c *Cluster) handleDescribeTopicPartitions(creq *clientReq) (kmsg.Response,
 				sp.Replicas = append(sp.Replicas, c.bs[idx].node)
 			}
 			sp.ISR = sp.Replicas
+			// The Java client reads these lists unchecked; Kafka
+			// sends them empty, never null.
+			sp.EligibleLeaderReplicas = []int32{}
+			sp.LastKnownELR = []int32{}
 			st.Partitions = append(st.Partitions, sp)
 			emitted++
 		}

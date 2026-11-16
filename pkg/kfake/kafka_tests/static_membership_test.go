@@ -105,6 +105,26 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 		kfake.SeedTopics(2, topic),
 		kfake.BrokerConfigs(map[string]string{"group.max.size": "1"}),
 	)
+	raw := newPlainClient(t, c)
+	joinReq := kmsg.NewPtrJoinGroupRequest()
+	joinReq.SessionTimeoutMillis = 45000
+	joinReq.RebalanceTimeoutMillis = 45000
+	joinReq.ProtocolType = "consumer"
+	joinReq.Version = 4
+	proto := kmsg.NewJoinGroupRequestProtocol()
+	proto.Name = "cooperative-sticky"
+	proto.Metadata = (&kmsg.ConsumerMemberMetadata{Topics: []string{topic}}).AppendTo(nil)
+	joinReq.Protocols = append(joinReq.Protocols, proto)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// An empty group takes every join, pending members or not.
+	joinReq.Group = group + "-empty"
+	for range 2 {
+		if resp, err := joinReq.RequestWith(ctx, raw); err != nil || resp.ErrorCode != kerr.MemberIDRequired.Code {
+			t.Fatalf("join to an empty group of at most one: %v %v, want MEMBER_ID_REQUIRED", err, resp)
+		}
+	}
 
 	// First consumer joins successfully.
 	newPlainClient(t, c,
@@ -117,20 +137,7 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 	waitStable(t, c, group, 1)
 
 	// Second consumer: send a raw JoinGroup and expect GROUP_MAX_SIZE_REACHED.
-	raw := newPlainClient(t, c)
-	joinReq := kmsg.NewPtrJoinGroupRequest()
 	joinReq.Group = group
-	joinReq.SessionTimeoutMillis = 45000
-	joinReq.RebalanceTimeoutMillis = 45000
-	joinReq.ProtocolType = "consumer"
-	joinReq.Version = 4
-	proto := kmsg.NewJoinGroupRequestProtocol()
-	proto.Name = "cooperative-sticky"
-	proto.Metadata = (&kmsg.ConsumerMemberMetadata{Topics: []string{topic}}).AppendTo(nil)
-	joinReq.Protocols = append(joinReq.Protocols, proto)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	joinResp, err := joinReq.RequestWith(ctx, raw)
 	if err != nil {
 		t.Fatalf("join request failed: %v", err)
@@ -141,7 +148,7 @@ func TestGroupMaxSizeClassic(t *testing.T) {
 }
 
 // TestGroupMaxSize848 verifies that a 848 group rejects new members
-// when group.max.size is reached.
+// when group.consumer.max.size is reached.
 // Derived via LLM from testNewMemberIsRejectedWithMaximumMembersIsReached.
 func TestGroupMaxSize848(t *testing.T) {
 	t.Parallel()
@@ -150,7 +157,7 @@ func TestGroupMaxSize848(t *testing.T) {
 
 	c := newCluster(t, kfake.NumBrokers(1),
 		kfake.SeedTopics(2, topic),
-		kfake.BrokerConfigs(map[string]string{"group.max.size": "1"}),
+		kfake.BrokerConfigs(map[string]string{"group.consumer.max.size": "1"}),
 	)
 
 	// First consumer joins successfully.
@@ -162,6 +169,7 @@ func TestGroupMaxSize848(t *testing.T) {
 	raw := newClient848(t, c)
 	hbReq := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 	hbReq.Group = group
+	hbReq.MemberID = "second-member"
 	hbReq.MemberEpoch = 0
 	hbReq.RebalanceTimeoutMillis = 45000
 	hbReq.SubscribedTopicNames = []string{topic}

@@ -9,12 +9,12 @@ import (
 //
 // Behavior:
 // * Registers a consumer group's offsets as part of an ongoing transaction
-// * Must be called before TxnOffsetCommit
+// * Must be called before TxnOffsetCommit v0-4; v5+ adds the group itself
 //
 // Version notes:
-// * v2: ThrottleMillis
+// * v2: PRODUCER_FENCED; older versions get INVALID_PRODUCER_EPOCH instead
 // * v3: Flexible versions
-// * v4: No changes
+// * v4: TRANSACTION_ABORTABLE (KIP-890)
 
 func init() { regKey(25, 0, 4) }
 
@@ -42,5 +42,9 @@ func (c *Cluster) handleAddOffsetsToTxn(creq *clientReq) (kmsg.Response, error) 
 		return errResp(e), nil
 	}
 
-	return c.pids.doAddOffsets(creq), nil
+	resp := c.pids.doAddOffsets(creq).(*kmsg.AddOffsetsToTxnResponse)
+	if req.Version < 2 && resp.ErrorCode == kerr.ProducerFenced.Code {
+		resp.ErrorCode = kerr.InvalidProducerEpoch.Code
+	}
+	return resp, nil
 }

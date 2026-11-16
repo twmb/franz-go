@@ -67,7 +67,7 @@ func TestDescribeProducersDefaultRoutesToLeader(t *testing.T) {
 }
 
 // TestDescribeProducersAfterCommit verifies that after committing a
-// transaction, the producer is no longer listed as active.
+// transaction, the producer is still listed, with no open transaction.
 func TestDescribeProducersAfterCommit(t *testing.T) {
 	t.Parallel()
 	topic := "describe-producers-committed"
@@ -93,7 +93,8 @@ func TestDescribeProducersAfterCommit(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	// After commit, no active producers should be listed.
+	// After commit, the producer is listed until it expires, as Kafka
+	// lists every producer that wrote to the partition.
 	adm := newAdminClient(t, c)
 	ts := make(kadm.TopicsSet)
 	ts.Add(topic, 0)
@@ -113,7 +114,12 @@ func TestDescribeProducersAfterCommit(t *testing.T) {
 	if partProducers.Err != nil {
 		t.Fatalf("partition error: %v", partProducers.Err)
 	}
-	if len(partProducers.ActiveProducers) != 0 {
-		t.Errorf("expected no active producers after commit, got %d", len(partProducers.ActiveProducers))
+	if len(partProducers.ActiveProducers) != 1 {
+		t.Fatalf("expected one producer after commit, got %d", len(partProducers.ActiveProducers))
+	}
+	for _, p := range partProducers.ActiveProducers {
+		if p.CurrentTxnStartOffset != -1 {
+			t.Errorf("expected no open transaction after commit, got start offset %d", p.CurrentTxnStartOffset)
+		}
 	}
 }

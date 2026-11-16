@@ -2,7 +2,9 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // newCoverCluster is newCluster with a heartbeat interval short enough that
@@ -102,110 +105,67 @@ func TestCreatePartitionsWithExplicitAssignment(t *testing.T) {
 func TestCreatePartitionsErrorCases(t *testing.T) {
 	t.Parallel()
 	topic := "create-parts-errors"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(5, topic))
+	c := newCoverCluster(t, NumBrokers(2), SeedTopics(5, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cl := newPlainClient(t, c)
 
-	cases := []struct {
-		name    string
-		build   func() kmsg.CreatePartitionsRequest
-		wantErr int16
+	for _, tc := range []struct {
+		name     string
+		topics   []string // nil is just topic
+		count    int32
+		assign   [][]int32 // nil sends no assignment list
+		timedOut bool
+		wantErr  int16
 	}{
-		{
-			name: "decrease partition count",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 2 // less than current 5
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidPartitions.Code,
-		},
-		{
-			name: "unknown topic",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = "nonexistent"
-				rt.Count = 3
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.UnknownTopicOrPartition.Code,
-		},
-		{
-			name: "wrong number of assignments",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 7 // need 2 assignments
-				a := kmsg.NewCreatePartitionsRequestTopicAssignment()
-				a.Replicas = []int32{0}
-				rt.Assignment = append(rt.Assignment, a) // only 1
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidReplicaAssignment.Code,
-		},
-		{
-			name: "assignment with unknown broker",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 6
-				a := kmsg.NewCreatePartitionsRequestTopicAssignment()
-				a.Replicas = []int32{999}
-				rt.Assignment = append(rt.Assignment, a)
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidReplicaAssignment.Code,
-		},
-		{
-			name: "assignment with empty replicas",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				rt := kmsg.NewCreatePartitionsRequestTopic()
-				rt.Topic = topic
-				rt.Count = 6
-				a := kmsg.NewCreatePartitionsRequestTopicAssignment()
-				rt.Assignment = append(rt.Assignment, a)
-				req.Topics = append(req.Topics, rt)
-				return req
-			},
-			wantErr: kerr.InvalidReplicaAssignment.Code,
-		},
-		{
-			name: "duplicate topics in request",
-			build: func() kmsg.CreatePartitionsRequest {
-				req := kmsg.NewCreatePartitionsRequest()
-				for range 2 {
-					rt := kmsg.NewCreatePartitionsRequestTopic()
-					rt.Topic = topic
-					rt.Count = 6
-					req.Topics = append(req.Topics, rt)
-				}
-				return req
-			},
-			wantErr: kerr.InvalidRequest.Code,
-		},
-	}
-
-	for _, tc := range cases {
-		req := tc.build()
+		{name: "decrease partition count", count: 2, wantErr: kerr.InvalidPartitions.Code},
+		{name: "unknown topic", topics: []string{"nonexistent"}, count: 3, wantErr: kerr.UnknownTopicOrPartition.Code},
+		{name: "wrong number of assignments", count: 7, assign: [][]int32{{0}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "assignment with unknown broker", count: 6, assign: [][]int32{{999}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "assignment with empty replicas", count: 6, assign: [][]int32{nil}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "duplicate topics in request", topics: []string{topic, topic}, count: 6, wantErr: kerr.InvalidRequest.Code},
+		{name: "duplicate topics fail only themselves", topics: []string{"nonexistent", topic, topic}, count: 6, wantErr: kerr.UnknownTopicOrPartition.Code},
+		{name: "same partition count", count: 5, wantErr: kerr.InvalidPartitions.Code},
+		{name: "too many new partitions", count: 5 + 10001, wantErr: kerr.PolicyViolation.Code},
+		{name: "timeout already passed", count: 6, timedOut: true, wantErr: kerr.RequestTimedOut.Code},
+		{name: "assignment with a different replication factor", count: 6, assign: [][]int32{{0}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "assignment with a broker twice", count: 6, assign: [][]int32{{0, 0}}, wantErr: kerr.InvalidReplicaAssignment.Code},
+		{name: "empty non-null assignment list", count: 6, assign: [][]int32{}, wantErr: kerr.InvalidReplicaAssignment.Code},
+	} {
+		req := kmsg.NewPtrCreatePartitionsRequest()
+		if tc.timedOut {
+			req.TimeoutMillis = 0
+		}
+		if tc.topics == nil {
+			tc.topics = []string{topic}
+		}
+		for _, name := range tc.topics {
+			rt := kmsg.NewCreatePartitionsRequestTopic()
+			rt.Topic, rt.Count = name, tc.count
+			if tc.assign != nil {
+				rt.Assignment = []kmsg.CreatePartitionsRequestTopicAssignment{}
+			}
+			for _, replicas := range tc.assign {
+				rt.Assignment = append(rt.Assignment, kmsg.CreatePartitionsRequestTopicAssignment{Replicas: replicas})
+			}
+			req.Topics = append(req.Topics, rt)
+		}
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if resp.Topics[0].ErrorCode != tc.wantErr {
+		// We check the answer for the first topic in the request.
+		got := int16(-1)
+		for _, st := range resp.Topics {
+			if st.Topic == req.Topics[0].Topic {
+				got = st.ErrorCode
+				break
+			}
+		}
+		if got != tc.wantErr {
 			t.Errorf("%s: got error %d (%v), want %d (%v)",
-				tc.name, resp.Topics[0].ErrorCode, kerr.ErrorForCode(resp.Topics[0].ErrorCode),
+				tc.name, got, kerr.ErrorForCode(got),
 				tc.wantErr, kerr.ErrorForCode(tc.wantErr))
 		}
 	}
@@ -249,7 +209,8 @@ func TestCreatePartitionsValidateOnly(t *testing.T) {
 }
 
 // TestDescribeLogDirsReportsStorageSize verifies that DescribeLogDirs returns
-// non-zero sizes after producing data, and that it can filter by partition.
+// non-zero sizes and the usable space after producing data, that it can
+// filter by partition, and that it lists a dir with no requested partition.
 func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	t.Parallel()
 	topic := "describe-log-dirs-size"
@@ -292,6 +253,15 @@ func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	if totalSize == 0 {
 		t.Error("expected non-zero total size after producing")
 	}
+	// The volume total is fixed; usable space is what the data leaves.
+	// kgo's merge of a sharded request drops both, so we ask the broker.
+	direct, err := req.RequestWith(ctx, cl.Broker(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := direct.Dirs[0]; d.UsableBytes != d.TotalBytes-totalSize {
+		t.Errorf("expected usable %d = total %d - used %d", d.UsableBytes, d.TotalBytes, totalSize)
+	}
 
 	// Describe only partition 0.
 	req2 := kmsg.NewDescribeLogDirsRequest()
@@ -315,93 +285,125 @@ func TestDescribeLogDirsReportsStorageSize(t *testing.T) {
 	if partCount != 1 {
 		t.Errorf("expected 1 partition with filter, got %d", partCount)
 	}
+
+	// A dir is listed even when no requested partition is in it. kgo
+	// fails a partition it does not know, so we ask the broker.
+	req2.Topics[0].Partitions = []int32{99}
+	resp2, err = req2.RequestWith(ctx, cl.Broker(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp2.Dirs) != 1 || len(resp2.Dirs[0].Topics) != 0 {
+		t.Errorf("expected one empty dir for a missing partition, got %+v", resp2.Dirs)
+	}
 }
 
 // TestAlterReplicaLogDirsMovesPartition verifies that AlterReplicaLogDirs
-// changes the directory for a partition, confirmed via DescribeLogDirs.
+// moves a broker's own replica between its configured dirs, confirmed via
+// DescribeLogDirs, and that each broker reports only its own replicas.
 func TestAlterReplicaLogDirsMovesPartition(t *testing.T) {
 	t.Parallel()
 	topic := "alter-log-dirs-move"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	newDir := "/data/kafka-logs-moved"
+	c := newCoverCluster(t, NumBrokers(2), BrokerConfigs(map[string]string{"log.dirs": defLogDir + ", " + newDir}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cl := newPlainClient(t, c)
-	newDir := "/data/kafka-logs-moved"
-
-	// Move partition 0 to a new directory.
-	req := kmsg.NewAlterReplicaLogDirsRequest()
-	rd := kmsg.NewAlterReplicaLogDirsRequestDir()
-	rd.Dir = newDir
-	rt := kmsg.NewAlterReplicaLogDirsRequestDirTopic()
-	rt.Topic = topic
-	rt.Partitions = []int32{0}
-	rd.Topics = append(rd.Topics, rt)
-	req.Dirs = append(req.Dirs, rd)
-
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
+	if _, err := kadm.NewClient(cl).CreateTopics(ctx, 1, 1, nil, topic); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range resp.Topics {
-		for _, sp := range st.Partitions {
-			if sp.ErrorCode != 0 {
-				t.Fatalf("alter error: %v", kerr.ErrorForCode(sp.ErrorCode))
-			}
+	leader := c.LeaderFor(topic, 0)
+	other := 1 - leader
+
+	alter := func(node int32, dir string) int16 {
+		t.Helper()
+		req := kmsg.NewPtrAlterReplicaLogDirsRequest()
+		rd := kmsg.NewAlterReplicaLogDirsRequestDir()
+		rd.Dir = dir
+		rt := kmsg.NewAlterReplicaLogDirsRequestDirTopic()
+		rt.Topic = topic
+		rt.Partitions = []int32{0}
+		rd.Topics = append(rd.Topics, rt)
+		req.Dirs = append(req.Dirs, rd)
+		resp, err := req.RequestWith(ctx, cl.Broker(int(node)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.Topics[0].Partitions[0].ErrorCode
+	}
+	if code := alter(other, newDir); code != kerr.ReplicaNotAvailable.Code {
+		t.Errorf("non-replica broker: expected REPLICA_NOT_AVAILABLE, got %v", kerr.ErrorForCode(code))
+	}
+	for _, dir := range []string{"/data/elsewhere", newDir + "/.."} {
+		if code := alter(leader, dir); code != kerr.LogDirNotFound.Code {
+			t.Errorf("dir %q: expected LOG_DIR_NOT_FOUND, got %v", dir, kerr.ErrorForCode(code))
 		}
 	}
-
-	// Verify via DescribeLogDirs that the partition is now in the new dir.
-	dlReq := kmsg.NewDescribeLogDirsRequest()
-	dlrt := kmsg.NewDescribeLogDirsRequestTopic()
-	dlrt.Topic = topic
-	dlrt.Partitions = []int32{0}
-	dlReq.Topics = append(dlReq.Topics, dlrt)
-
-	dlResp, err := dlReq.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
+	if code := alter(leader, newDir); code != 0 {
+		t.Fatalf("alter error: %v", kerr.ErrorForCode(code))
 	}
-	foundInNewDir := false
-	for _, dir := range dlResp.Dirs {
-		if dir.Dir == newDir {
+
+	// Every broker lists both dirs; only the leader holds the partition,
+	// now in the new dir.
+	for _, node := range []int32{leader, other} {
+		dlResp, err := kmsg.NewPtrDescribeLogDirsRequest().RequestWith(ctx, cl.Broker(int(node)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dlResp.Dirs) != 2 {
+			t.Errorf("node %d: expected 2 dirs, got %d", node, len(dlResp.Dirs))
+		}
+		var in []string
+		for _, dir := range dlResp.Dirs {
 			for _, dt := range dir.Topics {
 				if dt.Topic == topic {
-					foundInNewDir = true
+					in = append(in, dir.Dir)
 				}
 			}
 		}
-	}
-	if !foundInNewDir {
-		t.Error("partition not found in new directory after AlterReplicaLogDirs")
+		if want := []string{newDir}; node == leader && !slices.Equal(in, want) || node == other && len(in) != 0 {
+			t.Errorf("node %d: partition in dirs %v", node, in)
+		}
 	}
 }
 
 // TestAlterPartitionAssignments verifies that reassignment accepts valid
-// requests and properly rejects null-replicas (cancel) and unknown topics.
+// requests and properly rejects null-replicas (cancel), invalid replicas, and
+// unknown topics.
 func TestAlterPartitionAssignments(t *testing.T) {
 	t.Parallel()
 	topic := "alter-assign"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(2, topic))
+	c := newCoverCluster(t, NumBrokers(2), SeedTopics(5, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cl := newPlainClient(t, c)
+	if err := c.MoveTopicPartition(topic, 0, 1); err != nil {
+		t.Fatal(err)
+	}
 
-	// Successful reassignment (non-nil replicas accepted).
+	// Partition => replicas and the code we expect. A nil list cancels,
+	// and kfake has no reassignment in progress.
+	cases := map[int32]struct {
+		replicas []int32
+		want     int16
+	}{
+		0: {[]int32{0}, 0},
+		1: {nil, kerr.NoReassignmentInProgress.Code},
+		2: {[]int32{0, 0}, kerr.InvalidReplicaAssignment.Code},
+		3: {[]int32{7}, kerr.InvalidReplicaAssignment.Code},
+		4: {[]int32{}, kerr.InvalidReplicaAssignment.Code},
+	}
 	req := kmsg.NewAlterPartitionAssignmentsRequest()
 	rt := kmsg.NewAlterPartitionAssignmentsRequestTopic()
 	rt.Topic = topic
-	rp := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
-	rp.Partition = 0
-	rp.Replicas = []int32{0}
-	rt.Partitions = append(rt.Partitions, rp)
-
-	// Cancel reassignment (nil replicas): kfake has none in progress.
-	rpCancel := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
-	rpCancel.Partition = 1
-	rpCancel.Replicas = nil
-	rt.Partitions = append(rt.Partitions, rpCancel)
+	for p, tc := range cases {
+		rp := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
+		rp.Partition = p
+		rp.Replicas = tc.replicas
+		rt.Partitions = append(rt.Partitions, rp)
+	}
 	req.Topics = append(req.Topics, rt)
 
 	// Unknown topic.
@@ -417,25 +419,37 @@ func TestAlterPartitionAssignments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Check per-partition results.
 	for _, st := range resp.Topics {
 		for _, sp := range st.Partitions {
-			switch {
-			case st.Topic == topic && sp.Partition == 0:
-				if sp.ErrorCode != 0 {
-					t.Errorf("partition 0 should succeed, got %v", kerr.ErrorForCode(sp.ErrorCode))
-				}
-			case st.Topic == topic && sp.Partition == 1:
-				if sp.ErrorCode != kerr.NoReassignmentInProgress.Code {
-					t.Errorf("cancel should return NoReassignmentInProgress, got %v", kerr.ErrorForCode(sp.ErrorCode))
-				}
-			case st.Topic == "no-such-topic":
-				if sp.ErrorCode != kerr.UnknownTopicOrPartition.Code {
-					t.Errorf("unknown topic should return UnknownTopicOrPartition, got %v", kerr.ErrorForCode(sp.ErrorCode))
-				}
+			want := cases[sp.Partition].want
+			if st.Topic == "no-such-topic" {
+				want = kerr.UnknownTopicOrPartition.Code
+			}
+			if sp.ErrorCode != want {
+				t.Errorf("%s %d: expected %v, got %v", st.Topic, sp.Partition, kerr.ErrorForCode(want), kerr.ErrorForCode(sp.ErrorCode))
 			}
 		}
+	}
+	// The old leader is not in the new replicas, so the first new one leads.
+	if got := c.LeaderFor(topic, 0); got != 0 {
+		t.Errorf("partition 0: expected leader 0 after reassignment, got %d", got)
+	}
+
+	// Without AllowReplicationFactorChange, the replica count must stay.
+	req.AllowReplicationFactorChange = false
+	req.Topics = req.Topics[:1]
+	req.Topics[0].Partitions = req.Topics[0].Partitions[:0]
+	rp := kmsg.NewAlterPartitionAssignmentsRequestTopicPartition()
+	rp.Replicas = []int32{1}
+	req.Topics[0].Partitions = append(req.Topics[0].Partitions, rp)
+	if resp, err = req.RequestWith(ctx, cl); err != nil {
+		t.Fatal(err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != kerr.InvalidReplicationFactor.Code {
+		t.Errorf("replication factor change: expected INVALID_REPLICATION_FACTOR, got %v", kerr.ErrorForCode(code))
+	}
+	if resp.AllowReplicationFactorChange {
+		t.Error("response did not echo AllowReplicationFactorChange")
 	}
 }
 
@@ -482,15 +496,30 @@ func TestAddRemoveNodeUpdatesCluster(t *testing.T) {
 		t.Fatal("expected error adding duplicate node")
 	}
 
-	// Remove both added nodes.
-	if err := c.RemoveNode(nodeID); err != nil {
+	// Remove the controller (node 0) and one added node: another node
+	// takes over as controller and topic admin still works.
+	if err := c.RemoveNode(0); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RemoveNode(42); err != nil {
+	if err := c.RemoveNode(nodeID); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.ListenAddrs()) != 1 {
 		t.Fatalf("expected 1 broker after removals, got %d", len(c.ListenAddrs()))
+	}
+	adm = kadm.NewClient(newPlainClient(t, c))
+	if meta, err = adm.Metadata(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Controller != 42 {
+		t.Errorf("expected controller 42 after removing the controller, got %d", meta.Controller)
+	}
+	created, err := adm.CreateTopics(ctx, 1, 1, nil, "after-controller-removed")
+	if err == nil {
+		err = created["after-controller-removed"].Err
+	}
+	if err != nil {
+		t.Errorf("create after removing the controller: %v", err)
 	}
 
 	// Can't remove nonexistent node.
@@ -500,14 +529,47 @@ func TestAddRemoveNodeUpdatesCluster(t *testing.T) {
 }
 
 // TestMoveTopicPartitionChangesLeader verifies MoveTopicPartition actually
-// changes the leader, verified through both the API and produce routing.
+// changes the leader, verified through both the API and produce routing. A
+// fetch parked on the old leader answers NOT_LEADER_OR_FOLLOWER at the move
+// rather than at its MaxWait.
 func TestMoveTopicPartitionChangesLeader(t *testing.T) {
 	t.Parallel()
 	topic := "move-partition"
 	c := newCoverCluster(t, NumBrokers(2), SeedTopics(1, topic))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	origLeader := c.LeaderFor(topic, 0)
 	target := 1 - origLeader // the other node
+
+	fcl := newPlainClient(t, c)
+	fetch := fetchByID(0, -1, 10_000, c.TopicInfo(topic).TopicID, 0)
+	parked := make(chan kmsg.Response, 1)
+	go func() {
+		resp, _ := fcl.Broker(int(origLeader)).Request(ctx, fetch)
+		parked <- resp
+	}()
+	// A share fetch parked there waits out its MaxWait, as in Kafka,
+	// and answers nothing for the moved partition.
+	scl := newPlainClient(t, c) // the parked fetch holds fcl's connection
+	group := "move-partition-g"
+	memberID, topicID := joinShareGroupRaw(t, scl, group, topic)
+	sf := kmsg.NewPtrShareFetchRequest()
+	sf.GroupID, sf.MemberID, sf.MaxWaitMillis, sf.MaxRecords = &group, &memberID, 500, 500
+	sf.Topics = []kmsg.ShareFetchRequestTopic{{TopicID: topicID, Partitions: []kmsg.ShareFetchRequestTopicPartition{{Partition: 0}}}}
+	shareParked := make(chan kmsg.Response, 1)
+	go func() {
+		resp, _ := scl.Broker(int(origLeader)).Request(ctx, sf)
+		shareParked <- resp
+	}()
+	waitFor(t, 5*time.Second, "the fetches never parked", func() bool {
+		var n int
+		c.admin(func() {
+			pd, _ := c.data.tps.getp(topic, 0)
+			n = min(len(pd.watch), len(pd.shareWatch))
+		})
+		return n > 0
+	})
 
 	if err := c.MoveTopicPartition(topic, 0, target); err != nil {
 		t.Fatal(err)
@@ -515,10 +577,18 @@ func TestMoveTopicPartitionChangesLeader(t *testing.T) {
 	if got := c.LeaderFor(topic, 0); got != target {
 		t.Errorf("leader should be %d, got %d", target, got)
 	}
+	resp, _ := (<-parked).(*kmsg.FetchResponse)
+	if resp == nil || len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("parked fetch: got %+v, want one partition", resp)
+	}
+	if err := kerr.ErrorForCode(resp.Topics[0].Partitions[0].ErrorCode); err != kerr.NotLeaderForPartition {
+		t.Errorf("parked fetch: got %v, want NOT_LEADER_OR_FOLLOWER", err)
+	}
+	if sresp, _ := (<-shareParked).(*kmsg.ShareFetchResponse); sresp == nil || len(sresp.Topics) != 0 {
+		t.Errorf("parked share fetch: got %+v, want no partitions", sresp)
+	}
 
 	// Verify it's usable: produce to the partition.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	cl := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
 	if err := cl.ProduceSync(ctx, kgo.StringRecord("after-move")).FirstErr(); err != nil {
 		t.Fatalf("failed to produce after leader move: %v", err)
@@ -610,6 +680,17 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 	if len(respAll.Results) < 2 {
 		t.Errorf("describe-all: expected >=2 results, got %d", len(respAll.Results))
 	}
+	// An empty non-null list also describes everyone, which is what the
+	// Java client sends.
+	emptyReq := kmsg.NewDescribeUserSCRAMCredentialsRequest()
+	emptyReq.Users = []kmsg.DescribeUserSCRAMCredentialsRequestUser{}
+	respEmpty, err := emptyReq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(respEmpty.Results) < 2 {
+		t.Errorf("describe with an empty list: expected >=2 results, got %d", len(respEmpty.Results))
+	}
 
 	// Update alice's iterations.
 	upsert("alice", 1, 8192)
@@ -641,7 +722,9 @@ func TestSCRAMCredentialLifecycle(t *testing.T) {
 }
 
 // TestSCRAMValidationErrors verifies that invalid SCRAM operations are rejected
-// with appropriate error codes.
+// with appropriate error codes, with one answer per user: a user's first
+// failure sticks, and a second change to a user is DUPLICATE_RESOURCE and
+// changes nothing for that user.
 func TestSCRAMValidationErrors(t *testing.T) {
 	t.Parallel()
 	c := newCoverCluster(t, NumBrokers(1))
@@ -649,116 +732,137 @@ func TestSCRAMValidationErrors(t *testing.T) {
 	defer cancel()
 	cl := newPlainClient(t, c)
 
-	upsertAndExpect := func(name string, mech int8, iter int32, wantErr int16) {
+	type del struct {
+		name string
+		mech int8
+	}
+	type up struct {
+		name string
+		mech int8
+		iter int32
+	}
+	// credentials returns the mechanisms a user has.
+	credentials := func(user string) []int8 {
 		t.Helper()
-		req := kmsg.NewAlterUserSCRAMCredentialsRequest()
-		u := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
-		u.Name = name
-		u.Mechanism = mech
-		u.Iterations = iter
-		u.Salt = []byte("s")
-		u.SaltedPassword = []byte("p")
-		req.Upsertions = append(req.Upsertions, u)
+		req := kmsg.NewDescribeUserSCRAMCredentialsRequest()
+		u := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
+		u.Name = user
+		req.Users = append(req.Users, u)
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.Results[0].ErrorCode != wantErr {
-			t.Errorf("upsert(name=%q,mech=%d,iter=%d): got %v, want %v",
-				name, mech, iter,
-				kerr.ErrorForCode(resp.Results[0].ErrorCode),
-				kerr.ErrorForCode(wantErr))
+		var mechs []int8
+		for _, ci := range resp.Results[0].CredentialInfos {
+			mechs = append(mechs, ci.Mechanism)
 		}
+		return mechs
 	}
 
-	upsertAndExpect("", 1, 4096, kerr.UnacceptableCredential.Code)     // empty name
-	upsertAndExpect("u", 99, 4096, kerr.UnsupportedSaslMechanism.Code) // bad mechanism
-	upsertAndExpect("u", 1, 100, kerr.UnacceptableCredential.Code)     // iterations too low
-	upsertAndExpect("u", 1, 20000, kerr.UnacceptableCredential.Code)   // iterations too high
+	// The cases run in order against one cluster.
+	for _, tc := range []struct {
+		name  string
+		dels  []del
+		ups   []up
+		want  map[string]*kerr.Error // nil is success
+		after map[string][]int8      // mechanisms each user has afterwards
+	}{
+		{name: "create sha256", ups: []up{{"u1", 1, 4096}}, want: map[string]*kerr.Error{"u1": nil}},
+		{name: "create sha512", ups: []up{{"u1", 2, 4096}}, want: map[string]*kerr.Error{"u1": nil}, after: map[string][]int8{"u1": {1, 2}}},
+		{name: "empty name", ups: []up{{"", 1, 4096}}, want: map[string]*kerr.Error{"": kerr.UnacceptableCredential}},
+		{name: "bad mechanism", ups: []up{{"u", 99, 4096}}, want: map[string]*kerr.Error{"u": kerr.UnsupportedSaslMechanism}},
+		{name: "iterations too low", ups: []up{{"u", 1, 100}}, want: map[string]*kerr.Error{"u": kerr.UnacceptableCredential}},
+		{name: "iterations too high", ups: []up{{"u", 1, 20000}}, want: map[string]*kerr.Error{"u": kerr.UnacceptableCredential}},
+		{name: "delete nonexistent", dels: []del{{"ghost", 1}}, want: map[string]*kerr.Error{"ghost": kerr.ResourceNotFound}},
+		{name: "delete bad mechanism", dels: []del{{"ghost", 99}}, want: map[string]*kerr.Error{"ghost": kerr.UnsupportedSaslMechanism}},
+		{name: "delete empty name", dels: []del{{"", 1}}, want: map[string]*kerr.Error{"": kerr.UnacceptableCredential}},
+		{
+			name:  "two deletions of one user delete nothing",
+			dels:  []del{{"u1", 1}, {"u1", 2}},
+			want:  map[string]*kerr.Error{"u1": kerr.DuplicateResource},
+			after: map[string][]int8{"u1": {1, 2}},
+		},
+		{
+			name:  "an invalid upsert fails a valid one after it",
+			ups:   []up{{"u2", 1, 1000}, {"u2", 2, 4096}},
+			want:  map[string]*kerr.Error{"u2": kerr.UnacceptableCredential},
+			after: map[string][]int8{"u2": nil},
+		},
+		{
+			name:  "three upserts of one user store nothing",
+			ups:   []up{{"u3", 1, 4096}, {"u3", 2, 4096}, {"u3", 1, 8192}},
+			want:  map[string]*kerr.Error{"u3": kerr.DuplicateResource},
+			after: map[string][]int8{"u3": nil},
+		},
+		{
+			name: "deleting a missing credential fails the user before its upsert",
+			dels: []del{{"u4", 1}},
+			ups:  []up{{"u4", 1, 4096}},
+			want: map[string]*kerr.Error{"u4": kerr.ResourceNotFound},
+		},
+		{
+			name:  "delete and upsert of one user",
+			dels:  []del{{"u1", 1}},
+			ups:   []up{{"u1", 2, 8192}},
+			want:  map[string]*kerr.Error{"u1": kerr.DuplicateResource},
+			after: map[string][]int8{"u1": {1, 2}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := kmsg.NewAlterUserSCRAMCredentialsRequest()
+			for _, d := range tc.dels {
+				rd := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
+				rd.Name, rd.Mechanism = d.name, d.mech
+				req.Deletions = append(req.Deletions, rd)
+			}
+			for _, u := range tc.ups {
+				ru := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
+				ru.Name, ru.Mechanism, ru.Iterations = u.name, u.mech, u.iter
+				ru.Salt = []byte("s")
+				ru.SaltedPassword = []byte("p")
+				req.Upsertions = append(req.Upsertions, ru)
+			}
+			resp, err := req.RequestWith(ctx, cl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(resp.Results) != len(tc.want) {
+				t.Fatalf("got %d results, want one per user, %d", len(resp.Results), len(tc.want))
+			}
+			for _, r := range resp.Results {
+				want, ok := tc.want[r.User]
+				if !ok {
+					t.Fatalf("unexpected result for user %q", r.User)
+				}
+				var wantCode int16
+				if want != nil {
+					wantCode = want.Code
+				}
+				if r.ErrorCode != wantCode {
+					t.Errorf("user %q: got %v, want %v", r.User, kerr.ErrorForCode(r.ErrorCode), want)
+				}
+			}
+			for user, want := range tc.after {
+				if got := credentials(user); !slices.Equal(got, want) {
+					t.Errorf("user %q has mechanisms %v, want %v", user, got, want)
+				}
+			}
+		})
+	}
 
-	// Delete non-existent credential.
-	req := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d.Name = "ghost"
-	d.Mechanism = 1
-	req.Deletions = append(req.Deletions, d)
+	// Describe with duplicate user name.
+	req := kmsg.NewDescribeUserSCRAMCredentialsRequest()
+	for range 2 {
+		u := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
+		u.Name = "someone"
+		req.Users = append(req.Users, u)
+	}
 	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Results[0].ErrorCode != kerr.ResourceNotFound.Code {
-		t.Errorf("delete nonexistent: got %v, want ResourceNotFound",
-			kerr.ErrorForCode(resp.Results[0].ErrorCode))
-	}
-
-	// Delete with invalid mechanism.
-	req2 := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d2 := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d2.Name = "ghost"
-	d2.Mechanism = 99
-	req2.Deletions = append(req2.Deletions, d2)
-	resp2, err := req2.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp2.Results[0].ErrorCode != kerr.UnsupportedSaslMechanism.Code {
-		t.Errorf("delete bad mech: got %v", kerr.ErrorForCode(resp2.Results[0].ErrorCode))
-	}
-
-	// Delete with empty name.
-	req3 := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d3 := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d3.Name = ""
-	d3.Mechanism = 1
-	req3.Deletions = append(req3.Deletions, d3)
-	resp3, err := req3.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp3.Results[0].ErrorCode != kerr.UnacceptableCredential.Code {
-		t.Errorf("delete empty name: got %v", kerr.ErrorForCode(resp3.Results[0].ErrorCode))
-	}
-
-	// Duplicate user in same request (delete + upsert same user).
-	req4 := kmsg.NewAlterUserSCRAMCredentialsRequest()
-	d4 := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
-	d4.Name = "dupuser"
-	d4.Mechanism = 1
-	req4.Deletions = append(req4.Deletions, d4)
-	u4 := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
-	u4.Name = "dupuser"
-	u4.Mechanism = 1
-	u4.Iterations = 4096
-	u4.Salt = []byte("s")
-	u4.SaltedPassword = []byte("p")
-	req4.Upsertions = append(req4.Upsertions, u4)
-	resp4, err := req4.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
 	foundDup := false
-	for _, r := range resp4.Results {
-		if r.ErrorCode == kerr.DuplicateResource.Code {
-			foundDup = true
-		}
-	}
-	if !foundDup {
-		t.Error("expected DuplicateResource for delete+upsert same user")
-	}
-
-	// Describe with duplicate user name.
-	req5 := kmsg.NewDescribeUserSCRAMCredentialsRequest()
-	for range 2 {
-		u := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
-		u.Name = "someone"
-		req5.Users = append(req5.Users, u)
-	}
-	resp5, err := req5.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundDup = false
-	for _, r := range resp5.Results {
+	for _, r := range resp.Results {
 		if r.ErrorCode == kerr.DuplicateResource.Code {
 			foundDup = true
 		}
@@ -779,6 +883,45 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 
 	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
+
+	// As in Kafka, the value in effect is the first synonym, and a broker
+	// value or default is named by the broker config.
+	synonyms := func(c kadm.Config) (s string) {
+		for _, syn := range c.Synonyms {
+			v := "<nil>"
+			if syn.Value != nil {
+				v = *syn.Value
+			}
+			s += syn.Key + "=" + v + "/" + syn.Source.String() + " "
+		}
+		return s
+	}
+	// expectBroker checks broker 0's value and synonyms for each key.
+	expectBroker := func(want map[string]string) {
+		t.Helper()
+		rcs, err := adm.DescribeBrokerConfigs(ctx, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rc := range rcs {
+			for _, c := range rc.Configs {
+				if w, ok := want[c.Key]; ok {
+					if got := c.MaybeValue() + " | " + synonyms(c); got != w {
+						t.Errorf("broker %s: got %q, want %q", c.Key, got, w)
+					}
+					delete(want, c.Key)
+				}
+			}
+		}
+		for k := range want {
+			t.Errorf("broker describe is missing %s", k)
+		}
+	}
+	// Kafka has no default for log.retention.ms or log.roll.ms.
+	expectBroker(map[string]string{
+		"log.retention.ms": " | ",
+		"log.roll.ms":      " | ",
+	})
 
 	// Set broker config via AlterConfigs.
 	req := kmsg.NewAlterConfigsRequest()
@@ -815,6 +958,36 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	if !found {
 		t.Error("log.retention.ms=3600000 not found in DescribeBrokerConfigs after AlterConfigs")
 	}
+	expectBroker(map[string]string{
+		"log.retention.ms": "3600000 | log.retention.ms=3600000/DYNAMIC_BROKER_CONFIG log.retention.hours=168/DEFAULT_CONFIG ",
+		"log.roll.ms":      " | ",
+	})
+	// The empty broker name describes only the cluster-wide dynamic
+	// configs, not every default.
+	for _, rc := range bcfgs {
+		for _, c := range rc.Configs {
+			if c.Source != kmsg.ConfigSourceDynamicDefaultBrokerConfig {
+				t.Errorf("cluster-wide describe lists %s with source %v", c.Key, c.Source)
+			}
+		}
+	}
+	// A topic reports the broker value under the topic config's name.
+	tcfgs, err := adm.DescribeTopicConfigs(ctx, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rc := range tcfgs {
+		for _, c := range rc.Configs {
+			switch c.Key {
+			case "log.retention.ms":
+				t.Error("topic describe lists the broker name log.retention.ms")
+			case "retention.ms":
+				if c.MaybeValue() != "3600000" {
+					t.Errorf("topic retention.ms = %q, want the broker's 3600000", c.MaybeValue())
+				}
+			}
+		}
+	}
 
 	// Set topic config.
 	req2 := kmsg.NewAlterConfigsRequest()
@@ -836,20 +1009,39 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	}
 
 	// Read back topic config.
-	tcfgs, err := adm.DescribeTopicConfigs(ctx, topic)
+	tcfgs, err = adm.DescribeTopicConfigs(ctx, topic)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found = false
 	for _, rc := range tcfgs {
 		for _, c := range rc.Configs {
+			want := map[string]string{
+				"retention.ms":  "retention.ms=86400000/DYNAMIC_TOPIC_CONFIG log.retention.ms=3600000/DYNAMIC_BROKER_CONFIG log.retention.hours=168/DEFAULT_CONFIG ",
+				"segment.bytes": "log.segment.bytes=104857600/DEFAULT_CONFIG ",
+			}[c.Key]
 			if c.Key == "retention.ms" && c.Value != nil && *c.Value == "86400000" {
 				found = true
+			}
+			if got := synonyms(c); want != "" && got != want {
+				t.Errorf("%s synonyms: got %q, want %q", c.Key, got, want)
 			}
 		}
 	}
 	if !found {
 		t.Error("retention.ms=86400000 not found after AlterConfigs on topic")
+	}
+	// Without IncludeSynonyms, the describe answers no synonyms.
+	sreq := kmsg.NewPtrDescribeConfigsRequest()
+	sreq.Resources = []kmsg.DescribeConfigsRequestResource{{ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: topic}}
+	sresp, err := sreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rc := range sresp.Resources[0].Configs {
+		if len(rc.ConfigSynonyms) > 0 {
+			t.Errorf("%s has synonyms %+v without IncludeSynonyms", rc.Name, rc.ConfigSynonyms)
+		}
 	}
 
 	// Unknown topic -> error.
@@ -864,6 +1056,88 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 	}
 	if resp3.Resources[0].ErrorCode != kerr.UnknownTopicOrPartition.Code {
 		t.Errorf("unknown topic: got %v", kerr.ErrorForCode(resp3.Resources[0].ErrorCode))
+	}
+	// Describing an invalid topic name is INVALID_TOPIC_EXCEPTION.
+	dreq := kmsg.NewPtrDescribeConfigsRequest()
+	for _, name := range []string{"", "bad/name", "nonexistent"} {
+		dreq.Resources = append(dreq.Resources, kmsg.DescribeConfigsRequestResource{ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: name})
+	}
+	dresp, err := dreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int16{kerr.InvalidTopicException.Code, kerr.InvalidTopicException.Code, kerr.UnknownTopicOrPartition.Code} {
+		if got := dresp.Resources[i].ErrorCode; got != want {
+			t.Errorf("describe %q: got %v, want %v", dresp.Resources[i].ResourceName, kerr.ErrorForCode(got), kerr.ErrorForCode(want))
+		}
+	}
+
+	// A known topic config must parse as its type, and a null value or a
+	// resource listed twice is refused before anything applies.
+	topicReq := func(value *string) kmsg.AlterConfigsRequestResource {
+		rr := kmsg.NewAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeTopic
+		rr.ResourceName = topic
+		rc := kmsg.NewAlterConfigsRequestResourceConfig()
+		rc.Name = "retention.ms"
+		rc.Value = value
+		rr.Configs = append(rr.Configs, rc)
+		return rr
+	}
+	oneConfig := func(typ kmsg.ConfigResourceType, name, key, value string) kmsg.AlterConfigsRequestResource {
+		rr := topicReq(&value)
+		rr.ResourceType, rr.ResourceName, rr.Configs[0].Name = typ, name, key
+		return rr
+	}
+	for _, step := range []struct {
+		name      string
+		resources []kmsg.AlterConfigsRequestResource
+		want      []int16
+	}{
+		{"bad value", []kmsg.AlterConfigsRequestResource{topicReq(new("abc"))}, []int16{kerr.InvalidConfig.Code}},
+		{"null value", []kmsg.AlterConfigsRequestResource{topicReq(nil)}, []int16{kerr.InvalidRequest.Code}},
+		{"resource twice", []kmsg.AlterConfigsRequestResource{topicReq(new("1")), topicReq(new("1"))}, []int16{kerr.InvalidRequest.Code, kerr.InvalidRequest.Code}},
+		{"empty topic", []kmsg.AlterConfigsRequestResource{func() kmsg.AlterConfigsRequestResource {
+			rr := topicReq(new("1"))
+			rr.ResourceName = ""
+			return rr
+		}()}, []int16{kerr.InvalidRequest.Code}},
+		// The configs replace the group's and the subscription's.
+		{"group", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.auto.offset.reset", "earliest")}, []int16{0}},
+		{"group replaced", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.isolation.level", "read_committed")}, []int16{0}},
+		{"bad group config", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeGroupConfig, "g", "share.isolation.level", "x")}, []int16{kerr.InvalidConfig.Code}},
+		{"client metrics", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeClientMetrics, "sub", "metrics", "a")}, []int16{0}},
+		{"client metrics replaced", []kmsg.AlterConfigsRequestResource{oneConfig(kmsg.ConfigResourceTypeClientMetrics, "sub", "interval.ms", "10000")}, []int16{0}},
+	} {
+		req := kmsg.NewAlterConfigsRequest()
+		req.Resources = step.resources
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int16
+		for _, r := range resp.Resources {
+			got = append(got, r.ErrorCode)
+		}
+		if !slices.Equal(got, step.want) {
+			t.Errorf("%s: got %v, want %v", step.name, got, step.want)
+		}
+	}
+	c.admin(func() {
+		if g := c.groupConfigs["g"]; len(g) != 1 || g["share.isolation.level"] == nil || *g["share.isolation.level"] != "read_committed" {
+			t.Errorf("group configs %v, want only share.isolation.level=read_committed", g)
+		}
+		if sub := c.clientMetrics["sub"]; len(sub) != 1 || sub["interval.ms"] == nil || *sub["interval.ms"] != "10000" {
+			t.Errorf("subscription %v, want only interval.ms=10000", sub)
+		}
+	})
+
+	// NewCluster refuses a broker config that AlterConfigs refuses.
+	for k, v := range map[string]string{"log.retention.ms": "abc", "offsets.retention.minutes": "0"} {
+		if bad, err := NewCluster(NumBrokers(1), BrokerConfigs(map[string]string{k: v})); err == nil {
+			bad.Close()
+			t.Errorf("NewCluster accepted %s=%s", k, v)
+		}
 	}
 
 	// Unsupported resource type.
@@ -915,7 +1189,10 @@ func TestAlterConfigsAppliesAndReadsBack(t *testing.T) {
 func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	t.Parallel()
 	topic := "inc-alter-configs-ops"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic), BrokerConfigs(map[string]string{
+		"group.consumer.heartbeat.interval.ms": "8000",
+		"group.share.delivery.count.limit":     "7",
+	}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -1078,23 +1355,111 @@ func TestIncrementalAlterConfigsOperations(t *testing.T) {
 	if resp6.Resources[0].ErrorCode != 0 {
 		t.Fatal(kerr.ErrorForCode(resp6.Resources[0].ErrorCode))
 	}
+
+	// Group configs: an unset key describes at its effective value, and
+	// a group whose last config is deleted is no longer listed.
+	const group = "inc-alter-group"
+	alterGroup := func(name string, op kmsg.IncrementalAlterConfigOp, value *string) {
+		t.Helper()
+		req := kmsg.NewIncrementalAlterConfigsRequest()
+		rr := kmsg.NewIncrementalAlterConfigsRequestResource()
+		rr.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+		rr.ResourceName = group
+		rc := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		rc.Name = name
+		rc.Value = value
+		rc.Op = op
+		rr.Configs = append(rr.Configs, rc)
+		req.Resources = append(req.Resources, rr)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Resources[0].ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(resp.Resources[0].ErrorCode))
+		}
+	}
+	listsGroup := func() bool {
+		t.Helper()
+		listed, err := kadm.NewClient(cl).ListConfigResources(ctx, kadm.ConfigResourceGroupConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.Contains(listed.Names(), group)
+	}
+	alterGroup("share.isolation.level", kmsg.IncrementalAlterConfigOpSet, new("read_committed"))
+	alterGroup("consumer.heartbeat.interval.ms", kmsg.IncrementalAlterConfigOpSet, new("6000"))
+	dreq := kmsg.NewPtrDescribeConfigsRequest()
+	dreq.IncludeSynonyms = true
+	drr := kmsg.NewDescribeConfigsRequestResource()
+	drr.ResourceType = kmsg.ConfigResourceTypeGroupConfig
+	drr.ResourceName = group
+	drr.ConfigNames = []string{} // empty, like null, describes every key
+	dreq.Resources = append(dreq.Resources, drr)
+	dresp, err := dreq.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]kmsg.DescribeConfigsResponseResourceConfig)
+	for _, rc := range dresp.Resources[0].Configs {
+		got[rc.Name] = rc
+	}
+	// As in Kafka, a key with a broker config lists the broker's value
+	// and default under the broker config's name.
+	for k, want := range map[string]struct {
+		value    string
+		source   kmsg.ConfigSource
+		synonyms string
+	}{
+		"share.isolation.level":          {"read_committed", kmsg.ConfigSourceGroupConfig, "share.isolation.level=read_committed/GROUP_CONFIG share.isolation.level=read_uncommitted/DEFAULT_CONFIG "},
+		"consumer.heartbeat.interval.ms": {"6000", kmsg.ConfigSourceGroupConfig, "consumer.heartbeat.interval.ms=6000/GROUP_CONFIG group.consumer.heartbeat.interval.ms=8000/DYNAMIC_BROKER_CONFIG group.consumer.heartbeat.interval.ms=5000/DEFAULT_CONFIG "},
+		"share.delivery.count.limit":     {"7", kmsg.ConfigSourceDynamicBrokerConfig, "group.share.delivery.count.limit=7/DYNAMIC_BROKER_CONFIG group.share.delivery.count.limit=5/DEFAULT_CONFIG "},
+		"consumer.session.timeout.ms":    {"45000", kmsg.ConfigSourceDefaultConfig, "group.consumer.session.timeout.ms=45000/DEFAULT_CONFIG "},
+		"share.auto.offset.reset":        {"latest", kmsg.ConfigSourceDefaultConfig, "share.auto.offset.reset=latest/DEFAULT_CONFIG "},
+	} {
+		rc := got[k]
+		v := "<nil>"
+		if rc.Value != nil {
+			v = *rc.Value
+		}
+		var syns string
+		for _, syn := range rc.ConfigSynonyms {
+			sv := "<nil>"
+			if syn.Value != nil {
+				sv = *syn.Value
+			}
+			syns += syn.Name + "=" + sv + "/" + syn.Source.String() + " "
+		}
+		if v != want.value || rc.Source != want.source || syns != want.synonyms {
+			t.Errorf("group %s: got %q (%v) %q, want %q (%v) %q", k, v, rc.Source, syns, want.value, want.source, want.synonyms)
+		}
+	}
+	if !listsGroup() {
+		t.Error("configured group is not listed")
+	}
+	alterGroup("consumer.heartbeat.interval.ms", kmsg.IncrementalAlterConfigOpDelete, nil)
+	alterGroup("share.isolation.level", kmsg.IncrementalAlterConfigOpDelete, nil)
+	if listsGroup() {
+		t.Error("group with no configs is still listed")
+	}
 }
 
 // TestCreateTopicsEdgeCases covers various CreateTopics error paths and features.
 func TestCreateTopicsEdgeCases(t *testing.T) {
 	t.Parallel()
 	c := newCoverCluster(t, NumBrokers(2), SeedTopics(1, "existing-topic"),
-		DefaultNumPartitions(7))
+		DefaultNumPartitions(7), BrokerConfigs(map[string]string{"log.segment.bytes": "1048576"}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cl := newPlainClient(t, c)
 	adm := kadm.NewClient(cl)
 
-	// Duplicate topic names in request.
+	// Duplicate topic names in request: only the duplicate fails. Of two
+	// names that differ only in . and _, the later one fails.
 	req := kmsg.NewCreateTopicsRequest()
-	for range 2 {
+	for _, name := range []string{"dup_x", "dup.x", "dup.x", "dup-other", "y.z", "y_z"} {
 		rt := kmsg.NewCreateTopicsRequestTopic()
-		rt.Topic = "dup"
+		rt.Topic = name
 		rt.NumPartitions = 1
 		rt.ReplicationFactor = 1
 		req.Topics = append(req.Topics, rt)
@@ -1104,9 +1469,22 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, st := range resp.Topics {
-		if st.ErrorCode != kerr.InvalidRequest.Code {
-			t.Errorf("dup: expected InvalidRequest, got %v", kerr.ErrorForCode(st.ErrorCode))
+		var want int16
+		switch st.Topic {
+		case "dup.x":
+			want = kerr.InvalidRequest.Code
+		case "y_z":
+			want = kerr.InvalidTopicException.Code
+			if st.ErrorMessage == nil || *st.ErrorMessage != "Topic 'y_z' collides with existing topic: y.z" {
+				t.Errorf("dup: y_z: got message %v, want Kafka's collision message", st.ErrorMessage)
+			}
 		}
+		if st.ErrorCode != want {
+			t.Errorf("dup: %s: expected %v, got %v", st.Topic, kerr.ErrorForCode(want), kerr.ErrorForCode(st.ErrorCode))
+		}
+	}
+	if len(resp.Topics) != 5 {
+		t.Errorf("dup: expected one answer per name, got %d", len(resp.Topics))
 	}
 
 	// Already exists.
@@ -1115,34 +1493,77 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Replication factor too high.
-	req2 := kmsg.NewCreateTopicsRequest()
-	rt2 := kmsg.NewCreateTopicsRequestTopic()
-	rt2.Topic = "high-repl"
-	rt2.NumPartitions = 1
-	rt2.ReplicationFactor = 10
-	req2.Topics = append(req2.Topics, rt2)
-	resp2, err := req2.RequestWith(ctx, cl)
-	if err != nil {
+	// Requests that fail and create nothing.
+	assign := func(replicas ...[]int32) func(*kmsg.CreateTopicsRequest, *kmsg.CreateTopicsRequestTopic) {
+		return func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) {
+			rt.NumPartitions, rt.ReplicationFactor = -1, -1
+			for i, rs := range replicas {
+				ra := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
+				ra.Partition = int32(i)
+				ra.Replicas = rs
+				rt.ReplicaAssignment = append(rt.ReplicaAssignment, ra)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		mod  func(*kmsg.CreateTopicsRequest, *kmsg.CreateTopicsRequestTopic)
+		want int16
+	}{
+		{"replication factor too high", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.ReplicationFactor = 10 }, kerr.InvalidReplicationFactor.Code},
+		{"replication factor zero", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.ReplicationFactor = 0 }, kerr.InvalidReplicationFactor.Code},
+		{"zero partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 0 }, kerr.InvalidPartitions.Code},
+		{"negative partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = -2 }, kerr.InvalidPartitions.Code},
+		{"too many partitions", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.NumPartitions = 10001 }, kerr.PolicyViolation.Code},
+		{"invalid name", func(_ *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) { rt.Topic = "bad name" }, kerr.InvalidTopicException.Code},
+		{"timeout already passed", func(req *kmsg.CreateTopicsRequest, _ *kmsg.CreateTopicsRequestTopic) { req.TimeoutMillis = 0 }, kerr.RequestTimedOut.Code},
+		{"assignment with a broker twice", assign([]int32{0, 0}), kerr.InvalidReplicaAssignment.Code},
+		{"assignment with an unknown broker", assign([]int32{9}), kerr.InvalidReplicaAssignment.Code},
+		{"assignment with uneven replica counts", assign([]int32{0}, []int32{0, 1}), kerr.InvalidReplicaAssignment.Code},
+		{"ReplicaAssignment with NumPartitions != -1", func(req *kmsg.CreateTopicsRequest, rt *kmsg.CreateTopicsRequestTopic) {
+			assign([]int32{0})(req, rt)
+			rt.NumPartitions = 3
+		}, kerr.InvalidRequest.Code},
+	} {
+		req := kmsg.NewCreateTopicsRequest()
+		rt := kmsg.NewCreateTopicsRequestTopic()
+		rt.Topic = "bad-topic"
+		rt.NumPartitions = 1
+		rt.ReplicationFactor = 1
+		tc.mod(&req, &rt)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Topics[0].ErrorCode; got != tc.want {
+			t.Errorf("%s: expected %v, got %v", tc.name, kerr.ErrorForCode(tc.want), kerr.ErrorForCode(got))
+		}
+		if ti := c.TopicInfo(rt.Topic); ti != nil {
+			t.Errorf("%s: topic was created", tc.name)
+		}
+	}
+	// Cluster.CreateTopic, which Metadata's auto-creation shares, refuses
+	// more than 10000 partitions too, and
+	// controller.max.records.per.batch changes the limit.
+	if c.CreateTopic("huge", 10001, nil) == nil {
+		t.Error("CreateTopic created a topic with 10001 partitions")
+	}
+	small := newCoverCluster(t, NumBrokers(1), BrokerConfigs(map[string]string{"controller.max.records.per.batch": "2"}))
+	if err := small.CreateTopic("two", 2, nil); err != nil {
+		t.Errorf("CreateTopic with 2 partitions at a limit of 2: %v", err)
+	}
+	if small.CreateTopic("three", 3, nil) == nil {
+		t.Error("CreateTopic created 3 partitions at a limit of 2")
+	}
+	// Seeded a.b and a_b collide, and a_b still refuses a new a.b after
+	// a.b is deleted.
+	seeded := newCoverCluster(t, NumBrokers(1), SeedTopics(1, "a.b", "a_b"))
+	if err := seeded.DeleteTopic("a.b"); err != nil {
 		t.Fatal(err)
 	}
-	if resp2.Topics[0].ErrorCode != kerr.InvalidReplicationFactor.Code {
-		t.Errorf("expected InvalidReplicationFactor, got %v", kerr.ErrorForCode(resp2.Topics[0].ErrorCode))
-	}
-
-	// Zero partitions.
-	req3 := kmsg.NewCreateTopicsRequest()
-	rt3 := kmsg.NewCreateTopicsRequestTopic()
-	rt3.Topic = "zero"
-	rt3.NumPartitions = 0
-	rt3.ReplicationFactor = 1
-	req3.Topics = append(req3.Topics, rt3)
-	resp3, err := req3.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp3.Topics[0].ErrorCode != kerr.InvalidPartitions.Code {
-		t.Errorf("expected InvalidPartitions, got %v", kerr.ErrorForCode(resp3.Topics[0].ErrorCode))
+	if err := seeded.CreateTopic("a.b", 1, nil); err == nil {
+		t.Error("CreateTopic created a.b next to a_b")
 	}
 
 	// Default partitions (-1 = use DefaultNumPartitions).
@@ -1163,18 +1584,11 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 		t.Errorf("expected 7 default partitions, got %d", resp4.Topics[0].NumPartitions)
 	}
 
-	// With ReplicaAssignment.
+	// With ReplicaAssignment: the first replica leads.
 	req5 := kmsg.NewCreateTopicsRequest()
 	rt5 := kmsg.NewCreateTopicsRequestTopic()
 	rt5.Topic = "assigned"
-	rt5.NumPartitions = -1
-	rt5.ReplicationFactor = -1
-	for i := range int32(2) {
-		ra := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
-		ra.Partition = i
-		ra.Replicas = []int32{i % 2}
-		rt5.ReplicaAssignment = append(rt5.ReplicaAssignment, ra)
-	}
+	assign([]int32{1}, []int32{0})(&req5, &rt5)
 	req5.Topics = append(req5.Topics, rt5)
 	resp5, err := req5.RequestWith(ctx, cl)
 	if err != nil {
@@ -1183,24 +1597,10 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	if resp5.Topics[0].ErrorCode != 0 {
 		t.Fatal(kerr.ErrorForCode(resp5.Topics[0].ErrorCode))
 	}
-
-	// ReplicaAssignment with NumPartitions != -1 -> InvalidRequest.
-	req6 := kmsg.NewCreateTopicsRequest()
-	rt6 := kmsg.NewCreateTopicsRequestTopic()
-	rt6.Topic = "bad-assign"
-	rt6.NumPartitions = 3
-	rt6.ReplicationFactor = 1
-	ra6 := kmsg.NewCreateTopicsRequestTopicReplicaAssignment()
-	ra6.Partition = 0
-	ra6.Replicas = []int32{0}
-	rt6.ReplicaAssignment = append(rt6.ReplicaAssignment, ra6)
-	req6.Topics = append(req6.Topics, rt6)
-	resp6, err := req6.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp6.Topics[0].ErrorCode != kerr.InvalidRequest.Code {
-		t.Errorf("expected InvalidRequest, got %v", kerr.ErrorForCode(resp6.Topics[0].ErrorCode))
+	for p, want := range []int32{1, 0} {
+		if got := c.LeaderFor("assigned", int32(p)); got != want {
+			t.Errorf("assigned partition %d: expected leader %d, got %d", p, want, got)
+		}
 	}
 
 	// ValidateOnly: the topic should not be created.
@@ -1240,6 +1640,22 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	if resp8.Topics[0].ErrorCode != 0 {
 		t.Fatal(kerr.ErrorForCode(resp8.Topics[0].ErrorCode))
 	}
+	// The response has every config, sorted, not only the ones we set.
+	rcfgs := resp8.Topics[0].Configs
+	if !slices.IsSortedFunc(rcfgs, func(l, r kmsg.CreateTopicsResponseTopicConfig) int { return strings.Compare(l.Name, r.Name) }) {
+		t.Error("response configs are not sorted")
+	}
+	srcs := make(map[string]kmsg.ConfigSource)
+	for _, rc := range rcfgs {
+		srcs[rc.Name] = kmsg.ConfigSource(rc.Source)
+	}
+	if srcs["retention.ms"] != kmsg.ConfigSourceDynamicTopicConfig || srcs["cleanup.policy"] != kmsg.ConfigSourceDefaultConfig {
+		t.Errorf("response config sources: retention.ms %v, cleanup.policy %v", srcs["retention.ms"], srcs["cleanup.policy"])
+	}
+	// A broker config shows under the topic config's name.
+	if _, ok := srcs["log.segment.bytes"]; ok || srcs["segment.bytes"] != kmsg.ConfigSourceDynamicBrokerConfig {
+		t.Errorf("response lists log.segment.bytes %v, segment.bytes from %v", ok, srcs["segment.bytes"])
+	}
 	// Verify the config was applied.
 	tcfgs, err := adm.DescribeTopicConfigs(ctx, "with-config")
 	if err != nil {
@@ -1255,6 +1671,37 @@ func TestCreateTopicsEdgeCases(t *testing.T) {
 	}
 	if !found {
 		t.Error("retention.ms config not found on created topic")
+	}
+
+	// A known config must parse as its type and must not be null; a name
+	// we do not know is accepted.
+	for _, step := range []struct {
+		topic string
+		name  string
+		value *string
+		want  int16
+	}{
+		{"bad-config", "retention.ms", new("abc"), kerr.InvalidConfig.Code},
+		{"null-config", "retention.ms", nil, kerr.InvalidConfig.Code},
+		{"custom-config", "custom.thing", new("abc"), 0},
+	} {
+		req := kmsg.NewCreateTopicsRequest()
+		rt := kmsg.NewCreateTopicsRequestTopic()
+		rt.Topic = step.topic
+		rt.NumPartitions = 1
+		rt.ReplicationFactor = 1
+		cfg := kmsg.NewCreateTopicsRequestTopicConfig()
+		cfg.Name = step.name
+		cfg.Value = step.value
+		rt.Configs = append(rt.Configs, cfg)
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Topics[0].ErrorCode; got != step.want {
+			t.Errorf("%s: got %v, want %v", step.topic, kerr.ErrorForCode(got), kerr.ErrorForCode(step.want))
+		}
 	}
 }
 
@@ -1285,6 +1732,50 @@ func TestDeleteTopicsByID(t *testing.T) {
 		t.Fatal("topic ID not found")
 	}
 
+	// Entries Kafka rejects one by one, deleting nothing: a duplicated
+	// name or ID, both or neither, an unknown ID, and a name that maps to
+	// an ID the request also lists.
+	entry := func(name *string, id [16]byte) kmsg.DeleteTopicsRequestTopic {
+		dt := kmsg.NewDeleteTopicsRequestTopic()
+		dt.Topic, dt.TopicID = name, id
+		return dt
+	}
+	unknownID := [16]byte{1}
+	for _, entries := range [][]kmsg.DeleteTopicsRequestTopic{
+		{entry(&topic, [16]byte{}), entry(&topic, [16]byte{}), entry(nil, topicID), entry(nil, topicID), entry(&topic, topicID), entry(nil, [16]byte{}), entry(nil, unknownID)},
+		{entry(&topic, [16]byte{}), entry(nil, topicID)},
+	} {
+		req := kmsg.NewDeleteTopicsRequest()
+		req.Topics = entries
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, st := range resp.Topics {
+			want := kerr.InvalidRequest.Code
+			if st.TopicID == unknownID {
+				want = kerr.UnknownTopicID.Code
+				if st.Topic != nil {
+					t.Errorf("unknown ID answered with name %q", *st.Topic)
+				}
+			}
+			if st.ErrorCode != want {
+				t.Errorf("entry %v %x: expected %v, got %v", st.Topic, st.TopicID, kerr.ErrorForCode(want), kerr.ErrorForCode(st.ErrorCode))
+			}
+		}
+		if c.TopicInfo(topic) == nil {
+			t.Fatal("rejected entries deleted the topic")
+		}
+	}
+	// With no name or ID to look up, a request past its deadline is
+	// answered entry by entry.
+	dup := kmsg.NewPtrDeleteTopicsRequest()
+	dup.TimeoutMillis = 0
+	dup.Topics = []kmsg.DeleteTopicsRequestTopic{entry(&topic, [16]byte{}), entry(&topic, [16]byte{})}
+	if dr := faultReq(t, cl, 0, dup).(*kmsg.DeleteTopicsResponse); len(dr.Topics) != 1 || dr.Topics[0].ErrorCode != kerr.InvalidRequest.Code {
+		t.Errorf("duplicates past the deadline: got %+v, want one INVALID_REQUEST", dr.Topics)
+	}
+
 	// Delete by ID.
 	delReq := kmsg.NewDeleteTopicsRequest()
 	delReq.Version = 6
@@ -1306,12 +1797,17 @@ func TestDeleteTopicsByID(t *testing.T) {
 	}
 }
 
-// TestDescribeProducersShowsActiveTransaction verifies that DescribeProducers
-// reports active transactional producers and clears them after commit.
-func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
+// TestDescribeProducers verifies that every replica
+// answers DescribeProducers, that a producer stays listed after its
+// transaction ends, that its last timestamp is its last batch's, that the
+// transaction's start offset shows only while the transaction is open on the
+// partition: a WriteTxnMarkers marker ends it there, and a marker below the
+// producer's epoch is rejected, and that an idempotent producer expires
+// producer.id.expiration.ms after its last batch.
+func TestDescribeProducers(t *testing.T) {
 	t.Parallel()
 	topic := "describe-producers"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCoverCluster(t, NumBrokers(3), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1319,52 +1815,100 @@ func TestDescribeProducersShowsActiveTransaction(t *testing.T) {
 		kgo.DefaultProduceTopic(topic),
 		kgo.TransactionalID("desc-prod-txn"),
 	)
+	cl := newPlainClient(t, c)
+
+	// describe asks each of the 3 replicas and wants one producer with
+	// the given transaction start offset from each.
+	describe := func(wantStart int64) kmsg.DescribeProducersResponseTopicPartitionActiveProducer {
+		t.Helper()
+		var ap kmsg.DescribeProducersResponseTopicPartitionActiveProducer
+		for node := range 3 {
+			req := kmsg.NewPtrDescribeProducersRequest()
+			rt := kmsg.NewDescribeProducersRequestTopic()
+			rt.Topic = topic
+			rt.Partitions = []int32{0}
+			req.Topics = append(req.Topics, rt)
+			kresp, err := cl.Broker(node).Request(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sp := kresp.(*kmsg.DescribeProducersResponse).Topics[0].Partitions[0]
+			if err := kerr.ErrorForCode(sp.ErrorCode); err != nil {
+				t.Fatalf("broker %d: %v", node, err)
+			}
+			if len(sp.ActiveProducers) != 1 || sp.ActiveProducers[0].CurrentTxnStartOffset != wantStart {
+				t.Fatalf("broker %d: got producers %+v, want one with transaction start %d", node, sp.ActiveProducers, wantStart)
+			}
+			ap = sp.ActiveProducers[0]
+		}
+		return ap
+	}
+
+	if err := producer.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.ProduceSync(ctx, &kgo.Record{Value: []byte("txn-data"), Timestamp: time.UnixMilli(1000)}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	first := describe(0)
+	if first.LastTimestamp != 1000 {
+		t.Fatalf("got last timestamp %d, want the batch's 1000", first.LastTimestamp)
+	}
+	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+	// The v5 commit's marker carries the bumped epoch.
+	if ap := describe(-1); ap.ProducerEpoch != first.ProducerEpoch+1 || ap.LastSequence != -1 {
+		t.Fatalf("after the commit: got epoch %d and last sequence %d, want %d and -1", ap.ProducerEpoch, ap.LastSequence, first.ProducerEpoch+1)
+	}
+
+	// The second transaction is at a bumped epoch (KIP-890). Its records
+	// start after the first record and its commit marker.
 	if err := producer.BeginTransaction(); err != nil {
 		t.Fatal(err)
 	}
 	if err := producer.ProduceSync(ctx, kgo.StringRecord("txn-data")).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
-
-	// Describe: we should see the active producer.
-	cl := newPlainClient(t, c)
-	req := kmsg.NewDescribeProducersRequest()
-	rt := kmsg.NewDescribeProducersRequestTopic()
-	rt.Topic = topic
-	rt.Partitions = []int32{0}
-	req.Topics = append(req.Topics, rt)
-
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var activeCount int
-	for _, st := range resp.Topics {
-		for _, sp := range st.Partitions {
-			activeCount += len(sp.ActiveProducers)
+	ap := describe(2)
+	adm := kadm.NewClient(cl)
+	for _, m := range []struct {
+		epoch   int16
+		wantErr error
+	}{
+		{int16(ap.ProducerEpoch) - 1, kerr.InvalidProducerEpoch},
+		{int16(ap.ProducerEpoch), nil},
+	} {
+		written, err := adm.WriteTxnMarkers(ctx, kadm.TxnMarkers{
+			ProducerID:    ap.ProducerID,
+			ProducerEpoch: m.epoch,
+			Topics:        kadm.TopicsSet{topic: {0: {}}},
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if activeCount == 0 {
-		t.Error("expected active producer during open transaction")
-	}
-
-	// Commit transaction.
-	if err := producer.EndTransaction(ctx, kgo.TryCommit); err != nil {
-		t.Fatal(err)
-	}
-
-	// Describe again: no active producers.
-	resp2, err := req.RequestWith(ctx, cl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, st := range resp2.Topics {
-		for _, sp := range st.Partitions {
-			if len(sp.ActiveProducers) > 0 {
-				t.Errorf("expected no active producers after commit, got %d", len(sp.ActiveProducers))
+		written.EachPartition(func(p kadm.TxnMarkersPartitionResponse) {
+			if !errors.Is(p.Err, m.wantErr) {
+				t.Fatalf("marker at epoch %d: got %v, want %v", m.epoch, p.Err, m.wantErr)
 			}
-		}
+		})
 	}
+	describe(-1)
+	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
+		t.Fatal(err)
+	}
+
+	idem := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+	if err := idem.ProduceSync(ctx, &kgo.Record{Value: []byte("idem"), Timestamp: time.UnixMilli(1000)}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	c.admin(func() {
+		c.bcfgs["producer.id.expiration.ms"] = new("1000")
+		c.pids.expireProducers()
+		if len(c.pids.ids) != 1 || c.pids.byTxid["desc-prod-txn"] == nil {
+			t.Errorf("after the idempotent producer expired: got %d producers, want only the transactional one", len(c.pids.ids))
+		}
+	})
 }
 
 // TestTxnProduceAndCommit verifies a basic transactional produce + commit flow.
@@ -1414,11 +1958,12 @@ func TestTxnProduceAndCommit(t *testing.T) {
 }
 
 // TestListTransactionsFindsOngoing verifies that ListTransactions finds
-// ongoing transactions by state filter.
+// ongoing transactions by state filter, that only the coordinator lists a
+// transactional ID, and that a pattern matches the whole ID.
 func TestListTransactionsFindsOngoing(t *testing.T) {
 	t.Parallel()
 	topic := "list-txn-ongoing"
-	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	c := newCoverCluster(t, NumBrokers(3), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1434,15 +1979,37 @@ func TestListTransactionsFindsOngoing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adm := kadm.NewClient(newPlainClient(t, c))
+	cl := newPlainClient(t, c)
+	adm := kadm.NewClient(cl)
 
 	// Unfiltered list.
 	listed, err := adm.ListTransactions(ctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := listed[txnID]; !ok {
+	if tx, ok := listed[txnID]; !ok {
 		t.Error("transaction not found in unfiltered list")
+	} else if want := c.CoordinatorFor(txnID); tx.Coordinator != want {
+		t.Errorf("listed by broker %d, want the coordinator %d", tx.Coordinator, want)
+	}
+
+	// Each broker lists only what it coordinates. An unknown state name
+	// matches nothing and comes back.
+	var n int
+	for node := range 3 {
+		req := kmsg.NewPtrListTransactionsRequest()
+		req.StateFilters = []string{"Ongoing", "ongoing"}
+		resp, err := req.RequestWith(ctx, cl.Broker(node))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += len(resp.TransactionStates)
+		if !slices.Equal(resp.UnknownStateFilters, []string{"ongoing"}) {
+			t.Errorf("broker %d: unknown state filters %v, want [ongoing]", node, resp.UnknownStateFilters)
+		}
+	}
+	if n != 1 {
+		t.Errorf("brokers listed the transaction %d times, want 1", n)
 	}
 
 	// Filtered by state.
@@ -1450,11 +2017,19 @@ func TestListTransactionsFindsOngoing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, ok := listed2[txnID]
-	if !ok {
-		t.Error("transaction not found with Ongoing filter")
-	} else if tx.State != "Ongoing" {
-		t.Errorf("expected Ongoing state, got %q", tx.State)
+	if tx := listed2[txnID]; tx.State != "Ongoing" {
+		t.Errorf("Ongoing filter: got %+v for the transaction, want it listed as Ongoing", tx)
+	}
+
+	// A pattern matches the whole ID.
+	for pattern, want := range map[string]bool{"list-txn": false, "list-txn.*": true} {
+		listed, err := adm.ListTransactionsByTxPattern(ctx, nil, nil, pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := listed[txnID]; ok != want {
+			t.Errorf("pattern %q: listed %v, want %v", pattern, ok, want)
+		}
 	}
 
 	if err := producer.EndTransaction(ctx, kgo.TryAbort); err != nil {
@@ -1568,7 +2143,9 @@ func TestOffsetForLeaderEpochLogEnd(t *testing.T) {
 
 // TestOffsetForLeaderEpochAfterLeaderChange verifies that after a leader
 // change (epoch bump), querying for the old epoch returns the offset boundary
-// where the epoch changed.
+// where the epoch changed, at v2 as well, the oldest version Kafka 4
+// serves. The old leader answers a stale current epoch FENCED_LEADER_EPOCH:
+// the epoch is checked before leadership.
 func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 	t.Parallel()
 	topic := "ofle-leader-change"
@@ -1614,19 +2191,32 @@ func TestOffsetForLeaderEpochAfterLeaderChange(t *testing.T) {
 	rt.Partitions = append(rt.Partitions, rp)
 	req.Topics = append(req.Topics, rt)
 
-	resp, err := req.RequestWith(ctx, cl2)
+	v2 := kversion.Stable()
+	v2.SetMaxKeyVersion(int16(kmsg.OffsetForLeaderEpoch), 2)
+	for _, cl := range []*kgo.Client{cl2, newPlainClient(t, c, kgo.MaxVersions(v2))} {
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sp := resp.Topics[0].Partitions[0]
+		if sp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(sp.ErrorCode))
+		}
+		if sp.EndOffset != 3 {
+			t.Errorf("v%d: expected EndOffset=3 (boundary), got %d", resp.Version, sp.EndOffset)
+		}
+		if sp.LeaderEpoch != 0 {
+			t.Errorf("v%d: expected LeaderEpoch=0, got %d", resp.Version, sp.LeaderEpoch)
+		}
+	}
+
+	req.Topics[0].Partitions[0].CurrentLeaderEpoch = 0
+	kresp, err := cl2.Broker(int(origLeader)).Request(ctx, &req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp := resp.Topics[0].Partitions[0]
-	if sp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(sp.ErrorCode))
-	}
-	if sp.EndOffset != 3 {
-		t.Errorf("expected EndOffset=3 (boundary), got %d", sp.EndOffset)
-	}
-	if sp.LeaderEpoch != 0 {
-		t.Errorf("expected LeaderEpoch=0, got %d", sp.LeaderEpoch)
+	if err := kerr.ErrorForCode(kresp.(*kmsg.OffsetForLeaderEpochResponse).Topics[0].Partitions[0].ErrorCode); err != kerr.FencedLeaderEpoch {
+		t.Errorf("stale epoch at the old leader: got %v, want FENCED_LEADER_EPOCH", err)
 	}
 }
 
@@ -1786,12 +2376,13 @@ func TestListOffsetsReadCommittedDuringTxn(t *testing.T) {
 }
 
 // TestTxnAbortDiscardsOffsets verifies that offset commits staged in a
-// transaction are discarded when the transaction is aborted.
+// transaction are discarded when the transaction is aborted, or when an
+// OffsetDelete of the partition comes before the commit, and that a
+// regular commit after a staged one keeps its offset when the transaction
+// commits.
 func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	t.Parallel()
 	topic := "txn-abort-offsets"
-	group := "txn-abort-group"
-	txnID := "txn-abort-offsets-id"
 	c := newCoverCluster(t, NumBrokers(1), SeedTopics(1, topic))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1807,75 +2398,142 @@ func TestTxnAbortDiscardsOffsets(t *testing.T) {
 	// Use raw protocol for the full transactional offset commit flow.
 	rawCl := newPlainClient(t, c)
 
-	// InitProducerID.
-	initReq := kmsg.NewInitProducerIDRequest()
-	initReq.TransactionalID = &txnID
-	initReq.TransactionTimeoutMillis = 60000
-	initResp, err := initReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(initResp.ErrorCode))
-	}
-	pid := initResp.ProducerID
-	epoch := initResp.ProducerEpoch
+	for _, tc := range []struct {
+		name         string
+		offsetDelete bool // delete the partition's offset, then commit
+	}{
+		{name: "abort"},
+		{name: "offset-delete", offsetDelete: true},
+	} {
+		group := "txn-abort-group-" + tc.name
+		txnID := "txn-abort-offsets-id-" + tc.name
 
-	// AddOffsetsToTxn.
-	addReq := kmsg.NewAddOffsetsToTxnRequest()
-	addReq.TransactionalID = txnID
-	addReq.ProducerID = pid
-	addReq.ProducerEpoch = epoch
-	addReq.Group = group
-	addResp, err := addReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if addResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(addResp.ErrorCode))
-	}
+		// The group must exist for OffsetDelete: an admin commit
+		// creates it.
+		if tc.offsetDelete {
+			if _, err := kadm.NewClient(rawCl).CommitOffsets(ctx, group, kadm.OffsetsFromRecords(kgo.Record{Topic: topic, Offset: 1})); err != nil {
+				t.Fatalf("%s: admin commit: %v", tc.name, err)
+			}
+		}
 
-	// TxnOffsetCommit: stage offset 5 for the group.
-	commitReq := kmsg.NewTxnOffsetCommitRequest()
-	commitReq.TransactionalID = txnID
-	commitReq.Group = group
-	commitReq.ProducerID = pid
-	commitReq.ProducerEpoch = epoch
-	commitReq.Generation = -1
-	ct := kmsg.NewTxnOffsetCommitRequestTopic()
-	ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
-	cp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-	cp.Partition = 0
-	cp.Offset = 5
-	ct.Partitions = append(ct.Partitions, cp)
-	commitReq.Topics = append(commitReq.Topics, ct)
+		// InitProducerID.
+		initReq := kmsg.NewInitProducerIDRequest()
+		initReq.TransactionalID = &txnID
+		initReq.TransactionTimeoutMillis = 60000
+		initResp, err := initReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if initResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(initResp.ErrorCode))
+		}
+		pid := initResp.ProducerID
+		epoch := initResp.ProducerEpoch
 
-	commitResp, err := commitReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if commitResp.Topics[0].Partitions[0].ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(commitResp.Topics[0].Partitions[0].ErrorCode))
-	}
+		// AddOffsetsToTxn.
+		addReq := kmsg.NewAddOffsetsToTxnRequest()
+		addReq.TransactionalID = txnID
+		addReq.ProducerID = pid
+		addReq.ProducerEpoch = epoch
+		addReq.Group = group
+		addResp, err := addReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if addResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(addResp.ErrorCode))
+		}
 
-	// ABORT the transaction.
-	endReq := kmsg.NewEndTxnRequest()
-	endReq.TransactionalID = txnID
-	endReq.ProducerID = pid
-	endReq.ProducerEpoch = epoch
-	endReq.Commit = false
-	endResp, err := endReq.RequestWith(ctx, rawCl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if endResp.ErrorCode != 0 {
-		t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
-	}
+		// TxnOffsetCommit: stage offset 5 for the group.
+		commitReq := kmsg.NewTxnOffsetCommitRequest()
+		commitReq.TransactionalID = txnID
+		commitReq.Group = group
+		commitReq.ProducerID = pid
+		commitReq.ProducerEpoch = epoch
+		commitReq.Generation = -1
+		ct := kmsg.NewTxnOffsetCommitRequestTopic()
+		ct.Topic, ct.TopicID = topic, c.TopicInfo(topic).TopicID
+		cp := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+		cp.Partition = 0
+		cp.Offset = 5
+		ct.Partitions = append(ct.Partitions, cp)
+		commitReq.Topics = append(commitReq.Topics, ct)
 
-	// Verify offsets were NOT committed to the group. The group was never
-	// created, because the abort discarded the staged offsets.
-	if o, ok := groupCommits(c, group)[topic][0]; ok {
-		t.Errorf("expected no committed offset after abort, got %d", o.Offset)
+		commitResp, err := commitReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if commitResp.Topics[0].Partitions[0].ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(commitResp.Topics[0].Partitions[0].ErrorCode))
+		}
+
+		if tc.offsetDelete {
+			del := kmsg.NewPtrOffsetDeleteRequest()
+			del.Group = group
+			dt := kmsg.NewOffsetDeleteRequestTopic()
+			dt.Topic = topic
+			dt.Partitions = append(dt.Partitions, kmsg.NewOffsetDeleteRequestTopicPartition())
+			del.Topics = append(del.Topics, dt)
+			delResp, err := del.RequestWith(ctx, rawCl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if delResp.ErrorCode != 0 || delResp.Topics[0].Partitions[0].ErrorCode != 0 {
+				t.Fatalf("%s: offset delete: %+v", tc.name, delResp)
+			}
+		}
+
+		// End the transaction: abort, or commit after the delete.
+		endReq := kmsg.NewEndTxnRequest()
+		endReq.TransactionalID = txnID
+		endReq.ProducerID = pid
+		endReq.ProducerEpoch = epoch
+		endReq.Commit = tc.offsetDelete
+		endResp, err := endReq.RequestWith(ctx, rawCl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if endResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
+		}
+
+		// Verify offsets were NOT committed to the group. Without the
+		// delete, the abort discarded the staged offset.
+		if o, ok := groupCommits(c, group)[topic][0]; ok {
+			t.Errorf("%s: expected no committed offset, got %d", tc.name, o.Offset)
+		}
+		if tc.offsetDelete {
+			continue
+		}
+
+		// After the abort, the next transaction stages offset 3
+		// (TxnOffsetCommit v5+ adds the group), then a regular commit
+		// sets 4, then the transaction commits: the newer regular
+		// commit stays.
+		commitReq.ProducerEpoch = endResp.ProducerEpoch
+		commitReq.Topics[0].Partitions[0].Offset = 3
+		if commitResp, err = commitReq.RequestWith(ctx, rawCl); err != nil {
+			t.Fatal(err)
+		}
+		if code := commitResp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+			t.Fatal(kerr.ErrorForCode(code))
+		}
+		var regular kadm.Offsets
+		regular.Add(kadm.Offset{Topic: topic, Partition: 0, At: 4, LeaderEpoch: -1})
+		if err := kadm.NewClient(rawCl).CommitAllOffsets(ctx, group, regular); err != nil {
+			t.Fatal(err)
+		}
+		endReq.ProducerEpoch = endResp.ProducerEpoch
+		endReq.Commit = true
+		if endResp, err = endReq.RequestWith(ctx, rawCl); err != nil {
+			t.Fatal(err)
+		}
+		if endResp.ErrorCode != 0 {
+			t.Fatal(kerr.ErrorForCode(endResp.ErrorCode))
+		}
+		if o := groupCommits(c, group)[topic][0]; o.Offset != 4 {
+			t.Errorf("expected the regular commit's offset 4 after the transaction commits, got %d", o.Offset)
+		}
 	}
 }
 
@@ -2019,7 +2677,9 @@ func TestTxnReinitAbortsOpenTxn(t *testing.T) {
 }
 
 // TestDeleteRecordsAdvancesStartOffset verifies that after DeleteRecords,
-// ListStartOffsets reflects the new log start offset.
+// ListStartOffsets reflects the new log start offset. Deleting below the log
+// start offset succeeds and changes nothing, and a compacted topic without
+// delete in its cleanup.policy answers POLICY_VIOLATION.
 func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 	t.Parallel()
 	topic := "delete-records-start"
@@ -2063,6 +2723,31 @@ func TestDeleteRecordsAdvancesStartOffset(t *testing.T) {
 	}
 	if o := start2[topic][0].Offset; o != 7 {
 		t.Errorf("expected start=7 after delete, got %d", o)
+	}
+
+	compacted := "delete-records-compacted"
+	if err := c.CreateTopic(compacted, 1, map[string]string{"cleanup.policy": "compact"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		topic   string
+		at      int64
+		wantErr error
+		wantLow int64
+	}{
+		{topic, 3, nil, 7},
+		{compacted, -1, kerr.PolicyViolation, -1},
+	} {
+		offsets := kadm.Offsets{}
+		offsets.Add(kadm.Offset{Topic: check.topic, Partition: 0, At: check.at})
+		dresp, err := adm.DeleteRecords(ctx, offsets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, _ := dresp.Lookup(check.topic, 0)
+		if r.Err != check.wantErr || r.LowWatermark != check.wantLow {
+			t.Errorf("%s at %d: got %v low watermark %d, want %v %d", check.topic, check.at, r.Err, r.LowWatermark, check.wantErr, check.wantLow)
+		}
 	}
 
 	// End should still be 10.
@@ -2167,25 +2852,58 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 	}
 	list := func(t *testing.T) []string {
 		t.Helper()
-		req := kmsg.NewPtrListConfigResourcesRequest()
-		req.ResourceTypes = []int8{int8(kmsg.ConfigResourceTypeClientMetrics)}
+		listed, err := kadm.NewClient(cl).ListConfigResources(ctx, kadm.ConfigResourceClientMetrics)
+		if err == nil {
+			err = listed.Err
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other := len(listed.Resources) - len(listed.FilterTypes(kadm.ConfigResourceClientMetrics)); other > 0 {
+			t.Errorf("listed %d resources of another type: %v", other, listed.Resources)
+		}
+		return listed.Names()
+	}
+
+	// telemetry gets this client's subscription. A push with the ID the
+	// previous get answered fails once the subscription changes.
+	type subscription struct {
+		metrics  []string
+		interval int32
+	}
+	instance := [16]byte{1, 2, 3}
+	var lastSub int32
+	push := func(t *testing.T, sub int32) int16 {
+		t.Helper()
+		req := kmsg.NewPtrPushTelemetryRequest()
+		req.ClientInstanceID = instance
+		req.SubscriptionID = sub
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.ErrorCode != 0 {
-			t.Fatal(kerr.ErrorForCode(resp.ErrorCode))
-		}
-		var names []string
-		for _, r := range resp.ConfigResources {
-			if r.Type != int8(kmsg.ConfigResourceTypeClientMetrics) {
-				t.Errorf("listed %s with type %d", r.Name, r.Type)
-			}
-			names = append(names, r.Name)
-		}
-		slices.Sort(names)
-		return names
+		return resp.ErrorCode
 	}
+	telemetry := func(t *testing.T) subscription {
+		t.Helper()
+		req := kmsg.NewPtrGetTelemetrySubscriptionsRequest()
+		req.ClientInstanceID = instance
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lastSub != 0 && lastSub != resp.SubscriptionID {
+			if code := push(t, lastSub); code != kerr.UnknownSubscriptionID.Code {
+				t.Errorf("push with the old subscription ID: got error %d, want UNKNOWN_SUBSCRIPTION_ID", code)
+			}
+		}
+		if code := push(t, resp.SubscriptionID); code != 0 {
+			t.Errorf("push with the current subscription ID: got error %d", code)
+		}
+		lastSub = resp.SubscriptionID
+		return subscription{resp.RequestedMetrics, resp.PushIntervalMillis}
+	}
+	all := []string{""} // our marker for every metric
 
 	type config struct {
 		value  string
@@ -2208,6 +2926,8 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 		want     map[string]config
 
 		list []string // nil skips the check
+
+		telemetry *subscription // nil skips the check
 	}{
 		{
 			name:  "create with every key",
@@ -2224,6 +2944,8 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 				"match":       {"client_id=kcl.*,client_software_name=franz-go", dynamic},
 			},
 			list: []string{"s1"},
+			// s1 does not match the client: every metric every 30s.
+			telemetry: &subscription{all, 30000},
 		},
 		{
 			name:     "create with one key describes the defaults",
@@ -2235,7 +2957,8 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 				"interval.ms": {"300000", def},
 				"match":       {"", def},
 			},
-			list: []string{"s1", "s2"},
+			list:      []string{"s1", "s2"},
+			telemetry: &subscription{all, 300000},
 		},
 		{
 			name:     "update one key keeps the others",
@@ -2305,7 +3028,7 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 			name:     "nil value",
 			alter:    "bad",
 			cfgs:     []kmsg.IncrementalAlterConfigsRequestResourceConfig{setNil("metrics")},
-			alterErr: kerr.InvalidConfig,
+			alterErr: kerr.InvalidRequest,
 		},
 		{
 			name:     "empty name",
@@ -2352,6 +3075,30 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 			},
 			list: []string{"s2"},
 		},
+		{
+			name:      "a matching subscription answers its metrics",
+			alter:     "s2",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("metrics", "b.,a.")},
+			telemetry: &subscription{[]string{"a.", "b."}, 300000},
+		},
+		{
+			name:      "the smallest matching interval wins",
+			alter:     "s3",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("interval.ms", "1000"), set("match", "client_id=k.o")},
+			telemetry: &subscription{[]string{"a.", "b."}, 1000},
+		},
+		{
+			name:      "a matching subscription without metrics asks for none",
+			alter:     "s2",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "client_id=nope")},
+			telemetry: &subscription{nil, 1000},
+		},
+		{
+			name:      "no subscription matches",
+			alter:     "s3",
+			cfgs:      []kmsg.IncrementalAlterConfigsRequestResourceConfig{set("match", "client_id=nope")},
+			telemetry: &subscription{all, 30000},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.alter != "" || tc.cfgs != nil {
@@ -2386,6 +3133,33 @@ func TestClientMetricsSubscriptions(t *testing.T) {
 					t.Errorf("list: got %v, want %v", got, tc.list)
 				}
 			}
+			if tc.telemetry != nil {
+				if got := telemetry(t); !slices.Equal(got.metrics, tc.telemetry.metrics) || got.interval != tc.telemetry.interval {
+					t.Errorf("telemetry: got %v every %dms, want %v every %dms", got.metrics, got.interval, tc.telemetry.metrics, tc.telemetry.interval)
+				}
+			}
 		})
+	}
+
+	// Like Kafka, a client that pushed as terminating may push nothing
+	// more, until we forget it once it stops asking.
+	term := kmsg.NewPtrPushTelemetryRequest()
+	term.ClientInstanceID, term.SubscriptionID, term.Terminating = instance, lastSub, true
+	if resp, err := term.RequestWith(ctx, cl); err != nil || resp.ErrorCode != 0 {
+		t.Fatalf("terminating push: %v %v", err, resp)
+	}
+	if code := push(t, lastSub); code != kerr.InvalidRequest.Code {
+		t.Errorf("push after a terminating push: got error %d, want INVALID_REQUEST", code)
+	}
+	c.admin(func() { c.telem[instance].t.Reset(0) })
+	gone := func() (forgot bool) {
+		c.admin(func() { _, known := c.telem[instance]; forgot = !known })
+		return forgot
+	}
+	for deadline := time.Now().Add(5 * time.Second); !gone() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	if code := push(t, lastSub); code != 0 {
+		t.Errorf("push after we forgot the terminated client: got error %d", code)
 	}
 }
