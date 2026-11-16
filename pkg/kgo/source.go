@@ -136,6 +136,10 @@ type cursor struct {
 
 	unknownIDFails atomic.Int32
 
+	// A KIP-951 move waits behind metadata. Repeated fetch responses must
+	// not queue another move goroutine for the same cursor while it waits.
+	leaderMovePending atomic.Bool
+
 	keepControl bool // whether to keep control records
 
 	cursorsIdx int // updated under source mutex
@@ -1069,7 +1073,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	// being processed below.
 
 	resp := kresp.(*kmsg.FetchResponse)
-	fetch, reloadOffsets, preferreds, allErrsStripped, updateWhy := s.handleReqResp(br, req, resp)
+	fetch, reloadOffsets, preferreds, hadStrippedErrors, updateWhy := s.handleReqResp(br, req, resp)
 
 	deleteReqUsedOffset := func(topic string, partition int32) {
 		t := req.usedOffsets[topic]
@@ -1212,12 +1216,11 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 		s.sem = make(chan struct{})
 		s.hookBuffered(&fetch) // buffered, not polled
 		s.cl.consumer.addSourceReadyForDraining(s)
-	} else if allErrsStripped {
-		// If we stripped all errors from the response, we are likely
-		// fetching from topics that were deleted. We want to back off
-		// a bit rather than spin-loop immediately re-requesting
-		// deleted topics.
-		backoff("empty fetch response due to all partitions having retryable errors")
+	} else if hadStrippedErrors {
+		// Even one retryable partition error can make the broker complete
+		// a fetch immediately. Empty healthy partitions must not prevent
+		// backoff and turn a partial failure into a busy retry loop.
+		backoff("empty fetch response with internally retried partition errors")
 	}
 	return fetched
 }
@@ -1231,7 +1234,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 	f Fetch,
 	reloadOffsets listOrEpochLoads,
 	preferreds cursorPreferreds,
-	allErrsStripped bool,
+	hadStrippedErrors bool,
 	updateWhy multiUpdateWhy,
 ) {
 	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
@@ -1356,7 +1359,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			// offset, so the next fetch re-requests immediately and
 			// the loop runs hot at round-trip pace. Strip the
 			// partition: if the whole response is such non-progress,
-			// the allErrsStripped backoff below paces us like any
+			// the stripped-error backoff below paces us like any
 			// other all-stripped response. Legitimate empties are
 			// excluded: a caught-up partition has no batch bytes,
 			// control/aborted records advance the offset even when
@@ -1572,7 +1575,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		s.cl.cfg.logger.Log(LogLevelDebug, "fetch stripped partitions", "why", debugWhyStripped.reason(""))
 	}
 
-	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateWhy
+	return f, reloadOffsets, preferreds, numErrsStripped > 0, updateWhy
 }
 
 func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchResponseTopicPartition, decompressor Decompressor, hooks hooks) (fp FetchPartition) {

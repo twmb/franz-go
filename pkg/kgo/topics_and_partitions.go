@@ -848,6 +848,9 @@ func (k *kip951move) maybeAddFetchPartition(resp *kmsg.FetchResponse, p *kmsg.Fe
 	if p.CurrentLeader.LeaderEpoch <= c.leaderEpoch { // as in maybeAddProducePartition
 		return false
 	}
+	if !c.leaderMovePending.CompareAndSwap(false, true) {
+		return true // the pending move already handles this retryable error
+	}
 	if len(k.brokers) == 0 {
 		for _, rb := range resp.Brokers {
 			b := BrokerMetadata{
@@ -1008,7 +1011,14 @@ func (k *kip951move) maybeBeginMove(cl *Client) {
 	}
 	// We want to do the move independent of whatever is calling us, BUT we
 	// want to ensure it is not concurrent with a metadata request.
-	go cl.blockingMetadataFn(func() { k.doMove(cl) })
+	go func() {
+		defer func() {
+			for c := range k.cursors {
+				c.leaderMovePending.Store(false)
+			}
+		}()
+		cl.blockingMetadataFn(func() { k.doMove(cl) })
+	}()
 }
 
 func (k *kip951move) doMove(cl *Client) {
