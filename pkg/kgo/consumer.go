@@ -1588,8 +1588,13 @@ type offsetLoadMap map[string]map[int32]offsetLoad
 type offsetLoad struct {
 	replica           int32 // -1 means leader
 	lastConsumedMilli int64 // for handling OffsetOutOfRange
+	failures          int   // consecutive failed epoch loads
 	Offset
 }
+
+// A failed epoch load blocks its partition until a retry succeeds, so every
+// this many consecutive failures the error is logged and returned in a fetch.
+const notifyEpochLoadFailuresEvery = 10
 
 func (o offsetLoad) MarshalJSON() ([]byte, error) {
 	if o.replica == -1 {
@@ -2324,9 +2329,24 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			followUps.addLoad(load.topic, load.partition, loadTypeList, load.request)
 
 		default: // from ErrorCode in a response, or broker request err, or request is canceled as our session is ending
-			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err) && !isContextErr(load.err) && s.c.cl.ctx.Err() == nil { // non-retryable response error; signal such in a response
+			req := load.request
+			if loaded.loadType == loadTypeEpoch && !isContextErr(load.err) {
+				req.failures++
+			}
+			reloads.addLoad(load.topic, load.partition, loaded.loadType, req)
+			switch {
+			case isContextErr(load.err) || s.c.cl.ctx.Err() != nil:
+			case !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err): // non-retryable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, fmt.Sprintf("notification of non-retryable error from %s request", loaded.loadType))
+			case req.failures > 0 && req.failures%notifyEpochLoadFailuresEvery == 0:
+				s.c.cl.cfg.logger.Log(LogLevelWarn, "epoch load keeps failing, still retrying; the partition is not consumed until it succeeds",
+					"type", loaded.loadType,
+					"topic", load.topic,
+					"partition", load.partition,
+					"failures", req.failures,
+					"err", load.err,
+				)
+				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, fmt.Sprintf("notification of %d failed epoch requests", req.failures))
 			}
 
 			if debug {
