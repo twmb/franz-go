@@ -3432,6 +3432,8 @@ func (g *groupConsumer) commitOffsets(ctx context.Context, tc toCommit) error {
 // waits for that commit to complete. The commit is canceled only if the
 // passed context is canceled. This function will not return until the commit
 // is done and the onDone callback is complete.
+// If the context expires while waiting for an earlier commit, this commit is
+// not issued and the earlier commit is left to finish normally.
 //
 // The purpose of this function is for use in OnPartitionsRevoked or committing
 // before leaving a group, because you do not want to have a commit issued in
@@ -3505,6 +3507,36 @@ func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
 	}
 }
 
+// waitContextLock lets a caller stop waiting for a lock. If cancellation wins,
+// the waiter releases the lock when it eventually acquires it.
+func waitContextLock(ctx context.Context, tryLock func() bool, lock, unlock func()) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if tryLock() {
+		return nil
+	}
+	locked := make(chan struct{})
+	go func() {
+		lock()
+		select {
+		case locked <- struct{}{}:
+		case <-ctx.Done():
+			unlock()
+		}
+	}()
+	select {
+	case <-locked:
+		if err := ctx.Err(); err != nil {
+			unlock()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (g *groupConsumer) commitOffsetsSync(
 	ctx context.Context,
 	tc toCommit,
@@ -3526,7 +3558,14 @@ func (g *groupConsumer) commitOffsetsSync(
 		return
 	}
 
-	g.syncCommitMu.Lock() // block all other concurrent commits until our OnDone is done.
+	// Block all other concurrent commits until our onDone is done, but allow
+	// this caller to stop waiting without canceling an earlier commit.
+	if err := waitContextLock(ctx, g.syncCommitMu.TryLock, g.syncCommitMu.Lock, g.syncCommitMu.Unlock); err != nil {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		close(done)
+		return
+	}
 	unblockCommits := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		g.noCommitDuringJoinAndSync.RUnlock()
 		defer close(done)
@@ -3570,7 +3609,9 @@ func (g *groupConsumer) commitOffsetsSync(
 // Note that this function ensures absolute ordering of commit requests by
 // waiting for any prior in-flight commit to complete before issuing a new
 // one. Prior commits are never canceled, so each onDone receives its
-// commit's real result. This means, for absolute control, you can
+// commit's real result. If this commit's context expires while it is still
+// waiting, onDone receives the context error without issuing the request.
+// This means, for absolute control, you can
 // use this function to periodically commit async and then issue a final sync
 // commit before quitting (this is the behavior of autocommiting and using
 // the default revoke). This differs from the Java async commit, which does
@@ -3616,7 +3657,11 @@ func (cl *Client) CommitOffsets(
 		return
 	}
 
-	g.syncCommitMu.RLock() // block sync commit, but allow other concurrent Commit to cancel us
+	if err := waitContextLock(ctx, g.syncCommitMu.TryRLock, g.syncCommitMu.RLock, g.syncCommitMu.RUnlock); err != nil {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		return
+	}
 	unblockJoinSync := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		g.noCommitDuringJoinAndSync.RUnlock()
 		defer g.syncCommitMu.RUnlock()
@@ -3774,8 +3819,21 @@ func (g *groupConsumer) commit(
 			case <-priorDone:
 			default:
 				g.cfg.logger.Log(LogLevelDebug, "waiting for prior commit to finish before issuing another", "group", g.cfg.group)
-				<-priorDone
+				select {
+				case <-priorDone:
+				case <-commitCtx.Done():
+					onDone(g.cl, req, nil, commitCtx.Err())
+					// Report cancellation now, but retain our place in the
+					// chain until the prior commit finishes. Closing
+					// commitDone now would let a later commit overtake it.
+					<-priorDone
+					return
+				}
 			}
+		}
+		if err := commitCtx.Err(); err != nil {
+			onDone(g.cl, req, nil, err)
+			return
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
