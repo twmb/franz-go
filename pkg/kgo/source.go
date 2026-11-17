@@ -47,14 +47,9 @@ type source struct {
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
 
-	// retryAt is when building a fetch request stops skipping cursors
-	// whose partition errored. One time for all of them makes the
-	// errored partitions rejoin in one request, rather than in a request
-	// each. retryWake calls maybeConsume at retryAt: the fetch loop stops
-	// once it builds a request with no partitions.
 	retryMu   xsync.Mutex
-	retryAt   time.Time
-	retryWake *time.Timer
+	retryAt   time.Time   // until this time, fetch requests skip cursors whose last fetch errored
+	retryWake *time.Timer // calls maybeConsume at retryAt
 
 	share sourceShare
 }
@@ -186,18 +181,15 @@ type cursor struct {
 	// partition is unassigned.
 	fatal atomic.Bool
 
-	// moving parks the cursor while a KIP-951 CurrentLeader hint for it
-	// is pending: building a fetch request skips it, so we do not refetch
-	// the old leader at round-trip pace. The fetch response that stages
-	// the move sets it, and kip951move.doMove clears it when it returns,
-	// whether or not it moved the cursor.
+	// moving disables the cursor while it is moving from a KIP-951
+	// CurrentLeader hint, preventing a spin loop.
 	moving atomic.Bool
 
 	// fetchFails counts the partition's errored fetches in a row. While
-	// it is non-zero, building a fetch request skips the cursor until the
-	// source's retryAt. Kafka answers a fetch at once when reading any
-	// partition errors, so refetching the partition right away would loop
-	// at round-trip pace even while the other partitions wait for data.
+	// it is non-zero, fetch requests skip the cursor until the source's
+	// retryAt. Kafka answers a fetch immediately when reading any
+	// partition errors, so refetching the partition without a wait would
+	// spin loop.
 	fetchFails atomic.Int32
 
 	topicPartitionData // updated in metadata when session is stopped
@@ -267,7 +259,6 @@ func (c *cursor) unset() {
 	c.useState.Store(false)
 	c.fatal.Store(false)
 	c.moving.Store(false)
-	c.fetchFails.Store(0)
 	c.setOffset(cursorOffset{
 		offset:            -1,
 		lastConsumedEpoch: -1,
@@ -1153,8 +1144,8 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	reloadOffsets.each(deleteReqUsedOffset)
 
 	// A moved or reloading cursor left usedOffsets just above and is not
-	// counted: a reload paces itself, and a moved cursor is already on its
-	// new source, where we must not modify it.
+	// counted: a reload retries on its own timer, and a moved cursor is
+	// already on its new source, where we must not modify it.
 	var fails int32
 	for _, c := range errored {
 		if _, ok := req.usedOffsets[c.topic][c.partition]; ok {
@@ -1412,12 +1403,12 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			// containing the fetch offset"). Nothing buffers, no
 			// error is set, and the cursor re-enables at the same
 			// offset, so the next fetch re-requests immediately and
-			// the loop runs hot at round-trip pace. We strip the
-			// partition and back it off as if it errored. Legitimate
-			// empties are excluded: a caught-up partition has no
-			// batch bytes, control/aborted records advance the
-			// offset even when not kept, and a compacted empty batch
-			// advances via its preserved last offset.
+			// the loop spins. We strip the partition and back it off
+			// as if it errored. Legitimate empties are excluded: a
+			// caught-up partition has no batch bytes, control/aborted
+			// records advance the offset even when not kept, and a
+			// compacted empty batch advances via its preserved last
+			// offset.
 			if fp.Err == nil && len(fp.Records) == 0 && partOffset.offset == priorOffset && len(rp.RecordBatches) > 0 {
 				strip(topic, partition, errFetchNoProgress)
 				errored = append(errored, c)

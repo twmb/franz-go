@@ -1380,8 +1380,11 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 				select {
 				case <-priorDone:
 				case <-ctx.Done():
-					// We never send ours, and the commit after
-					// ours still waits for the prior one.
+					// Our context is done, so we fail this commit
+					// without issuing it. We still wait for the
+					// prior commit before returning: returning
+					// closes commitDone, which lets the next commit
+					// be issued.
 					onDone(req, nil, ctx.Err())
 					<-priorDone
 					return

@@ -491,8 +491,10 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 		// g.mu. We store nil before unlocking: a SetOffsets that ran
 		// between our unlock and a later store would add a partition we
 		// no longer own to the map we just cleared.
+		if len(g.nowAssigned.read()) > 0 {
+			g.revokes.Add(1)
+		}
 		g.nowAssigned.store(nil)
-		g.revokes.Add(1)
 		g.uncommitted = nil
 		g.fetching = nil
 		g.mu.Unlock()
@@ -552,8 +554,10 @@ func (g *groupConsumer) abandonAssignment(why string) {
 	g.mu.Lock()     // before allowing poll to touch uncommitted, lock the group
 	g.c.mu.Unlock() // now part of poll can continue
 	// We store nil before unlocking, as in manageFailWait.
+	if len(g.nowAssigned.read()) > 0 {
+		g.revokes.Add(1)
+	}
 	g.nowAssigned.store(nil)
-	g.revokes.Add(1)
 	g.uncommitted = nil
 	g.fetching = nil
 	g.mu.Unlock()
@@ -3817,8 +3821,11 @@ func (g *groupConsumer) commit(
 				select {
 				case <-priorDone:
 				case <-ctx.Done():
-					// We never send ours, and the commit after
-					// ours still waits for the prior one.
+					// Our context is done, so we fail this commit
+					// without issuing it. We still wait for the
+					// prior commit before returning: returning
+					// closes commitDone, which lets the next commit
+					// be issued.
 					req.Topics = append(req.Topics, refused...)
 					onDone(g.cl, req, nil, ctx.Err())
 					<-priorDone
@@ -3956,10 +3963,11 @@ func (g *groupConsumer) commit(
 					// and back to us, so its offset can be from the
 					// earlier ownership, and resending it under our new
 					// epoch could rewind the other member's commit. We
-					// return the STALE instead; Kafka 4.3+ also rejects
-					// such a commit at its original epoch (KIP-1251).
+					// return STALE_MEMBER_EPOCH instead; Kafka 4.3+ also
+					// rejects such a commit at its original epoch
+					// (KIP-1251).
 					if g.revokes.Load() != revokesAtBuild {
-						g.cfg.logger.Log(LogLevelInfo, "offset commit got stale member epoch after a partition left our assignment, not retrying",
+						g.cfg.logger.Log(LogLevelInfo, "offset commit received STALE_MEMBER_EPOCH after a partition left our assignment, not retrying",
 							"group", g.cfg.group,
 							"old_epoch", req.Generation,
 							"new_epoch", newGen,

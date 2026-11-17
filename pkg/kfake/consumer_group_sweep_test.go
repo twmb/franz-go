@@ -45,11 +45,11 @@ import (
 // already false, so an autocommit tick snapshotted head=150 and - commits
 // being strictly ordered behind the in-flight 200 - rewound the broker's
 // committed offset to 150 after the 200 landed. (A later autocommit tick
-// re-commits head=200, so the rewind is a WINDOW, not the final state: the
-// exposure is a rebalance, fatal group error, or crash inside it. The test
-// therefore asserts on the sequence of commits the broker received, which
-// must be monotonic.) Commits waiting behind the held 200 must also return
-// when their own contexts end (#1546).
+// re-commits head=200, so the rewind lasts only until that tick: the
+// exposure is a rebalance, fatal group error, or crash before the tick. The
+// test therefore asserts on the sequence of commits the broker received,
+// which must be monotonic.) Commits waiting behind the in-flight 200 must
+// also return when their own contexts end (#1546).
 func TestAuditOverlappingCommits(t *testing.T) {
 	t.Parallel()
 	const (
@@ -136,7 +136,7 @@ func TestAuditOverlappingCommits(t *testing.T) {
 
 	// A commit waiting behind commit(200) returns when its own context
 	// ends and never sends: the sequence check below catches a 175 that
-	// lands after the 200.
+	// arrives after the 200.
 	shortCommit := func(what string, commit func(context.Context) error) {
 		errc := make(chan error, 1)
 		go func() {

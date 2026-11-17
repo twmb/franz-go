@@ -685,7 +685,6 @@ func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming ma
 	// With the session stopped, we can update fields on the old cursor
 	// with no concurrency issue.
 	old.cursor.source = new.cursor.source
-	old.cursor.fetchFails.Store(0) // the new leader or epoch may not fail the same way
 
 	// KIP-320: if we had consumed some messages, we need to validate the
 	// leader epoch on the new broker to see if we experienced data loss
@@ -754,20 +753,12 @@ func (tp *topicPartition) migrateShareCursorTo(cl *Client, new *topicPartition) 
 	// A new epoch on the same leader keeps the cursor where it is: removing
 	// and re-adding it would let a request built in between forget the
 	// partition from the broker's share session.
-	//
-	// We reset the error count because the new leader or epoch may not
-	// fail the same way. On a move, the reset comes after the removal so
-	// that it also clears a count the old source's in-flight fetch adds.
 	if oldSource := c.source.Load(); oldSource != sns.source {
 		if oldSource != nil {
 			oldSource.removeShareCursor(c)
 		}
 		c.source.Store(sns.source)
-		c.fetchFails.Store(0)
 		sns.source.addShareCursor(c)
-	} else {
-		c.fetchFails.Store(0)
-		sns.source.maybeShareConsume() // fetch the cursor now rather than at the old retryAt
 	}
 }
 
@@ -1021,12 +1012,6 @@ func (k *kip951move) maybeBeginMove(cl *Client) {
 }
 
 func (k *kip951move) doMove(cl *Client) {
-	// The fetch that staged each cursor's move parked the cursor, so its
-	// source's loop skipped it and may have stopped. Every return below
-	// unparks the cursor and wakes its source, which is the new leader's
-	// source if the cursor moved. For a classic cursor, we read the source
-	// before unparking: once unparked, a fetch can move the cursor to a
-	// preferred replica (see allowUsable).
 	defer func() {
 		for c := range k.cursors {
 			s := c.source

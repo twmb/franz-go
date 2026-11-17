@@ -305,13 +305,13 @@ func TestEpochBumpKeepsCursor(t *testing.T) {
 }
 
 // TestAuditFetchErrorBackoff fails every classic Fetch, or one partition in
-// it, and asserts the client backs off between attempts rather than looping
-// at round-trip pace (in-process, hundreds to thousands of requests in the
-// window). An unexpected top-level code routes to the session arms' `default`,
-// which has no bounded heal. A non-retryable error on every partition is
-// handed to the user, and Kafka answers such a fetch at once (as when the
-// client may read none of the partitions), so the next poll fetched again
-// immediately. Kafka also answers at once when reading one partition errors,
+// it, and asserts the client backs off between attempts rather than spin
+// looping (in-process, hundreds to thousands of requests in two seconds). An
+// unexpected top-level code routes to the session arms' `default`, which has
+// no bounded heal. A non-retryable error on every partition is handed to the
+// user, and Kafka answers such a fetch immediately (as when the client may
+// read none of the partitions), so the next poll fetched again immediately.
+// Kafka also answers immediately when reading one partition errors,
 // as with KAFKA_STORAGE_ERROR from an offline log dir, so a fetch that also
 // asks for an idle healthy partition looped as well. Sibling of the share
 // path's TestShareFetchErrorBackoff.
@@ -356,7 +356,7 @@ func TestAuditFetchErrorBackoff(t *testing.T) {
 				}
 			}()
 
-			// Wait for the first Fetch, then measure a 2s window.
+			// Wait for the first Fetch, then count attempts for 2s.
 			if err := attempts.Wait(ctx, 1); err != nil {
 				t.Fatal("no Fetch arrived")
 			}
@@ -364,8 +364,8 @@ func TestAuditFetchErrorBackoff(t *testing.T) {
 			time.Sleep(2 * time.Second)
 			n := attempts.Hits() - first
 
-			// retryBackoff doubles from 250ms with jitter, so a 2s window
-			// sees ~4-6 attempts. The healthy partition in the
+			// retryBackoff doubles from 250ms with jitter, so we see
+			// ~4-6 attempts in 2s. The healthy partition in the
 			// one-partition row adds about one fetch per MaxWait. Allow 12
 			// for CI noise.
 			if n > 12 {

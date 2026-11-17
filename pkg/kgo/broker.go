@@ -166,8 +166,8 @@ type broker struct {
 	versions atomic.Value // *brokerVersions
 
 	// saslIdx is the index into cfg.sasls of the mechanism each
-	// connection handshakes with. A broker that rejects the mechanism
-	// moves saslIdx to one the broker lists.
+	// connection handshakes with. If the broker rejects that mechanism,
+	// we set saslIdx to a mechanism the broker lists.
 	saslIdx atomic.Int32
 
 	// The cxn fields each manage a single tcp connection to one broker.
@@ -1366,12 +1366,12 @@ func (cxn *brokerCxn) sasl() error {
 		err = kerr.ErrorForCode(resp.ErrorCode)
 		if err != nil {
 			if err == kerr.UnsupportedSaslMechanism {
-				for i, ours := range sasls {
-					if i != idx && slices.Contains(resp.SupportedMechanisms, ours.Name()) {
+				for i, next := range sasls {
+					if i != idx && slices.Contains(resp.SupportedMechanisms, next.Name()) {
 						cxn.cl.cfg.logger.Log(LogLevelInfo, "broker does not support our SASL mechanism, retrying with another on a new connection",
 							"broker", logID(cxn.b.meta.NodeID),
 							"rejected", mechanism.Name(),
-							"next", ours.Name(),
+							"next", next.Name(),
 						)
 						cxn.b.saslIdx.Store(int32(i))
 						return errSASLFallback

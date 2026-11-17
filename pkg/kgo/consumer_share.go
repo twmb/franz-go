@@ -119,10 +119,7 @@ type (
 		// was recreated and we surface it forever (stall loudly).
 		unknownIDFails atomic.Int32
 
-		// fetchFails is cursor.fetchFails for a share cursor: Kafka
-		// answers a share fetch at once when reading any partition
-		// errors.
-		fetchFails atomic.Int32
+		fetchFails atomic.Int32 // as cursor.fetchFails
 
 		cursorsIdx int
 
@@ -1337,7 +1334,6 @@ func (sc *shareConsumer) assignPartitions(assignments map[string][]int32) {
 			if cursor.assigned.Swap(true) {
 				continue // already active from a prior pass
 			}
-			cursor.fetchFails.Store(0) // errors from a prior assignment are stale
 			sourcesToWake[cursor.source.Load()] = struct{}{}
 		}
 	}
@@ -1364,7 +1360,7 @@ func (sc *shareConsumer) applyMoves(s *source, k kip951move) {
 	// once the migration has run. See shareCursor.moving.
 	//
 	// A cursor that moved to another source while we handled the response
-	// is not ours to park or unpark, so we drop its staged move. A move
+	// is no longer on this source, so we drop its staged move. A move
 	// removes the cursor under s.share.mu.
 	s.share.mu.Lock()
 	for c := range k.shareCursors {
@@ -2498,9 +2494,9 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	if res.discardErr != nil {
 		// Top-level errors are not necessarily transient (e.g. group
 		// auth revoked mid-run answers GROUP_AUTHORIZATION_FAILED
-		// top-level on every fetch); without a backoff this loops at
-		// round-trip pace. Transport errors already back off; treat
-		// top-level errors the same.
+		// top-level on every fetch); without a backoff this spin
+		// loops. Transport errors already back off; treat top-level
+		// errors the same.
 		sc.enqueueAckErrors(piggybackAcks, res.discardErr, nAcks)
 		backoff(res.discardErr)
 		return fetched, false
@@ -2511,7 +2507,8 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	// A leader move can take a cursor to another source while our request
 	// is in flight, and our response must not change a cursor we no
 	// longer own. The move removes the cursor under our share.mu, so we
-	// change counts under share.mu and only for cursors still ours.
+	// change counts under share.mu and only for cursors still on this
+	// source.
 	var fails int32
 	s.share.mu.Lock()
 	for _, c := range res.errored {
@@ -2613,9 +2610,12 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 
 	// cursorMap includes both usable and piggyback-only cursors so
 	// ack-only partitions in the response are not treated as unknown.
-	// Kafka answers an ack-only partition with no error and without
-	// reading it, so only a usable cursor's error counts change.
 	cursorMap := make(map[tidp]*shareCursor, len(usable)+len(piggybackAcks))
+	// fetching is the cursors we asked to fetch. A backed-off cursor can
+	// be in the request for its acks only, and Kafka answers it with no
+	// error and without reading it. Counting that answer as a successful
+	// fetch would end the cursor's backoff, so only a cursor in fetching
+	// changes its fetchFails.
 	fetching := make(map[*shareCursor]struct{}, len(usable))
 	for _, c := range usable {
 		cursorMap[tidp{c.topicID, c.partition}] = c
