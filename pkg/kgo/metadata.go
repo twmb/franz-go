@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -286,7 +287,7 @@ loop:
 			// If err is non-nil, the metadata request failed
 			// itself and already retried 3x; we do not loop more.
 			//
-			// If err is nil, the a topic or partition had a load
+			// If err is nil, a topic or partition had a load
 			// error and is perhaps still being created. We retry a
 			// few more times to give Kafka a chance to figure
 			// things out. By default this will put us at 2s of
@@ -398,16 +399,17 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// If the user has auto topic creation while producing AND is consuming
 	// via regex, we need to send a separate metadata request with unknown
 	// produce topics before our standard metadata request. The standard
-	// metadata request is send with a nil Topics field (requesting all),
+	// metadata request is sent with a nil Topics field (requesting all),
 	// which prevents us from ever creating the topics.
 	var unknownCreateResp map[string]*metadataTopic
 	if all && cl.cfg.allowAutoTopicCreation {
+		// We must not issue the request with unknownTopicsMu locked:
+		// on failure, bumpMetadataFailForTopics locks it.
 		cl.producer.unknownTopicsMu.Lock()
-		if len(cl.producer.unknownTopics) > 0 {
-			unknownTopics := make([]string, 0, len(cl.producer.unknownTopics))
-			for unknown := range cl.producer.unknownTopics {
-				unknownTopics = append(unknownTopics, unknown)
-			}
+		unknownTopics := slices.Collect(maps.Keys(cl.producer.unknownTopics))
+		cl.producer.unknownTopicsMu.Unlock()
+
+		if len(unknownTopics) > 0 {
 			var err error
 			unknownCreateResp, err = cl.fetchTopicMetadata(false, unknownTopics, false) // prune: no; unknown produce topics only, the fetch below covers the rest
 			if err != nil {
@@ -421,7 +423,6 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 				)
 			}
 		}
-		cl.producer.unknownTopicsMu.Unlock()
 	}
 
 	latest, err := cl.fetchTopicMetadata(all, reqTopics, true) // prune: yes; everything we track, so anything else is unwanted

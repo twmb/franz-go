@@ -483,6 +483,54 @@ func TestIssue906(t *testing.T) {
 	}
 }
 
+// With AllowAutoTopicCreation and a regex consumer, the metadata loop first
+// sends a request naming the unknown produce topics, so the broker creates
+// them. If that request fails, the loop must keep running and the produce
+// must still succeed. One failure is enough: the request is the first on its
+// connection, and kgo does not retry an EOF on a connection's first read.
+func TestAutoCreateRegexMetadataFailure(t *testing.T) {
+	t.Parallel()
+	const testTopic = "bar"
+
+	c := newCluster(t, NumBrokers(1), AllowAutoTopicCreation())
+
+	c.ControlKey(int16(kmsg.Metadata), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		req := kreq.(*kmsg.MetadataRequest)
+		if len(req.Topics) != 1 || req.Topics[0].Topic == nil || *req.Topics[0].Topic != testTopic {
+			return nil, nil, false
+		}
+		c.DropControl()
+		return nil, errors.New("closing the connection"), true
+	})
+
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics("^foo.*"),
+		kgo.ConsumeRegex(),
+		kgo.AllowAutoTopicCreation(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// If the metadata loop deadlocks, Produce and Close never return, so
+	// we produce in a goroutine and close only on success.
+	produced := make(chan error, 1)
+	go func() {
+		produced <- client.ProduceSync(context.Background(), &kgo.Record{Topic: testTopic, Value: []byte("v")}).FirstErr()
+	}()
+	select {
+	case err := <-produced:
+		if err != nil {
+			t.Fatalf("unable to produce: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("produce hung: the metadata loop is deadlocked")
+	}
+	client.Close()
+}
+
 func TestIssueTimestampInclusivity(t *testing.T) {
 	t.Parallel()
 	const (
