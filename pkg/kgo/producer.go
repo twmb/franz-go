@@ -1471,12 +1471,17 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// linger because the producer's flushing atomic int32 is nonzero. We
 	// must wake anything that could be lingering up, after which all sinks
 	// will loop draining.
+	//
+	// We lock unknownTopicsMu to also wake a new topic's records, which
+	// storePartitionsUpdate buffers before it stores the topic's partitions.
 	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
+		p.unknownTopicsMu.Lock()
 		for _, parts := range p.topics.load() {
 			for _, part := range parts.load().partitions {
 				part.records.unlingerAndManuallyDrain()
 			}
 		}
+		p.unknownTopicsMu.Unlock()
 	}
 
 	quit := false
