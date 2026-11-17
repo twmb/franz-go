@@ -817,14 +817,10 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	// After the flush, no records are being produced to, and we can set
-	// addedToTxn to false outside of any mutex.
-	for _, parts := range cl.producer.topics.load() {
-		for _, part := range parts.load().partitions {
-			if part.records.addedToTxn.Swap(false) {
-				addedSwapped = append(addedSwapped, part.records)
-				anyAdded = true
-			}
-		}
+	// addedToTxn to false.
+	addedSwapped = cl.producer.takeAddedToTxn()
+	if len(addedSwapped) > 0 {
+		anyAdded = true
 	}
 
 	// If no partition was added to a transaction, then we have nothing to commit.
@@ -1020,6 +1016,24 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	return err
+}
+
+// Clears addedToTxn on every partition and returns the buffers it was set on.
+// We lock unknownTopicsMu because a new topic's first records can be produced
+// before storePartitionsUpdate stores the topic's partitions.
+func (p *producer) takeAddedToTxn() []*recBuf {
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
+	var added []*recBuf
+	for _, parts := range p.topics.load() {
+		for _, part := range parts.load().partitions {
+			if part.records.addedToTxn.Swap(false) {
+				added = append(added, part.records)
+			}
+		}
+	}
+	return added
 }
 
 // This returns if it is necessary to recover the producer ID (it has an

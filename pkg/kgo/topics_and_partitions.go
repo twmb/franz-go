@@ -385,7 +385,9 @@ func (t *topicsPartitions) purgeTopics(topics []string) {
 // Updates the topic partitions data atomic value.
 //
 // If this is the first time seeing partitions, we do processing of unknown
-// partitions that may be buffered for producing.
+// partitions that may be buffered for producing. We buffer those records
+// before we store the partitions, so anything that must see the partition of
+// every buffered record must read the topics with unknownTopicsMu locked.
 func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
 	// If the topic already had partitions, then there would be no
 	// unknown topic waiting and we do not need to notify anything.
