@@ -1543,6 +1543,18 @@ func (cl *Client) bumpRepeatedLoadErr(err error) {
 func (cl *Client) failBufferedRecords(err error) {
 	p := &cl.producer
 
+	// We fail the partitions' records under unknownTopicsMu.
+	// storePartitionsUpdate moves a topic's first records from
+	// unknownTopics into partitions it stores only afterwards, both under
+	// the mu. If we failed the stored partitions before taking the mu, a
+	// store could land in between: we would miss the new partitions, then
+	// find the topic gone from unknownTopics, and its records would
+	// survive the abort and be produced later.
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
 	for _, partitions := range p.topics.load() {
 		for _, partition := range partitions.load().partitions {
 			recBuf := partition.records
@@ -1551,11 +1563,6 @@ func (cl *Client) failBufferedRecords(err error) {
 			recBuf.mu.Unlock()
 		}
 	}
-
-	p.topicsMu.Lock()
-	defer p.topicsMu.Unlock()
-	p.unknownTopicsMu.Lock()
-	defer p.unknownTopicsMu.Unlock()
 
 	toStore := p.topics.clone()
 	defer p.topics.storeData(toStore)

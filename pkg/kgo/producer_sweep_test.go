@@ -589,3 +589,82 @@ func TestAuditFlushWokenByBlockedProduceCancel(t *testing.T) {
 		<-produceDone
 	}
 }
+
+// failBufferedRecords fails the records in every stored partition, then
+// takes unknownTopicsMu and fails the records still waiting in unknownTopics.
+// storePartitionsUpdate moves a topic's first records from unknownTopics into
+// partitions it stores only afterwards. If it runs between the two steps,
+// the records are in neither place the abort looks: they escape it.
+//
+// The test freezes storePartitionsUpdate inside its window (doPartition
+// blocks on a test-held partsMu) and runs UnsafeAbortBufferedRecords. The
+// record must fail with ErrAborting.
+func TestUnsafeAbortFailsRecordsBeingPartitioned(t *testing.T) {
+	t.Parallel()
+
+	cl, err := NewClient(
+		SeedBrokers("127.0.0.1:1"), // metadata never loads; failures only tick retry counters
+		ManualFlushing(),           // the partitioned record stays buffered
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	p := &cl.producer
+
+	promised := make(chan error, 1)
+	cl.Produce(context.Background(), &Record{Topic: "T", Value: []byte("v")}, func(_ *Record, err error) { promised <- err })
+	p.unknownTopicsMu.Lock()
+	unknown := p.unknownTopics["T"]
+	p.unknownTopicsMu.Unlock()
+	if unknown == nil {
+		t.Fatal("first produce to T did not buffer in unknownTopics")
+	}
+
+	tp := metadataPartition{
+		topic:  "T",
+		leader: 1,
+		sns:    sinkAndSource{sink: cl.newSink(1)},
+	}.newPartition(cl, partitionKindProduce)
+	r := tp.records
+	r.sink.addRecBuf(r)
+	l := p.topics.load()["T"]
+	lv := &topicPartitionsData{
+		topic:              "T",
+		partitions:         []*topicPartition{tp},
+		writablePartitions: []*topicPartition{tp},
+	}
+
+	l.partsMu.Lock()
+	storeDone := make(chan struct{})
+	go func() {
+		defer close(storeDone)
+		cl.storePartitionsUpdate("T", l, lv, false)
+	}()
+	for range unknown.wait { // closed just before partitioning; see TestTakeAddedToTxnWaitsForFirstPartitions
+	}
+
+	abortDone := make(chan struct{})
+	go func() {
+		defer close(abortDone)
+		cl.UnsafeAbortBufferedRecords()
+	}()
+	time.Sleep(100 * time.Millisecond) // let the abort scan the stored partitions and park on unknownTopicsMu
+
+	l.partsMu.Unlock()
+	<-storeDone
+	<-abortDone
+
+	select {
+	case err := <-promised:
+		if !errors.Is(err, ErrAborting) {
+			t.Fatalf("record failed with %v, want ErrAborting", err)
+		}
+	case <-time.After(10 * time.Second):
+		r.mu.Lock()
+		n := len(r.batches)
+		r.mu.Unlock()
+		t.Fatalf("record escaped UnsafeAbortBufferedRecords: still buffered in %d batch(es), BufferedProduceRecords %d", n, cl.BufferedProduceRecords())
+	}
+}
