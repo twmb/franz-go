@@ -1121,6 +1121,11 @@ func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error)
 // 2.5+, it is safe to call this if the producer ID can be reset (KIP-360),
 // in EndTransaction.
 func (cl *Client) resetAllProducerSequences() {
+	// We lock unknownTopicsMu to also reset a new topic's partitions:
+	// storePartitionsUpdate stores them after it buffers records that a
+	// sink can produce immediately.
+	cl.producer.unknownTopicsMu.Lock()
+	defer cl.producer.unknownTopicsMu.Unlock()
 	for _, tp := range cl.producer.topics.load() {
 		for _, p := range tp.load().partitions {
 			p.records.mu.Lock()

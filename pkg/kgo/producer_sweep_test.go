@@ -426,6 +426,15 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 			}
 			return nil
 		}},
+		{"resetAllProducerSequences", func(cl *Client, r *recBuf) error {
+			cl.resetAllProducerSequences()
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if !r.needSeqReset {
+				return errors.New("the new partition's sequences were not reset")
+			}
+			return nil
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
