@@ -402,12 +402,16 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	// which prevents us from ever creating the topics.
 	var unknownCreateResp map[string]*metadataTopic
 	if all && cl.cfg.allowAutoTopicCreation {
+		// We only hold the mu to copy the topics: on a failed request,
+		// bumpMetadataFailForTopics locks it again.
 		cl.producer.unknownTopicsMu.Lock()
-		if len(cl.producer.unknownTopics) > 0 {
-			unknownTopics := make([]string, 0, len(cl.producer.unknownTopics))
-			for unknown := range cl.producer.unknownTopics {
-				unknownTopics = append(unknownTopics, unknown)
-			}
+		var unknownTopics []string
+		for unknown := range cl.producer.unknownTopics {
+			unknownTopics = append(unknownTopics, unknown)
+		}
+		cl.producer.unknownTopicsMu.Unlock()
+
+		if len(unknownTopics) > 0 {
 			var err error
 			unknownCreateResp, err = cl.fetchTopicMetadata(false, unknownTopics, false) // prune: no; unknown produce topics only, the fetch below covers the rest
 			if err != nil {
@@ -421,7 +425,6 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 				)
 			}
 		}
-		cl.producer.unknownTopicsMu.Unlock()
 	}
 
 	latest, err := cl.fetchTopicMetadata(all, reqTopics, true) // prune: yes; everything we track, so anything else is unwanted
