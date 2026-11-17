@@ -417,6 +417,15 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 			}
 			return nil
 		}},
+		{"failBufferedRecords", func(cl *Client, r *recBuf) error {
+			cl.UnsafeAbortBufferedRecords()
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if len(r.batches) != 0 {
+				return errors.New("the record is still buffered after the abort")
+			}
+			return nil
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
