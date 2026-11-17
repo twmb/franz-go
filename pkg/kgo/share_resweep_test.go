@@ -91,7 +91,7 @@ func TestAuditShareLeaveWaitsForInflightMigration(t *testing.T) {
 	// must be non-nil.
 	mc := &shareCursor{topic: "t", topicID: [16]byte{9}, partition: 0}
 	mc.source.Store(cl.newSource(1))
-	sc.applyMoves(kip951move{shareCursors: map[*shareCursor]topicPartitionData{mc: {leader: 1, leaderEpoch: 1}}})
+	sc.applyMoves(mc.source.Load(), kip951move{shareCursors: map[*shareCursor]topicPartitionData{mc: {leader: 1, leaderEpoch: 1}}})
 
 	// With the fix the goroutine incWorkers, then blocks on its
 	// blockingMetadataFn send (queued behind us), so sc.workers stays
@@ -213,6 +213,12 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 		t.Fatal("baseline: assigned cursor should be in the share fetch request")
 	}
 
+	// A move staged by another source's response leaves the cursor alone.
+	sc.applyMoves(cl.newSource(1), kip951move{shareCursors: map[*shareCursor]topicPartitionData{c: {leader: 1, leaderEpoch: 1}}})
+	if c.moving.Load() {
+		t.Fatal("a move staged by another source's response parked the cursor")
+	}
+
 	// Park the metadata loop so applyMovesBlocking's clear cannot run yet,
 	// letting us observe the moving=true window deterministically.
 	occupied := make(chan struct{})
@@ -245,7 +251,7 @@ func TestAuditShareMoveCollapseMarksCursorUnusable(t *testing.T) {
 	cl.reinitAnyBrokerOrd()
 	cl.brokersMu.Unlock()
 	rack := "hint-rack"
-	sc.applyMoves(kip951move{
+	sc.applyMoves(s0, kip951move{
 		shareCursors: map[*shareCursor]topicPartitionData{c: {leader: 1, leaderEpoch: 1}},
 		brokers:      []BrokerMetadata{{NodeID: 1, Host: "127.0.0.1", Port: deadPort, Rack: &rack}},
 	})

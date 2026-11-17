@@ -2848,7 +2848,7 @@ type sharder interface {
 	// response and potentially perform cleanup, and potentially returns an
 	// error signifying to retry. See onShardRespErr below for more
 	// details.
-	onResp(kmsg.Request, kmsg.Response) error
+	onResp(context.Context, kmsg.Request, kmsg.Response) error
 
 	// merge is a function that can be used to merge sharded responses into
 	// one response. This is used by the client.Request method.
@@ -3021,7 +3021,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				resp, err := br.waitResp(ctx, myIssue.req)
 				var errIsFromResp bool
 				if err == nil {
-					err = sharder.onResp(myIssue.req, resp) // perform some potential cleanup, and potentially receive an error to retry
+					err = sharder.onResp(ctx, myIssue.req, resp) // perform some potential cleanup, and potentially receive an error to retry
 					if _, ok := errors.AsType[*kerr.Error](err); ok {
 						errIsFromResp = true
 					}
@@ -3598,7 +3598,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ er
 	})...), true, nil // this is reshardable
 }
 
-func (cl *listOffsetsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *listOffsetsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	var (
 		resp         = kresp.(*kmsg.ListOffsetsResponse)
 		del          []string
@@ -3889,7 +3889,7 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
+func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kresp kmsg.Response) error {
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
@@ -3921,12 +3921,17 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 
 	// If anything is unresolved, resolve both, then do the walk again.
 	if len(unresolvedIDs) > 0 {
-		cl.resolveTopicMetaByID(cl.ctx, unresolvedIDs)
+		cl.resolveTopicMetaByID(ctx, unresolvedIDs)
 	}
 	if len(unresolvedNames) > 0 {
-		cl.resolveTopicMeta(cl.ctx, unresolvedNames, false, 0)
+		cl.resolveTopicMeta(ctx, unresolvedNames, false, 0)
 	}
 	if len(unresolvedIDs) > 0 || len(unresolvedNames) > 0 {
+		// If the request's context ended while we resolved, we return
+		// its error rather than inject unknown topic errors below.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// Use metaCache which was just populated by the resolve
 		// calls above. If we cannot map topic ID or topic name,
 		// we inject an error - but only at v10+, where TopicID is
@@ -4080,7 +4085,7 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 	return issues, false, nil // not reshardable
 }
 
-func (*findCoordinatorSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
+func (*findCoordinatorSharder) onResp(_ context.Context, kreq kmsg.Request, kresp kmsg.Response) error {
 	req := kreq.(*kmsg.FindCoordinatorRequest)
 	resp := kresp.(*kmsg.FindCoordinatorResponse)
 
@@ -4182,7 +4187,7 @@ func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *describeGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error { // cleanup any stale groups
+func (cl *describeGroupsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error { // cleanup any stale groups
 	resp := kresp.(*kmsg.DescribeGroupsResponse)
 	var retErr error
 	for i := range resp.Groups {
@@ -4215,7 +4220,7 @@ func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ err
 	})
 }
 
-func (*listGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (*listGroupsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.ListGroupsResponse)
 	return kerr.ErrorForCode(resp.ErrorCode)
 }
@@ -4318,7 +4323,7 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request, _ 
 	})...), true, nil // this is reshardable
 }
 
-func (cl *deleteRecordsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *deleteRecordsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	var (
 		resp         = kresp.(*kmsg.DeleteRecordsResponse)
 		del          []string
@@ -4439,7 +4444,7 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	})...), true, nil // this is reshardable
 }
 
-func (cl *offsetForLeaderEpochSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *offsetForLeaderEpochSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	var (
 		resp         = kresp.(*kmsg.OffsetForLeaderEpochResponse)
 		del          []string
@@ -4628,7 +4633,7 @@ func (cl *addPartitionsToTxnSharder) shard(ctx context.Context, kreq kmsg.Reques
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *addPartitionsToTxnSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
+func (cl *addPartitionsToTxnSharder) onResp(_ context.Context, kreq kmsg.Request, kresp kmsg.Response) error {
 	req := kreq.(*kmsg.AddPartitionsToTxnRequest)
 	resp := kresp.(*kmsg.AddPartitionsToTxnResponse)
 
@@ -4832,7 +4837,7 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 	return issues, true, nil // this is reshardable
 }
 
-func (cl *writeTxnMarkersSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *writeTxnMarkersSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	var (
 		resp         = kresp.(*kmsg.WriteTxnMarkersResponse)
 		del          []string
@@ -4945,7 +4950,7 @@ func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ err
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
+func (*describeConfigsSharder) onResp(context.Context, kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
 
 func (*describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeConfigsResponse()
@@ -5008,7 +5013,7 @@ func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error)
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
+func (*alterConfigsSharder) onResp(context.Context, kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
 
 func (*alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrAlterConfigsResponse()
@@ -5140,7 +5145,9 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	return issues, true, nil // this is reshardable
 }
 
-func (*alterReplicaLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (*alterReplicaLogDirsSharder) onResp(context.Context, kmsg.Request, kmsg.Response) error {
+	return nil // topic / partitions: not retried
+}
 
 // merge does not make sense for this function, but we provide a one anyway.
 func (*alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
@@ -5242,42 +5249,23 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, 
 	})...), true, nil // this is reshardable
 }
 
-func (*describeLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / configs: not retried
+func (*describeLogDirsSharder) onResp(context.Context, kmsg.Request, kmsg.Response) error { return nil } // topic / configs: not retried
 
-// merge does not make sense for this function, but we provide one anyway.
-// We lose the error code for directories.
+// Each broker describes its own dirs, and brokers often share dir paths. We
+// keep each broker's dirs as their own entries so that one broker's sizes and
+// errors do not mix with another's. The merged response cannot say which
+// broker a dir is on; use RequestSharded for that.
 func (*describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeLogDirsResponse()
-	dirs := make(map[string]map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
-
-	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
+	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeLogDirsResponse)
 		merged.Version = resp.Version
 		merged.ThrottleMillis = resp.ThrottleMillis
-
-		for _, dir := range resp.Dirs {
-			mergeDir := dirs[dir.Dir]
-			if mergeDir == nil {
-				mergeDir = make(map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
-				dirs[dir.Dir] = mergeDir
-			}
-			for _, topic := range dir.Topics {
-				mergeDir[topic.Topic] = append(mergeDir[topic.Topic], topic.Partitions...)
-			}
+		if merged.ErrorCode == 0 {
+			merged.ErrorCode = resp.ErrorCode
 		}
+		merged.Dirs = append(merged.Dirs, resp.Dirs...)
 	})
-	for dir, topics := range dirs {
-		md := kmsg.NewDescribeLogDirsResponseDir()
-		md.Dir = dir
-		for topic, partitions := range topics {
-			mdTopic := kmsg.NewDescribeLogDirsResponseDirTopic()
-			mdTopic.Topic = topic
-			mdTopic.Partitions = partitions
-			md.Topics = append(md.Topics, mdTopic)
-		}
-		merged.Dirs = append(merged.Dirs, md)
-	}
-	return merged, firstErr
 }
 
 // handles sharding DeleteGroupsRequest
@@ -5344,7 +5332,7 @@ func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ e
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *deleteGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *deleteGroupsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.DeleteGroupsResponse)
 	var retErr error
 	for i := range resp.Groups {
@@ -5417,7 +5405,9 @@ func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Reques
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
+func (*incrementalAlterConfigsSharder) onResp(context.Context, kmsg.Request, kmsg.Response) error {
+	return nil // configs: topics not mapped, nothing retryable
+}
 
 func (*incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrIncrementalAlterConfigsResponse()
@@ -5495,7 +5485,7 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	})...), true, nil // this is reshardable
 }
 
-func (cl *describeProducersSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *describeProducersSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	var (
 		resp         = kresp.(*kmsg.DescribeProducersResponse)
 		del          []string
@@ -5605,7 +5595,7 @@ func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Requ
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *describeTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error { // cleanup any stale coordinators
+func (cl *describeTransactionsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error { // cleanup any stale coordinators
 	resp := kresp.(*kmsg.DescribeTransactionsResponse)
 	var retErr error
 	for i := range resp.TransactionStates {
@@ -5638,7 +5628,7 @@ func (cl *listTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request,
 	})
 }
 
-func (*listTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (*listTransactionsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.ListTransactionsResponse)
 	return kerr.ErrorForCode(resp.ErrorCode)
 }
@@ -5738,7 +5728,7 @@ func (cl *consumerGroupDescribeSharder) shard(ctx context.Context, kreq kmsg.Req
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *consumerGroupDescribeSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *consumerGroupDescribeSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.ConsumerGroupDescribeResponse)
 	var retErr error
 	for i := range resp.Groups {
@@ -5820,7 +5810,7 @@ func (cl *shareGroupDescribeSharder) shard(ctx context.Context, kreq kmsg.Reques
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *shareGroupDescribeSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *shareGroupDescribeSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.ShareGroupDescribeResponse)
 	var retErr error
 	for i := range resp.Groups {
@@ -5905,7 +5895,7 @@ func (cl *describeShareGroupOffsetsSharder) shard(ctx context.Context, kreq kmsg
 	return issues, true, nil // reshardable to load correct coordinators
 }
 
-func (cl *describeShareGroupOffsetsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (cl *describeShareGroupOffsetsSharder) onResp(_ context.Context, _ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.DescribeShareGroupOffsetsResponse)
 	var retErr error
 	for i := range resp.Groups {

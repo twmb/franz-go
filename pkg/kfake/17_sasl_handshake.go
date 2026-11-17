@@ -57,6 +57,7 @@ func (c *Cluster) handleSASLHandshake(creq *clientReq) (kmsg.Response, error) {
 		}
 	}
 
+	resp.SupportedMechanisms = []string{saslPlain, saslScram256, saslScram512}
 	switch req.Mechanism {
 	case saslPlain:
 		creq.cc.saslStage = saslStageAuthPlain
@@ -65,8 +66,10 @@ func (c *Cluster) handleSASLHandshake(creq *clientReq) (kmsg.Response, error) {
 	case saslScram512:
 		creq.cc.saslStage = saslStageAuthScram0_512
 	default:
+		// Kafka closes the connection after this response, so you must
+		// dial again to try another mechanism.
 		resp.ErrorCode = kerr.UnsupportedSaslMechanism.Code
-		resp.SupportedMechanisms = []string{saslPlain, saslScram256, saslScram512}
+		creq.cc.saslStage = saslStageFailed
 	}
 	return resp, nil
 }

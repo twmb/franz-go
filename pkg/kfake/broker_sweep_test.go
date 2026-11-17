@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sasl/oauth"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
@@ -405,6 +406,9 @@ func TestAuditApiVersionsDowngradeLoopTerminates(t *testing.T) {
 // must clear the connection's expiry. Before the fix the old, already-passed
 // expiry stuck around and every subsequent request on the connection re-ran
 // the full handshake+authenticate flow first.
+//
+// Before re-auth is disabled, the connection reauthenticates twice less than
+// a second apart, which the broker refuses; the request must still succeed.
 func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t,
@@ -426,6 +430,15 @@ func TestAuditSaslReauthLifetimeClearedWhenDisabled(t *testing.T) {
 	// Warm the broker connection; its session carries the 1.5s lifetime.
 	if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
 		t.Fatalf("warm request failed: %v", err)
+	}
+
+	// Each request crosses the expiry. The second reauthentication
+	// begins ~0.6s after the first, so the broker refuses it.
+	for i := range 2 {
+		time.Sleep(600 * time.Millisecond)
+		if _, err := br.Request(ctx, kmsg.NewPtrMetadataRequest()); err != nil {
+			t.Fatalf("reauth-triggering request %d failed: %v", i, err)
+		}
 	}
 
 	// Disable reauthentication broker-side.
@@ -687,6 +700,43 @@ type brokerConnects struct{ n atomic.Int32 }
 func (h *brokerConnects) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	if err == nil && meta.NodeID >= 0 {
 		h.n.Add(1)
+	}
+}
+
+// A broker closes the connection after rejecting our SASL mechanism. The
+// client must dial again with a mechanism the broker listed, and later
+// connections to that broker must start with that mechanism.
+func TestSaslFallbackMechanismRedials(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), EnableSASL(), Superuser("PLAIN", "admin", "admin"))
+	rejected := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.SASLHandshake},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			return kreq.(*kmsg.SASLHandshakeRequest).Mechanism == "OAUTHBEARER" // we do not support it
+		},
+	})
+
+	cl := newPlainClient(t, c, kgo.SASL(
+		oauth.Auth{Token: "unused"}.AsMechanism(),
+		plain.Auth{User: "admin", Pass: "admin"}.AsMechanism(),
+	))
+	br := discoverBroker(t, cl) // through a seed broker
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// ListGroups uses the normal connection; CreateTopics carries a
+	// timeout and so dials a second connection.
+	for _, req := range []kmsg.Request{kmsg.NewPtrListGroupsRequest(), kmsg.NewPtrCreateTopicsRequest()} {
+		if _, err := br.Request(ctx, req); err != nil {
+			t.Fatalf("%T failed: %v", req, err)
+		}
+	}
+	// One rejection on the seed broker and one on the broker's first
+	// connection; its second connection starts with PLAIN.
+	if n := rejected.Hits(); n != 2 {
+		t.Errorf("got %d OAUTHBEARER handshakes, want 2", n)
 	}
 }
 

@@ -3949,6 +3949,13 @@ func TestElectLeaders(t *testing.T) {
 	}
 	expectAll("timed out all", tresp, 0, 0)
 
+	// A top-level error on an all-partitions election comes with no
+	// topics, so kadm must return it.
+	c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, TopLevel: true, Err: kerr.RequestTimedOut})
+	if _, err := kadm.NewClient(cl).ElectLeaders(ctx, kadm.ElectPreferredReplica, nil); !errors.Is(err, kerr.RequestTimedOut) {
+		t.Fatalf("elect all with a top-level error: got err %v, want %v", err, kerr.RequestTimedOut)
+	}
+
 	h := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ElectLeaders}, Count: -1, Err: kerr.ClusterAuthorizationFailed})
 	defer h.Remove()
 	fresp, err := electReq.RequestWith(ctx, cl)
@@ -4570,6 +4577,30 @@ func TestApiVersionsFeatureTable(t *testing.T) {
 				t.Errorf("after downgrade got:\n%sexp:\n%s", got, exp)
 			}
 		})
+	}
+}
+
+// kadm sends UpgradeType 1, Kafka's default, when the caller leaves it unset:
+// Kafka rejects 0.
+func TestKadmUpdateFeaturesDefaultUpgradeType(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1))
+	defaulted := c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.UpdateFeatures},
+		Observe: true,
+		When: func(kreq kmsg.Request) bool {
+			fus := kreq.(*kmsg.UpdateFeaturesRequest).FeatureUpdates
+			return len(fus) == 1 && fus[0].UpgradeType == 1
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	adm := kadm.NewClient(newPlainClient(t, c))
+	if _, err := adm.UpdateFeatures(ctx, true, kadm.FeatureUpdate{Feature: "transaction.version", MaxVersionLevel: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if defaulted.Hits() != 1 {
+		t.Error("kadm did not send UpgradeType 1 for an unset upgrade type")
 	}
 }
 
@@ -5647,14 +5678,20 @@ func TestShareGroupRecyclePoolAliasing(t *testing.T) {
 // Without the fix, the consumer would zombie along (consuming but
 // unable to commit) until the heartbeat loop noticed the dead session
 // up to a heartbeat interval later.
+//
+// If the rejoin's JoinGroup also returns UNKNOWN_MEMBER_ID, the group
+// removed the member, and the partitions it still owns must be lost
+// rather than kept across a rejoin under a new member ID.
 func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name string
-		err  *kerr.Error
+		name    string
+		err     *kerr.Error
+		joinErr *kerr.Error
 	}{
-		{"UnknownMemberID", kerr.UnknownMemberID},
-		{"IllegalGeneration", kerr.IllegalGeneration},
+		{"UnknownMemberID", kerr.UnknownMemberID, nil},
+		{"IllegalGeneration", kerr.IllegalGeneration, nil},
+		{"UnknownMemberIDJoin", kerr.UnknownMemberID, kerr.UnknownMemberID},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -5677,6 +5714,9 @@ func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 			// Count JoinGroups to observe the rejoin; the group is
 			// stable now, so any join from here on is the rejoin.
 			joins := c.Fault(Fault{Keys: []kmsg.Key{kmsg.JoinGroup}, Observe: true, Count: -1})
+			if test.joinErr != nil {
+				c.Fault(Fault{Keys: []kmsg.Key{kmsg.JoinGroup}, Err: test.joinErr})
+			}
 			c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetCommit}, Err: test.err})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -5687,11 +5727,28 @@ func TestCommitFatalMemberErrorTriggersRejoin(t *testing.T) {
 				t.Fatal("timed out waiting for a rejoin after a fatal commit error")
 			}
 
+			// Losing the partitions surfaces the join error once.
+			for test.joinErr != nil {
+				err := cl.PollFetches(ctx).Err()
+				if gs, ok := errors.AsType[*kgo.ErrGroupSession](err); ok && errors.Is(gs.Err, test.joinErr) {
+					break
+				}
+				if ctx.Err() != nil {
+					t.Fatal("timed out waiting for the lost group session to surface")
+				}
+			}
+
 			// The member must fully recover: new records are consumable
-			// and committable after the rejoin.
+			// and committable after the rejoin. A lost partition
+			// resumes from the committed offset, and nothing was
+			// committed.
 			produceNStrings(t, newPlainClient(t, c), topic, nRecords)
-			if got := consumeN(t, cl, nRecords, 15*time.Second); len(got) != nRecords {
-				t.Fatalf("expected %d records after recovery, got %d", nRecords, len(got))
+			want := nRecords
+			if test.joinErr != nil {
+				want = 2 * nRecords
+			}
+			if got := consumeN(t, cl, want, 15*time.Second); len(got) != want {
+				t.Fatalf("expected %d records after recovery, got %d", want, len(got))
 			}
 			if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
 				t.Fatalf("commit after recovery: %v", err)
@@ -6673,9 +6730,23 @@ func TestStaticMemberRecovery(t *testing.T) {
 			consumeN(t, cl1, 20, 10*time.Second)
 			waitStable(t, c, group, 1)
 
+			// Kafka rejects a static leave that has no instance ID.
+			leaves := c.Fault(Fault{
+				Keys:    []kmsg.Key{kmsg.ConsumerGroupHeartbeat},
+				Observe: true,
+				Count:   -1,
+				When: func(kreq kmsg.Request) bool {
+					req := kreq.(*kmsg.ConsumerGroupHeartbeatRequest)
+					return req.MemberEpoch == -2 && req.InstanceID != nil && *req.InstanceID == instanceID
+				},
+			})
+
 			// A static member does not send a leave on close, except
 			// under 848 where it leaves at epoch -2.
 			cl1.Close()
+			if got := leaves.Hits(); tc.use848 && got != 1 {
+				t.Fatalf("got %d static leaves carrying the instance ID, want 1", got)
+			}
 			time.Sleep(tc.gone)
 
 			newMember()

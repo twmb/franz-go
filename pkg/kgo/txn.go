@@ -1377,7 +1377,18 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 			case <-priorDone:
 			default:
 				g.cl.cfg.logger.Log(LogLevelDebug, "waiting for prior txn offset commit to finish before issuing another")
-				<-priorDone
+				select {
+				case <-priorDone:
+				case <-ctx.Done():
+					// Our context is done, so we fail this commit
+					// without issuing it. We still wait for the
+					// prior commit before returning: returning
+					// closes commitDone, which lets the next commit
+					// be issued.
+					onDone(req, nil, ctx.Err())
+					<-priorDone
+					return
+				}
 			}
 		}
 		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", req)

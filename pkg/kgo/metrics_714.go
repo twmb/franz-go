@@ -224,6 +224,7 @@ func (cl *Client) pushMetrics() {
 				break push
 			case kerr.UnsupportedCompressionType:
 				cl.cfg.logger.Log(LogLevelInfo, "client metrics compression is not supported by the broker even though we only used previously supported compressors, re-getting our subscription information", "err", err)
+				break push
 			default:
 				if !kerr.IsRetriable(err) {
 					cl.cfg.logger.Log(LogLevelWarn, "client metrics received an unknown error we do not know how to handle, exiting metrics loop", "err", err)
@@ -255,7 +256,8 @@ func buildNameFilter(requested []string) func(string) bool {
 	if len(requested) == 0 {
 		return func(string) bool { return false }
 	}
-	if len(requested) == 1 && requested[0] == "" {
+	// Kafka requests all metrics with a lone "*".
+	if len(requested) == 1 && requested[0] == "*" {
 		return func(string) bool { return true }
 	}
 	return func(name string) bool {

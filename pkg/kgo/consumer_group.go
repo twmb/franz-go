@@ -72,6 +72,11 @@ type groupConsumer struct {
 	lastAssigned map[string][]int32
 	nowAssigned  amtps
 
+	// revokes counts each time we drop partitions we lost. An 848 commit
+	// that gets STALE_MEMBER_EPOCH retries under our new epoch only if
+	// this has not changed since the commit was built.
+	revokes atomic.Uint64
+
 	// Set when a join downgrades the group from cooperative to eager;
 	// the next session revokes everything before consuming.
 	protocolDowngraded bool
@@ -233,7 +238,9 @@ func (cl *Client) LeaveGroup() {
 // context cancel error. If the context is nil, this immediately
 // triggers the leave and does not wait, returning nil. In either the
 // ctx-expired or nil-ctx cases, the shutdown work continues in the
-// background to keep client state consistent.
+// background to keep client state consistent. Only the first call starts
+// the leave, under its context; a later call waits for that leave or for
+// its own context.
 //
 // For classic consumer groups: if a rebalance is in progress, this
 // function waits for the in-flight join and sync to finish before the
@@ -284,9 +291,12 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 	if immediate {
 		ctx = cl.ctx
 	}
+	start := c.leaving.CompareAndSwap(false, true)
 
 	if c.s != nil {
-		go c.s.leave(ctx)
+		if start {
+			go c.s.leave(ctx)
+		}
 		if immediate {
 			return nil
 		}
@@ -298,14 +308,16 @@ func (cl *Client) LeaveGroupContext(ctx context.Context) error {
 		}
 	}
 
-	go func() {
-		c.waitAndAddRebalanceSilent()
-		c.mu.Lock() // lock for assign
-		c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
-		c.g.leave(ctx)
-		c.mu.Unlock()
-		c.unaddRebalance()
-	}()
+	if start {
+		go func() {
+			c.waitAndAddRebalanceSilent()
+			c.mu.Lock() // lock for assign
+			c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
+			c.g.leave(ctx)
+			c.mu.Unlock()
+			c.unaddRebalance()
+		}()
+	}
 
 	if immediate {
 		return nil
@@ -479,6 +491,9 @@ func (g *groupConsumer) manageFailWait(consecutiveErrors int, err error) (ctxCan
 		// g.mu. We store nil before unlocking: a SetOffsets that ran
 		// between our unlock and a later store would add a partition we
 		// no longer own to the map we just cleared.
+		if len(g.nowAssigned.read()) > 0 {
+			g.revokes.Add(1)
+		}
 		g.nowAssigned.store(nil)
 		g.uncommitted = nil
 		g.fetching = nil
@@ -539,6 +554,9 @@ func (g *groupConsumer) abandonAssignment(why string) {
 	g.mu.Lock()     // before allowing poll to touch uncommitted, lock the group
 	g.c.mu.Unlock() // now part of poll can continue
 	// We store nil before unlocking, as in manageFailWait.
+	if len(g.nowAssigned.read()) > 0 {
+		g.revokes.Add(1)
+	}
 	g.nowAssigned.store(nil)
 	g.uncommitted = nil
 	g.fetching = nil
@@ -926,6 +944,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	// commit.
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.revokes.Add(1)
 	if g.uncommitted == nil {
 		return
 	}
@@ -1592,6 +1611,16 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 			g.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID", "group", g.cfg.group, "member_id", resp.MemberID)
 			return true, "", nil, nil
 		case kerr.UnknownMemberID:
+			// The group removed us. If we still own partitions
+			// (cooperative), another member may own them now, so we
+			// return the error and manageFailWait calls onLost and
+			// clears our uncommitted offsets. Restarting the join
+			// here would let a revoke, or a commit waiting for this
+			// join, commit our old offsets under our next member ID
+			// and rewind the new owner.
+			if len(g.nowAssigned.read()) > 0 {
+				return restart, protocol, plan, err
+			}
 			g.memberGen.storeMember("")
 			g.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id", "group", g.cfg.group)
 			return true, "", nil, nil
@@ -3466,43 +3495,45 @@ func (cl *Client) CommitOffsetsSync(
 	g.commitOffsetsSync(ctx, tc, onDone)
 }
 
-// waitJoinSyncMu is a rather insane way to try to grab a lock, but also return
+// waitLock is a rather insane way to try to grab a lock, but also return
 // early if we have to wait and the context is canceled.
-func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
-	if g.noCommitDuringJoinAndSync.TryRLock() {
-		g.cfg.logger.Log(LogLevelDebug, "grabbed join/sync mu on first try")
+func waitLock(ctx context.Context, tryLock func() bool, lock, unlock func()) error {
+	if tryLock() {
 		return nil
 	}
 
 	var (
-		blockJoinSyncCh = make(chan struct{})
-		mu              xsync.Mutex
-		returned        bool
-		maybeRUnlock    = func() {
+		locked      = make(chan struct{})
+		mu          xsync.Mutex
+		returned    bool
+		maybeUnlock = func() {
 			mu.Lock()
 			defer mu.Unlock()
 			if returned {
-				g.noCommitDuringJoinAndSync.RUnlock()
+				unlock()
 			}
 			returned = true
 		}
 	)
 
 	go func() {
-		g.noCommitDuringJoinAndSync.RLock()
-		close(blockJoinSyncCh)
-		maybeRUnlock()
+		lock()
+		close(locked)
+		maybeUnlock()
 	}()
 
 	select {
-	case <-blockJoinSyncCh:
-		g.cfg.logger.Log(LogLevelDebug, "grabbed join/sync mu after waiting")
+	case <-locked:
 		return nil
 	case <-ctx.Done():
-		g.cfg.logger.Log(LogLevelDebug, "not grabbing mu because context canceled")
-		maybeRUnlock()
+		maybeUnlock()
 		return ctx.Err()
 	}
+}
+
+func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
+	mu := &g.noCommitDuringJoinAndSync
+	return waitLock(ctx, mu.TryRLock, mu.RLock, mu.RUnlock)
 }
 
 func (g *groupConsumer) commitOffsetsSync(
@@ -3526,7 +3557,14 @@ func (g *groupConsumer) commitOffsetsSync(
 		return
 	}
 
-	g.syncCommitMu.Lock() // block all other concurrent commits until our OnDone is done.
+	// Block all other concurrent commits until our OnDone is done. If our
+	// context ends while we wait, we return without sending anything.
+	if err := waitLock(ctx, g.syncCommitMu.TryLock, g.syncCommitMu.Lock, g.syncCommitMu.Unlock); err != nil {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		close(done)
+		return
+	}
 	unblockCommits := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		g.noCommitDuringJoinAndSync.RUnlock()
 		defer close(done)
@@ -3616,7 +3654,12 @@ func (cl *Client) CommitOffsets(
 		return
 	}
 
-	g.syncCommitMu.RLock() // block sync commit, but allow other concurrent Commit to cancel us
+	// Block sync commits, but allow other concurrent CommitOffsets.
+	if err := waitLock(ctx, g.syncCommitMu.TryRLock, g.syncCommitMu.RLock, g.syncCommitMu.RUnlock); err != nil {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		return
+	}
 	unblockJoinSync := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		g.noCommitDuringJoinAndSync.RUnlock()
 		defer g.syncCommitMu.RUnlock()
@@ -3722,6 +3765,7 @@ func (g *groupConsumer) commit(
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 	is848 := g.is848 // g.mu is held, per the function comment above
+	revokesAtBuild := g.revokes.Load()
 
 	// Build the request under g.mu: a purge, which also holds g.mu,
 	// removes the topic from tps, and a request built after it would
@@ -3774,13 +3818,26 @@ func (g *groupConsumer) commit(
 			case <-priorDone:
 			default:
 				g.cfg.logger.Log(LogLevelDebug, "waiting for prior commit to finish before issuing another", "group", g.cfg.group)
-				<-priorDone
+				select {
+				case <-priorDone:
+				case <-ctx.Done():
+					// Our context is done, so we fail this commit
+					// without issuing it. We still wait for the
+					// prior commit before returning: returning
+					// closes commitDone, which lets the next commit
+					// be issued.
+					req.Topics = append(req.Topics, refused...)
+					onDone(g.cl, req, nil, ctx.Err())
+					<-priorDone
+					return
+				}
 			}
 		}
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
 		if fn, ok := ctx.Value(commitContextFn).(func(*kmsg.OffsetCommitRequest) error); ok {
 			if err := fn(req); err != nil {
+				req.Topics = append(req.Topics, refused...)
 				onDone(g.cl, req, nil, err)
 				return
 			}
@@ -3826,13 +3883,14 @@ func (g *groupConsumer) commit(
 		// the STALE.
 		//
 		// On gen change, filter req.Topics down to partitions we
-		// still own before retrying so we do not race the new owner's
-		// commits for revoked partitions. The filtered-out partitions
-		// get synthesized REBALANCE_IN_PROGRESS responses after the
-		// loop so the caller still sees a per-partition result for
-		// everything they asked us to commit. We restore the original
-		// req.Topics before invoking onDone so the callback sees the
-		// caller's full request.
+		// own before retrying: a caller can commit any partition, and
+		// we must not commit one we were not assigned under our new
+		// epoch. The filtered-out partitions get synthesized
+		// REBALANCE_IN_PROGRESS responses after the loop so the
+		// caller still sees a per-partition result for everything
+		// they asked us to commit. We restore the original req.Topics
+		// before invoking onDone so the callback sees the caller's
+		// full request.
 		origReqTopics := req.Topics
 		// dropped tracks (topic name, topic id) -> partitions that
 		// were filtered out of req.Topics during retries.
@@ -3900,6 +3958,22 @@ func (g *groupConsumer) commit(
 				}
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
+					// A partition left our assignment after we built
+					// this commit. It may have moved to another member
+					// and back to us, so its offset can be from the
+					// earlier ownership, and resending it under our new
+					// epoch could rewind the other member's commit. We
+					// return STALE_MEMBER_EPOCH instead; Kafka 4.3+ also
+					// rejects such a commit at its original epoch
+					// (KIP-1251).
+					if g.revokes.Load() != revokesAtBuild {
+						g.cfg.logger.Log(LogLevelInfo, "offset commit received STALE_MEMBER_EPOCH after a partition left our assignment, not retrying",
+							"group", g.cfg.group,
+							"old_epoch", req.Generation,
+							"new_epoch", newGen,
+						)
+						break
+					}
 					owned := g.nowAssigned.read()
 					keptTopics := make([]kmsg.OffsetCommitRequestTopic, 0, len(req.Topics))
 					droppedParts := 0
@@ -4005,8 +4079,7 @@ func (g *groupConsumer) commit(
 		// while we keep consuming as a zombie, until the heartbeat
 		// loop sees the same error up to a full heartbeat interval
 		// later. Rejoin immediately instead; the join itself repairs
-		// the session (joinAndSync clears the member id and retries
-		// if the broker rejects the join with UnknownMemberID).
+		// the session (see handleJoinResp for UnknownMemberID).
 		//
 		// Classic protocol only: in 848 mode, a forced "rejoin" does
 		// not actually rejoin. The heartbeat loop treats the signal

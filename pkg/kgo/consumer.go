@@ -277,6 +277,10 @@ type consumer struct {
 	session atomic.Value // *consumerSession
 	kill    atomic.Bool
 
+	// leaving is set by the first LeaveGroupContext, which starts the
+	// leave with its context. Later calls, including Close's, only wait.
+	leaving atomic.Bool
+
 	usingCursors usedCursors
 
 	sourcesReadyMu          xsync.Mutex

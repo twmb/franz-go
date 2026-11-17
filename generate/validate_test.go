@@ -565,6 +565,7 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 			t.Errorf("%s %s field %d (%s/%s): type mismatch: JSON %s (%s) vs DSL %s (%s)",
 				msgName, prefix, i, jf.Name, df.FieldName, jType, jf.Type, dType, df.Type.TypeName())
 		}
+		compareDefault(t, msgName, jf, df)
 
 		// Recurse into struct fields.
 		if jType == "struct" || strings.HasPrefix(jType, "[]struct") {
@@ -591,6 +592,7 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 			t.Errorf("%s %s tag %d (%s/%s): type mismatch: JSON %s (%s) vs DSL %s (%s)",
 				msgName, prefix, tag, jf.Name, df.FieldName, jType, jf.Type, dType, df.Type.TypeName())
 		}
+		compareDefault(t, msgName, jf, df)
 
 		// Recurse into struct fields.
 		if jType == "struct" || strings.HasPrefix(jType, "[]struct") {
@@ -601,6 +603,108 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 			}
 		}
 	}
+}
+
+// acceptedDefaults lists the fields whose DSL default deliberately differs
+// from Kafka's JSON, by message and JSON field name, with the DSL default.
+var acceptedDefaults = map[string]string{
+	// Kafka defaults to true. We create topics only when asked.
+	"MetadataRequest.AllowAutoTopicCreation": "",
+	// Kafka's JSON has no default. A consumer sends -1, as Java's does.
+	"ListOffsetsRequest.ReplicaId": "-1",
+}
+
+// defaultTimeoutMillis is the TimeoutMillis default we use where Kafka's
+// JSON defines none.
+const defaultTimeoutMillis = "15000"
+
+var reportedDefaults = make(map[string]bool)
+
+// compareDefault reports a DSL default that differs from Kafka's JSON: a
+// default Kafka defines and the DSL lacks, or a DSL default Kafka does not
+// define. TimeoutMillis is the exception: where Kafka defines no default, the
+// DSL must use defaultTimeoutMillis.
+func compareDefault(t *testing.T, msgName string, jf kafkaField, df StructField) {
+	t.Helper()
+	jd, jhas := jsonDefault(jf)
+	dd, dhas := dslDefault(df)
+	isZero := func(s string) bool { return s == "0" || s == "false" || s == "" || s == "null" }
+	switch {
+	case jhas && sameDefault(jd, dd, dhas):
+		return
+	case jhas && !dhas && isZero(jd):
+		return
+	case !jhas && (!dhas || isZero(dd)):
+		return
+	case !jhas && df.FieldName == "TimeoutMillis" && dd == defaultTimeoutMillis:
+		return
+	}
+	key := msgName + "." + jf.Name
+	if want, ok := acceptedDefaults[key]; ok && dd == want {
+		return
+	}
+	if reportedDefaults[key] {
+		return
+	}
+	reportedDefaults[key] = true
+	show := func(s string, has bool) string {
+		if !has {
+			return "none"
+		}
+		return strconv.Quote(s)
+	}
+	t.Errorf("%s (%s): default mismatch: JSON %s vs DSL %s", key, df.FieldName, show(jd, jhas), show(dd, dhas))
+}
+
+// jsonDefault returns a JSON field's default as a string, with numbers in
+// decimal, and whether the JSON defines one.
+func jsonDefault(jf kafkaField) (string, bool) {
+	switch v := jf.Default.(type) {
+	case nil:
+		return "", false
+	case bool:
+		return strconv.FormatBool(v), true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	case string:
+		if n, err := strconv.ParseInt(v, 0, 64); err == nil {
+			return strconv.FormatInt(n, 10), true
+		}
+		return v, true
+	}
+	return fmt.Sprint(jf.Default), true
+}
+
+// dslDefault returns a DSL field's default as a string, and whether the DSL
+// defines one.
+func dslDefault(df StructField) (string, bool) {
+	d, ok := df.Type.(Defaulter)
+	if !ok {
+		return "", false
+	}
+	v, has := d.GetDefault()
+	if !has {
+		return "", false
+	}
+	s := fmt.Sprint(v)
+	if s == "nil" {
+		s = "null"
+	}
+	return s, true
+}
+
+// sameDefault returns whether a JSON default equals a DSL default, comparing
+// numbers by value.
+func sameDefault(jd, dd string, dhas bool) bool {
+	if !dhas {
+		return false
+	}
+	if jd == dd {
+		return true
+	}
+	jn, jerr := strconv.ParseFloat(jd, 64)
+	dn, derr := strconv.ParseFloat(dd, 64)
+	return jerr == nil && derr == nil && jn == dn
 }
 
 // dslFieldActiveAt returns whether a DSL field is active at the given version.

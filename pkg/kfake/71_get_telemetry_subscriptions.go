@@ -151,9 +151,9 @@ func (c *Cluster) telemSubscription(tc telemClient) (metrics []string, intervalM
 	}
 	switch {
 	case !matched:
-		metrics, intervalMs = []string{""}, 30000
+		metrics, intervalMs = []string{"*"}, 30000
 	case all:
-		metrics = []string{""} // KIP-714: a lone empty prefix is every metric
+		metrics = []string{"*"} // as Kafka answers for every metric
 	default:
 		metrics = slices.Sorted(maps.Keys(union))
 	}

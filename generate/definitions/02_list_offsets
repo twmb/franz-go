@@ -78,7 +78,7 @@ ListOffsetsRequest => key 2, max version 11, flexible v6+
       // MaxNumOffsets is the maximum number of offsets to report.
       // This was removed after v0.
       MaxNumOffsets: int32(1) // v0-v0
-  TimeoutMillis(30000) // v10+
+  TimeoutMillis // v10+
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
 ListOffsetsResponse =>

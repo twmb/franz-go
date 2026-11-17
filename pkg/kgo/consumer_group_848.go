@@ -441,6 +441,7 @@ func (g *groupConsumer) leave848(ctx context.Context) {
 	req := kmsg.NewPtrConsumerGroupHeartbeatRequest()
 	req.Group = g.cfg.group
 	req.MemberID = memberID
+	req.InstanceID = g.cfg.instanceID // Kafka rejects a -2 leave without it
 	req.MemberEpoch = -1
 	if g.cfg.instanceID != nil {
 		req.MemberEpoch = -2

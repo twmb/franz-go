@@ -706,6 +706,8 @@ type OffsetCommitValue struct {
 	Offset int64
 
 	// LeaderEpoch is the epoch of the leader committing this message.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32 // v3+
 
 	// Metadata is the metadata included in the commit.
@@ -716,6 +718,8 @@ type OffsetCommitValue struct {
 
 	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
 	// is when this commit expires.
+	//
+	// This field has a default of -1.
 	ExpireTimestamp int64 // v1-v1
 
 	// TopicID is the topic id of the committed offset
@@ -821,6 +825,8 @@ func (v *OffsetCommitValue) IsFlexible() bool { return v.Version >= 4 }
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetCommitValue.
 func (v *OffsetCommitValue) Default() {
+	v.LeaderEpoch = -1
+	v.ExpireTimestamp = -1
 }
 
 // NewOffsetCommitValue returns a default OffsetCommitValue
@@ -5140,7 +5146,7 @@ type ListOffsetsRequest struct {
 	// will continue to be processed if the timeout is reached. If the timeout is
 	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
 	//
-	// This field has a default of 30000.
+	// This field has a default of 15000.
 	TimeoutMillis int32 // v10+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -5326,7 +5332,7 @@ func NewPtrListOffsetsRequest() *ListOffsetsRequest {
 // if new fields are added to ListOffsetsRequest.
 func (v *ListOffsetsRequest) Default() {
 	v.ReplicaID = -1
-	v.TimeoutMillis = 30000
+	v.TimeoutMillis = 15000
 }
 
 // NewListOffsetsRequest returns a default ListOffsetsRequest
@@ -32228,6 +32234,8 @@ type UpdateFeaturesRequestFeatureUpdate struct {
 	// Determine which type of upgrade will be performed: 1 will perform an
 	// upgrade only (default), 2 is safe downgrades only (lossless), 3 is
 	// unsafe downgrades (lossy).
+	//
+	// This field has a default of 1.
 	UpgradeType int8 // v1+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -32237,6 +32245,7 @@ type UpdateFeaturesRequestFeatureUpdate struct {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to UpdateFeaturesRequestFeatureUpdate.
 func (v *UpdateFeaturesRequestFeatureUpdate) Default() {
+	v.UpgradeType = 1
 }
 
 // NewUpdateFeaturesRequestFeatureUpdate returns a default UpdateFeaturesRequestFeatureUpdate

@@ -59,7 +59,10 @@ jobs:
           repository: apache/kafka
           ref: ${{ steps.kafka-version.outputs.tag }}
           path: kafka
-          sparse-checkout: clients/src/main/resources/common/message
+          sparse-checkout: |
+            clients/src/main/resources/common/message
+            group-coordinator/src/main/resources/common/message
+            transaction-coordinator/src/main/resources/common/message
       # RC tags reach GitHub late or never; the staged source tarball is the
       # artifact under vote.
       - name: Fetch the release candidate source
@@ -69,6 +72,6 @@ jobs:
           mkdir kafka
           curl -sSfL "https://dist.apache.org/repos/dist/dev/kafka/$RC/kafka-${RC%-rc*}-src.tgz" \
             | tar xz -C kafka --strip-components=1
-      - run: cd generate && go test -run TestValidateDSLAgainstKafkaJSON -v
+      - run: cd generate && go test -run 'TestValidateDSLAgainstKafkaJSON|TestValidateMiscDSLAgainstKafkaJSON' -v
         env:
           KAFKA_DIR: ${{ github.workspace }}/kafka

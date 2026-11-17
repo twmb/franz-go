@@ -868,6 +868,9 @@ func (cl *Client) ElectLeaders(ctx context.Context, how ElectLeadersHow, s Topic
 	if err := maybeAuthErr(resp.ErrorCode); err != nil {
 		return nil, err
 	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
 	if resp.Version == 0 { // v0 does not have the election type field
 		how = ElectPreferredReplica
 	}
@@ -1064,6 +1067,9 @@ func (cl *Client) UpdateFeatures(ctx context.Context, validateOnly bool, updates
 		reqUpdate.Feature = u.Feature
 		reqUpdate.MaxVersionLevel = u.MaxVersionLevel
 		reqUpdate.UpgradeType = u.UpgradeType
+		if reqUpdate.UpgradeType == 0 {
+			reqUpdate.UpgradeType = 1 // Kafka rejects 0
+		}
 		// v0 of UpdateFeatures predates UpgradeType and uses
 		// AllowDowngrade instead. Set it so v0 brokers honor a
 		// requested downgrade/delete.
