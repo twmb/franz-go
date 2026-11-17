@@ -817,14 +817,10 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	// After the flush, no records are being produced to, and we can set
-	// addedToTxn to false outside of any mutex.
-	for _, parts := range cl.producer.topics.load() {
-		for _, part := range parts.load().partitions {
-			if part.records.addedToTxn.Swap(false) {
-				addedSwapped = append(addedSwapped, part.records)
-				anyAdded = true
-			}
-		}
+	// addedToTxn to false.
+	addedSwapped = cl.producer.takeAddedToTxn()
+	if len(addedSwapped) > 0 {
+		anyAdded = true
 	}
 
 	// If no partition was added to a transaction, then we have nothing to commit.
@@ -1020,6 +1016,30 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	return err
+}
+
+// takeAddedToTxn clears addedToTxn on every partition and returns the buffers
+// it was set on. We scan under unknownTopicsMu: records produced to a topic
+// before its partitions are known wait in unknownTopics, and
+// storePartitionsUpdate partitions them and only then stores the partitions,
+// both under the mu. A record it partitions can be produced and acked, and
+// Flush can return, before the partitions are stored. Without the mu we could
+// miss its partition and think nothing was added: under KIP-890 part 2 we
+// would abort, otherwise we would send no EndTxn at all, and either way a
+// TryCommit would return nil.
+func (p *producer) takeAddedToTxn() []*recBuf {
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
+	var added []*recBuf
+	for _, parts := range p.topics.load() {
+		for _, part := range parts.load().partitions {
+			if part.records.addedToTxn.Swap(false) {
+				added = append(added, part.records)
+			}
+		}
+	}
+	return added
 }
 
 // This returns if it is necessary to recover the producer ID (it has an

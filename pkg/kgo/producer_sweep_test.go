@@ -396,6 +396,85 @@ func TestAuditPurgeVsProduceUnknownTopicNoOrphan(t *testing.T) {
 	}
 }
 
+// storePartitionsUpdate partitions a topic's first records and only then
+// stores the topic's partitions, both under unknownTopicsMu. A record
+// partitioned early can be acked before the store, and EndTransaction's scan
+// for partitions added to the transaction used to run without the mu: it
+// missed the partition and ended the transaction as if nothing was produced.
+//
+// The test freezes storePartitionsUpdate inside that window (doPartition
+// blocks on a test-held partsMu), marks the partition added as a produce
+// response would, and runs the scan. Pre-fix the scan returns nothing;
+// post-fix it waits for the store and finds the partition.
+func TestTakeAddedToTxnWaitsForFirstPartitions(t *testing.T) {
+	t.Parallel()
+
+	cl, err := NewClient(
+		SeedBrokers("127.0.0.1:1"), // metadata never loads; failures only tick retry counters
+		ManualFlushing(),           // the partitioned record stays buffered
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	p := &cl.producer
+
+	// First produce to T: stores T in producer.topics without partitions
+	// and buffers the record in unknownTopics.
+	cl.Produce(context.Background(), &Record{Topic: "T", Value: []byte("v")}, nil)
+	p.unknownTopicsMu.Lock()
+	unknown := p.unknownTopics["T"]
+	p.unknownTopicsMu.Unlock()
+	if unknown == nil {
+		t.Fatal("first produce to T did not buffer in unknownTopics")
+	}
+
+	// The partitions a metadata load would build for T.
+	tp := metadataPartition{
+		topic:  "T",
+		leader: 1,
+		sns:    sinkAndSource{sink: cl.newSink(1)},
+	}.newPartition(cl, partitionKindProduce)
+	r := tp.records
+	r.sink.addRecBuf(r)
+	l := p.topics.load()["T"]
+	lv := &topicPartitionsData{
+		topic:              "T",
+		partitions:         []*topicPartition{tp},
+		writablePartitions: []*topicPartition{tp},
+	}
+
+	l.partsMu.Lock()
+	storeDone := make(chan struct{})
+	go func() {
+		defer close(storeDone)
+		cl.storePartitionsUpdate("T", l, lv, false)
+	}()
+
+	// storePartitionsUpdate closes the wait channel just before it
+	// partitions, so once it is closed the store is frozen in doPartition.
+	// Failed metadata loads may send errors on it first.
+	for range unknown.wait {
+	}
+
+	r.addedToTxn.Store(true)
+	taken := make(chan []*recBuf, 1)
+	go func() { taken <- p.takeAddedToTxn() }()
+	time.Sleep(100 * time.Millisecond) // let the scan run (pre-fix) or park on unknownTopicsMu (post-fix)
+
+	l.partsMu.Unlock()
+	<-storeDone
+	select {
+	case added := <-taken:
+		if len(added) != 1 || added[0] != r {
+			t.Fatalf("scan took %d buffers, want the partition added to the transaction", len(added))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("scan never returned after the store completed")
+	}
+}
+
 // Failed records previously inherited the batchPromise zero values: a failed
 // record's Offset was its index within the failed batch and its
 // ProducerID/ProducerEpoch were 0 - plausible-looking garbage. Failures must
