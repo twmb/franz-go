@@ -241,14 +241,14 @@ OffsetCommitValue => not top level, with version field, flexible v4+
   // Offset is the committed offset.
   Offset: int64
   // LeaderEpoch is the epoch of the leader committing this message.
-  LeaderEpoch: int32 // v3+
+  LeaderEpoch: int32(-1) // v3+
   // Metadata is the metadata included in the commit.
   Metadata: string
   // CommitTimestamp is when this commit occurred.
   CommitTimestamp: int64
   // ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
   // is when this commit expires.
-  ExpireTimestamp: int64 // v1-v1
+  ExpireTimestamp: int64(-1) // v1-v1
   // TopicID is the topic id of the committed offset
   TopicID: uuid // tag 0
 
