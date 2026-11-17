@@ -167,7 +167,8 @@ type broker struct {
 
 	// saslIdx is the index into cfg.sasls of the mechanism each
 	// connection handshakes with. If the broker rejects that mechanism,
-	// we set saslIdx to a mechanism the broker lists.
+	// we set saslIdx to the index of the first configured mechanism the
+	// broker lists.
 	saslIdx atomic.Int32
 
 	// The cxn fields each manage a single tcp connection to one broker.

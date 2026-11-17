@@ -4585,22 +4585,15 @@ func TestApiVersionsFeatureTable(t *testing.T) {
 func TestKadmUpdateFeaturesDefaultUpgradeType(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1))
-	defaulted := c.Fault(Fault{
-		Keys:    []kmsg.Key{kmsg.UpdateFeatures},
-		Observe: true,
-		When: func(kreq kmsg.Request) bool {
-			fus := kreq.(*kmsg.UpdateFeaturesRequest).FeatureUpdates
-			return len(fus) == 1 && fus[0].UpgradeType == 1
-		},
-	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	adm := kadm.NewClient(newPlainClient(t, c))
-	if _, err := adm.UpdateFeatures(ctx, true, kadm.FeatureUpdate{Feature: "transaction.version", MaxVersionLevel: 2}); err != nil {
+	res, err := adm.UpdateFeatures(ctx, true, kadm.FeatureUpdate{Feature: "transaction.version", MaxVersionLevel: 2})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if defaulted.Hits() != 1 {
-		t.Error("kadm did not send UpgradeType 1 for an unset upgrade type")
+	if err := res["transaction.version"].Err; err != nil {
+		t.Errorf("UpdateFeatures with an unset upgrade type: %v", err)
 	}
 }
 

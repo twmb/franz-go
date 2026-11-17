@@ -2069,8 +2069,8 @@ start:
 	// heartbeat that assigned partitions and this OffsetFetch.
 	// Under rebalance churn STALE can fire several times in a row
 	// while the server is still advancing epochs; force a
-	// heartbeat and retry up to 10 times (each attempt pauses for
-	// the HB roundtrip, so this is paced, not a spin). Beyond 10,
+	// heartbeat and retry up to 10 times (each attempt waits for
+	// the HB roundtrip, so this does not spin loop). Beyond 10,
 	// surface the error so manage848 can reset the member and
 	// re-initialJoin rather than looping here forever.
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -3958,14 +3958,14 @@ func (g *groupConsumer) commit(
 				}
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
-					// A partition left our assignment after we built
-					// this commit. It may have moved to another member
-					// and back to us, so its offset can be from the
-					// earlier ownership, and resending it under our new
-					// epoch could rewind the other member's commit. We
-					// return STALE_MEMBER_EPOCH instead; Kafka 4.3+ also
-					// rejects such a commit at its original epoch
-					// (KIP-1251).
+					// If a partition left our assignment after we
+					// built this commit, the partition may have moved
+					// to another member and back to us. Its offset can
+					// then be from the earlier ownership, and resending
+					// the offset under our new epoch could rewind the
+					// other member's commit. We return
+					// STALE_MEMBER_EPOCH instead; Kafka 4.3+ also rejects
+					// such a commit at its original epoch (KIP-1251).
 					if g.revokes.Load() != revokesAtBuild {
 						g.cfg.logger.Log(LogLevelInfo, "offset commit received STALE_MEMBER_EPOCH after a partition left our assignment, not retrying",
 							"group", g.cfg.group,
