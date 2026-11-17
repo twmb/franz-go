@@ -13,39 +13,51 @@ import (
 
 func TestIssue1556(t *testing.T) {
 	t.Parallel()
-	const topic = "t"
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+	for _, injected := range []*kerr.Error{
+		kerr.UnknownTopicOrPartition,
+		kerr.FencedLeaderEpoch,
+	} {
+		t.Run(injected.Message, func(t *testing.T) {
+			t.Parallel()
+			const topic = "t"
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
-	producer := newPlainClient(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	for range 2 {
-		if err := producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("v")}).FirstErr(); err != nil {
-			t.Fatalf("produce: %v", err)
-		}
-	}
+			producer := newPlainClient(t, c)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			for range 2 {
+				if err := producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: 0, Value: []byte("v")}).FirstErr(); err != nil {
+					t.Fatalf("produce: %v", err)
+				}
+			}
 
-	c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetForLeaderEpoch}, Topic: topic, Err: kerr.UnknownTopicOrPartition, Count: -1})
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetForLeaderEpoch}, Topic: topic, Err: injected, Count: -1})
 
-	cl := newPlainClient(t, c, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-		topic: {0: kgo.NewOffset().At(1).WithEpoch(0)},
-	}))
-	for {
-		fs := cl.PollFetches(ctx)
-		if ctx.Err() != nil {
-			t.Fatal("no error for the partition while its epoch validation kept failing")
-		}
-		if n := len(fs.Records()); n > 0 {
-			t.Fatalf("consumed %d records while the epoch validation failed", n)
-		}
-		var got bool
-		fs.EachError(func(tp string, p int32, err error) {
-			if tp == topic && p == 0 && errors.Is(err, kerr.UnknownTopicOrPartition) {
-				got = true
+			cl := newPlainClient(t, c, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+				topic: {0: kgo.NewOffset().At(1).WithEpoch(0)},
+			}))
+			for {
+				fs := cl.PollFetches(ctx)
+				if ctx.Err() != nil {
+					t.Fatal("no error for the partition while its epoch validation kept failing")
+				}
+				if n := len(fs.Records()); n > 0 {
+					t.Fatalf("consumed %d records while the epoch validation failed", n)
+				}
+				var got bool
+				fs.EachError(func(tp string, p int32, err error) {
+					if tp != topic || p != 0 {
+						return
+					}
+					if !errors.Is(err, injected) {
+						t.Fatalf("got error %v, want %v", err, injected)
+					}
+					got = true
+				})
+				if got {
+					return
+				}
 			}
 		})
-		if got {
-			return
-		}
 	}
 }
