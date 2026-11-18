@@ -1320,7 +1320,6 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
 	var (
 		debugWhyStripped multiUpdateWhy
-		kip320           = s.cl.supportsOffsetForLeaderEpoch()
 		kmove            kip951move
 		// seen guards against a broker returning the same partition (or the
 		// same topic) more than once in a single fetch response. Each
@@ -1503,118 +1502,71 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// could start past the end and want to reset to
 				// the end. We respect that.
 				//
-				// KIP-392 (case 3) specifies that if we are consuming
-				// from a follower, then if our offset request is before
-				// the low watermark, we list offsets from the follower.
-				// However, Kafka does not actually implement handling
-				// ListOffsets from anything from the leader, so we
-				// need to redirect ourselves back to the leader.
+				// If we are consuming from a follower (KIP-392), we
+				// go back to the leader, as Kafka's client does.
+				// KIP-392 specifies listing offsets against the
+				// follower if we are before its log start, but
+				// Kafka does not support ListOffsets against a
+				// follower. KIP-392 also specifies checking for
+				// truncation if we are past the follower's high
+				// watermark, but Kafka sends neither the log start
+				// nor the high watermark with this error, so we
+				// cannot tell the two cases apart. The leader
+				// either serves our offset or replies with this
+				// error itself, and then we reset.
 				//
-				// KIP-392 (case 4) specifies that if we are consuming
-				// a follower and our request is larger than the high
-				// watermark, then we should first check for truncation
-				// from the leader and then if we still get out of
-				// range, reset with list offsets.
-				//
-				// It further goes on to say that "out of range errors
-				// due to ISR propagation delays should be extremely
-				// rare". Rather than falling back to listing offsets,
-				// we stay in a cycle of validating the leader epoch
-				// until the follower has caught up.
-				//
-				// In all cases except case 4, we also have to check if
-				// no reset offset was configured. If so, we ignore
-				// trying to reset and instead keep our failed partition.
-				addList := func(replica int32, log bool) {
-					switch {
-					case s.cl.cfg.resetOffset.noReset:
-						keep = true
-
-					case c.lastConsumedTime.IsZero():
-						// Nothing consumed: a rewind has nothing to rewind from and
-						// resumes at the log start.
-						reset := s.cl.cfg.resetOffset
-						if reset.at == atRewind {
-							reset = NewOffset().AtStart()
-						}
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: replica,
-							Offset:  reset,
-						})
-						if log {
-							s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
-								"broker", logID(s.nodeID),
-								"topic", topic,
-								"partition", partition,
-								"prior_offset", partOffset.offset,
-							)
-						}
-
-					default:
-						// We were consuming and the log changed under us. If we fell below the log start, the
-						// start is exact and we resume there. Otherwise the broker lost data at a point we
-						// cannot determine, and ConsumeResetOffset decides; see listOffsetsForBrokerLoad. The
-						// epoch never reaches the wire on a list load; we carry the epoch we consumed at so
-						// the reset can report it in ErrDataLoss.
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica:           replica,
-							lastConsumedMilli: c.lastConsumedMilli(),
-							Offset:            NewOffset().At(partOffset.offset).WithEpoch(c.lastConsumedEpoch),
-						})
-						if log {
-							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE while consuming;"+
-								" either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming,"+
-								" in which case we resume at the log start,"+
-								" or the broker has lost data, in which case we resume per ConsumeResetOffset",
-								"broker", logID(s.nodeID),
-								"topic", topic,
-								"partition", partition,
-								"prior_offset", partOffset.offset,
-							)
-						}
-					}
-				}
-
+				// If no reset offset was configured, we ignore
+				// trying to reset and instead keep our failed
+				// partition.
 				switch {
-				case s.nodeID == c.leader: // non KIP-392 case
-					addList(-1, true)
-
-				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3
-					// KIP-392 specifies that we should list offsets against the follower,
-					// but that actually is not supported and the Java client redirects
-					// back to the leader. The leader then does *not* direct the client
-					// back to the follower because the follower is not an in sync
-					// replica. If we did not redirect back to the leader, we would spin
-					// loop receiving offset_out_of_range from the follower for Fetch, and
-					// then not_leader_or_follower from the follower for ListOffsets
-					// (even though it is a follower). So, we just set the preferred replica
-					// back to the follower. We go directly back to fetching with the
-					// hope that the offset is available on the leader, and if not, we'll
-					// just get an OOOR error again and fall into case 1 just above.
+				case s.nodeID != c.leader:
 					preferreds = append(preferreds, cursorOffsetPreferred{
 						cursorOffsetNext: *partOffset,
 						preferredReplica: c.leader,
 						ooor:             true,
 					})
 
-				default: // partOffset.offset > fp.HighWatermark, KIP-392 case 4
-					if kip320 {
-						reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
-							replica: -1,
-							// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues follows
-							// ConsumeResetOffset; see loadEpochsForBrokerLoad.
-							lastConsumedMilli: c.lastConsumedMilli(),
-							Offset: Offset{
-								at:    partOffset.offset,
-								epoch: partOffset.lastConsumedEpoch,
-							},
-						})
-					} else {
-						// If the broker does not support offset for leader epoch but
-						// does support follower fetching for some reason, we have to
-						// fallback to listing.
-						addList(-1, true)
+				case s.cl.cfg.resetOffset.noReset:
+					keep = true
+
+				case c.lastConsumedTime.IsZero():
+					// Nothing consumed: a rewind has nothing to rewind from and
+					// resumes at the log start.
+					reset := s.cl.cfg.resetOffset
+					if reset.at == atRewind {
+						reset = NewOffset().AtStart()
 					}
+					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+						replica: -1,
+						Offset:  reset,
+					})
+					s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
+						"broker", logID(s.nodeID),
+						"topic", topic,
+						"partition", partition,
+						"prior_offset", partOffset.offset,
+					)
+
+				default:
+					// We were consuming and the log changed under us. If we fell below the log start, the
+					// start is exact and we resume there. Otherwise the broker lost data at a point we
+					// cannot determine, and ConsumeResetOffset decides; see listOffsetsForBrokerLoad. The
+					// epoch never reaches the wire on a list load; we carry the epoch we consumed at so
+					// the reset can report it in ErrDataLoss.
+					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+						replica:           -1,
+						lastConsumedMilli: c.lastConsumedMilli(),
+						Offset:            NewOffset().At(partOffset.offset).WithEpoch(c.lastConsumedEpoch),
+					})
+					s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE while consuming;"+
+						" either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming,"+
+						" in which case we resume at the log start,"+
+						" or the broker has lost data, in which case we resume per ConsumeResetOffset",
+						"broker", logID(s.nodeID),
+						"topic", topic,
+						"partition", partition,
+						"prior_offset", partOffset.offset,
+					)
 				}
 
 			case kerr.FencedLeaderEpoch:
