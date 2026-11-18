@@ -741,8 +741,13 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 
 		for i := range topicMeta.Partitions {
 			partMeta := &topicMeta.Partitions[i]
+			// Before Kafka 2.4 (Metadata v9), a reassignment can leave
+			// Metadata answering a stale leader epoch (KAFKA-9212). The
+			// leader answers FENCED_LEADER_EPOCH to any request that
+			// sends the stale epoch, so, as Kafka's client does, we do
+			// not use the epoch below v9.
 			leaderEpoch := partMeta.LeaderEpoch
-			if meta.Version < 7 || !useLeaderEpoch {
+			if meta.Version < 9 || !useLeaderEpoch {
 				leaderEpoch = -1
 			}
 			mp := metadataPartition{
@@ -1006,6 +1011,10 @@ func (cl *Client) mergeTopicPartitions(
 			// epoch and signal a retry; once a real epoch (>= old)
 			// reappears, normal validation runs and detects any
 			// truncation.
+			//
+			// A response below Metadata v9 has epoch -1 as well.
+			// During a rolling upgrade across Kafka 2.4, we keep
+			// what an upgraded broker told us.
 			if newTP.leaderEpoch < 0 {
 				cl.cfg.logger.Log(LogLevelDebug, "metadata has a leader epoch of -1 (no leader); keeping our last known leader and epoch until a leader is elected",
 					"topic", topic,
