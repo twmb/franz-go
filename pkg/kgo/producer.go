@@ -45,6 +45,11 @@ type producer struct {
 	// unknownTopics buffers all records for topics that are not loaded.
 	// The map is to a pointer to a slice for reasons documented in
 	// waitUnknownTopic.
+	//
+	// storePartitionsUpdate keeps unknownTopicsMu locked while it buffers
+	// a new topic's records and then stores the topic's partitions. A
+	// reader of topics that must not miss those partitions locks
+	// unknownTopicsMu first.
 	unknownTopicsMu xsync.Mutex
 	unknownTopics   map[string]*unknownTopicProduces
 
@@ -1121,9 +1126,6 @@ func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error)
 // 2.5+, it is safe to call this if the producer ID can be reset (KIP-360),
 // in EndTransaction.
 func (cl *Client) resetAllProducerSequences() {
-	// We lock unknownTopicsMu to also reset a new topic's partitions:
-	// storePartitionsUpdate stores them after it buffers records that a
-	// sink can produce immediately.
 	cl.producer.unknownTopicsMu.Lock()
 	defer cl.producer.unknownTopicsMu.Unlock()
 	for _, tp := range cl.producer.topics.load() {
@@ -1446,7 +1448,6 @@ func (cl *Client) unlingerDueToMaxRecsBuffered() {
 	if cl.cfg.linger <= 0 {
 		return
 	}
-	// As in Flush, we lock to not miss a new topic's partitions.
 	cl.producer.unknownTopicsMu.Lock()
 	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
@@ -1479,9 +1480,6 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// linger because the producer's flushing atomic int32 is nonzero. We
 	// must wake anything that could be lingering up, after which all sinks
 	// will loop draining.
-	//
-	// We lock unknownTopicsMu to also wake a new topic's records, which
-	// storePartitionsUpdate buffers before it stores the topic's partitions.
 	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
 		p.unknownTopicsMu.Lock()
 		for _, parts := range p.topics.load() {
@@ -1530,8 +1528,6 @@ func (cl *Client) Flush(ctx context.Context) error {
 func (cl *Client) bumpRepeatedLoadErr(err error) {
 	p := &cl.producer
 
-	// As in failBufferedRecords, we lock before reading the stored
-	// partitions to not miss a new topic's records.
 	p.unknownTopicsMu.Lock()
 	defer p.unknownTopicsMu.Unlock()
 	for _, partitions := range p.topics.load() {
@@ -1558,9 +1554,6 @@ func (cl *Client) bumpRepeatedLoadErr(err error) {
 func (cl *Client) failBufferedRecords(err error) {
 	p := &cl.producer
 
-	// We lock before failing the stored partitions: storePartitionsUpdate
-	// moves a new topic's records from unknownTopics into partitions that
-	// it stores afterward, and we must find the records in one of the two.
 	p.topicsMu.Lock()
 	defer p.topicsMu.Unlock()
 	p.unknownTopicsMu.Lock()

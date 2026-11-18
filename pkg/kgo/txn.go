@@ -1019,8 +1019,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 }
 
 // Clears addedToTxn on every partition and returns the buffers it was set on.
-// We lock unknownTopicsMu because a new topic's first records can be produced
-// before storePartitionsUpdate stores the topic's partitions.
 func (p *producer) takeAddedToTxn() []*recBuf {
 	p.unknownTopicsMu.Lock()
 	defer p.unknownTopicsMu.Unlock()
