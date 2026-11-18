@@ -5967,3 +5967,86 @@ func TestIssue1531(t *testing.T) {
 		})
 	}
 }
+
+// The leader may keep preferring an in-sync follower after retention advances
+// the log start, or it may still have the data that the follower lost.
+func TestPreferredReplicaOffsetBelowLogStart(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		leaderHasData bool
+		noReset       bool
+		wantOffset    int64
+	}{
+		{name: "cluster retention", wantOffset: 2},
+		{name: "cluster retention without reset", noReset: true},
+		{name: "only follower truncated", leaderHasData: true, noReset: true, wantOffset: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const topic = "retained"
+			c := newCluster(t, NumBrokers(2), SeedTopics(1, topic))
+			produceN(t, c, topic, 3)
+			leader := c.PartitionInfo(topic, 0).Leader
+			follower := (leader + 1) % 2
+			c.SetFollowers(topic, 0, []int32{follower})
+			id := c.TopicInfo(topic).TopicID
+			var started, followerFetched bool
+			c.ControlKey(int16(kmsg.Fetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+				c.KeepControl()
+				rp := kmsg.NewFetchResponseTopicPartition()
+				rp.LogStartOffset, rp.HighWatermark, rp.LastStableOffset = 2, 3, 3
+				if c.CurrentNode() == follower {
+					followerFetched = true
+					if !tc.leaderHasData {
+						return nil, nil, false
+					}
+					rp.ErrorCode = kerr.OffsetOutOfRange.Code
+				} else {
+					if tc.leaderHasData && followerFetched {
+						return nil, nil, false
+					}
+					if !started && !tc.leaderHasData {
+						if err := c.DeleteRecords(topic, 0, 2); err != nil {
+							return nil, err, true
+						}
+					}
+					started = true
+					rp.PreferredReadReplica = follower
+				}
+				rt := kmsg.NewFetchResponseTopic()
+				rt.Topic, rt.TopicID = topic, id
+				rt.Partitions = append(rt.Partitions, rp)
+				resp := kreq.ResponseKind().(*kmsg.FetchResponse)
+				resp.Topics = append(resp.Topics, rt)
+				return resp, nil, true
+			})
+
+			reset := kgo.NewOffset().AtStart()
+			if tc.noReset {
+				reset = kgo.NoResetOffset()
+			}
+			cl := newPlainClient(t, c,
+				kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {0: kgo.NewOffset().At(0)}}),
+				kgo.ConsumeResetOffset(reset),
+				kgo.FetchMaxWait(50*time.Millisecond),
+				kgo.Rack("rack-b"),
+			)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			fetches := cl.PollRecords(ctx, 1)
+			errs := fetches.Errors()
+			if tc.noReset && !tc.leaderHasData {
+				if len(errs) != 1 || !errors.Is(errs[0].Err, kerr.OffsetOutOfRange) {
+					t.Fatalf("expected OffsetOutOfRange, got %v", errs)
+				}
+				return
+			}
+			if len(errs) > 0 {
+				t.Fatal(errs)
+			}
+			if records := fetches.Records(); len(records) != 1 || records[0].Offset != tc.wantOffset {
+				t.Fatalf("expected record at offset %d, got %v", tc.wantOffset, records)
+			}
+		})
+	}
+}

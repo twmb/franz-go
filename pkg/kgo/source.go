@@ -163,6 +163,10 @@ type cursor struct {
 	// we fetch from the original leader again.
 	moveAt int64
 
+	// Offset a follower could not serve before we retried on the leader.
+	// A preferred-replica redirect alone does not complete that retry.
+	followerOutOfRange *int64
+
 	// useState is an atomic that has two states: unusable and usable. A
 	// cursor can be used in a fetch request if it is in the usable state.
 	// Once used, the cursor is unusable, and will be set back to usable
@@ -1406,6 +1410,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			}
 
 			priorOffset := partOffset.offset
+			retriedFollowerOffset := c.followerOutOfRange != nil && *c.followerOutOfRange == priorOffset
+			c.followerOutOfRange = nil
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
@@ -1580,17 +1586,14 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					addList(-1, true)
 
 				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3
-					// KIP-392 specifies that we should list offsets against the follower,
-					// but that actually is not supported and the Java client redirects
-					// back to the leader. The leader then does *not* direct the client
-					// back to the follower because the follower is not an in sync
-					// replica. If we did not redirect back to the leader, we would spin
-					// loop receiving offset_out_of_range from the follower for Fetch, and
-					// then not_leader_or_follower from the follower for ListOffsets
-					// (even though it is a follower). So, we just set the preferred replica
-					// back to the follower. We go directly back to fetching with the
-					// hope that the offset is available on the leader, and if not, we'll
-					// just get an OOOR error again and fall into case 1 just above.
+					// Give the leader a chance to serve data that only the follower
+					// has lost. If it redirects us and the offset is still out of
+					// range, resolve the reset with ListOffsets on the leader.
+					if retriedFollowerOffset {
+						addList(-1, true)
+						break
+					}
+					c.followerOutOfRange = new(priorOffset)
 					preferreds = append(preferreds, cursorOffsetPreferred{
 						cursorOffsetNext: *partOffset,
 						preferredReplica: c.leader,
