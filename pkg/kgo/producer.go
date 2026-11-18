@@ -1446,11 +1446,14 @@ func (cl *Client) unlingerDueToMaxRecsBuffered() {
 	if cl.cfg.linger <= 0 {
 		return
 	}
+	// As in Flush, we lock to not miss a new topic's partitions.
+	cl.producer.unknownTopicsMu.Lock()
 	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
 			part.records.unlingerAndManuallyDrain()
 		}
 	}
+	cl.producer.unknownTopicsMu.Unlock()
 	cl.cfg.logger.Log(LogLevelDebug, "unlingered all partitions due to hitting max buffered")
 }
 

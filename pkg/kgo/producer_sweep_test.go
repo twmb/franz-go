@@ -408,16 +408,19 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name string
-		read func(cl *Client, r *recBuf) error // r is the new topic's only partition
+		opts []Opt
+		// read runs while the store is stopped. r is the new topic's
+		// only partition, and stored is closed once the store finished.
+		read func(cl *Client, r *recBuf, stored <-chan struct{}) error
 	}{
-		{"takeAddedToTxn", func(cl *Client, r *recBuf) error {
+		{"takeAddedToTxn", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
 			r.addedToTxn.Store(true) // as a produce response does
 			if added := cl.producer.takeAddedToTxn(); len(added) != 1 || added[0] != r {
 				return fmt.Errorf("took %d buffers, want the new partition's", len(added))
 			}
 			return nil
 		}},
-		{"failBufferedRecords", func(cl *Client, r *recBuf) error {
+		{"failBufferedRecords", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
 			cl.UnsafeAbortBufferedRecords()
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -426,7 +429,7 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 			}
 			return nil
 		}},
-		{"resetAllProducerSequences", func(cl *Client, r *recBuf) error {
+		{"resetAllProducerSequences", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
 			cl.resetAllProducerSequences()
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -435,13 +438,23 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 			}
 			return nil
 		}},
+		{"unlingerDueToMaxRecsBuffered", []Opt{ProducerLinger(time.Minute)}, func(cl *Client, r *recBuf, stored <-chan struct{}) error {
+			cl.unlingerDueToMaxRecsBuffered()
+			<-stored // buffering the record starts its linger
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.isLingering {
+				return errors.New("the new partition's record is still lingering")
+			}
+			return nil
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			cl, err := NewClient(
+			cl, err := NewClient(append([]Opt{
 				SeedBrokers("127.0.0.1:1"), // metadata never loads; failures only tick retry counters
 				ManualFlushing(),           // the partitioned record stays buffered
-			)
+			}, test.opts...)...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -488,7 +501,7 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 			}
 
 			read := make(chan error, 1)
-			go func() { read <- test.read(cl, r) }()
+			go func() { read <- test.read(cl, r, storeDone) }()
 			time.Sleep(100 * time.Millisecond) // let the read finish (without the lock) or block on unknownTopicsMu (with the lock)
 
 			l.partsMu.Unlock()
