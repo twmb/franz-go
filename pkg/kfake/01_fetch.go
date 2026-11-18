@@ -370,6 +370,9 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		sp := kmsg.NewFetchResponseTopicPartition()
 		sp.Partition = p
 		sp.ErrorCode = errCode
+		if errCode != 0 {
+			sp.HighWatermark = -1 // Kafka sends no offsets with an error
+		}
 		// Encode empty record sets as an empty-but-present byte slice rather
 		// than null. Technically the protocol allows nullable records here,
 		// but some clients (e.g. librdkafka) interpret a nil slice (length -1)
@@ -468,6 +471,9 @@ full:
 		}
 		if !ok {
 			sp.ErrorCode = kerr.OffsetOutOfRange.Code
+			sp.HighWatermark = -1
+			sp.LastStableOffset = -1
+			sp.LogStartOffset = -1
 			continue
 		}
 

@@ -1378,8 +1378,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// does not ever set afterMilli.
 			if offset.afterMilli {
 				loadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-					replica: -1,
-					Offset:  offset,
+					Offset: offset,
 				})
 				continue
 			}
@@ -1408,8 +1407,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// an epoch.
 			if offset.at >= 0 && offset.epoch >= 0 {
 				loadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
-					replica: -1,
-					Offset:  offset,
+					Offset: offset,
 				})
 				continue
 			}
@@ -1447,8 +1445,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			}
 
 			loadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-				replica: -1,
-				Offset:  offset,
+				Offset: offset,
 			})
 		}
 	}
@@ -1587,22 +1584,11 @@ func (s *consumerSession) doOnMetadataUpdate() {
 
 type offsetLoadMap map[string]map[int32]offsetLoad
 
-// offsetLoad is effectively an Offset, but also includes a potential replica
-// to directly use if a cursor had a preferred replica.
+// offsetLoad is effectively an Offset, but also includes when we last
+// consumed.
 type offsetLoad struct {
-	replica           int32 // -1 means leader
 	lastConsumedMilli int64 // for handling OffsetOutOfRange
 	Offset
-}
-
-func (o offsetLoad) MarshalJSON() ([]byte, error) {
-	if o.replica == -1 {
-		return o.Offset.MarshalJSON()
-	}
-	if o.relative == 0 {
-		return fmt.Appendf(nil, `{"Replica":%d,"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.replica, o.at, o.epoch, o.currentEpoch), nil
-	}
-	return fmt.Appendf(nil, `{"Replica":%d,"At":%d,"Relative":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.replica, o.at, o.relative, o.epoch, o.currentEpoch), nil
 }
 
 func (o offsetLoadMap) errToLoaded(err error) []loadedOffset {
@@ -2375,18 +2361,7 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 				broker := seed
 				if partition >= 0 && partition < int32(len(topicPartitions.partitions)) {
 					topicPartition := topicPartitions.partitions[partition]
-					brokerID := topicPartition.leader
-					if offset.replica != -1 {
-						// If we are fetching from a follower, we can list
-						// offsets against the follower itself. The replica
-						// being non-negative signals that.
-						//
-						// Note this is not actually true (i.e. KIP-392 lies),
-						// but we keep this logic in case we can revert
-						// to using non-leaders someday.
-						brokerID = offset.replica
-					}
-					if tryBroker := findBroker(brokers, brokerID); tryBroker != nil {
+					if tryBroker := findBroker(brokers, topicPartition.leader); tryBroker != nil {
 						broker = tryBroker
 					}
 					offset.currentEpoch = topicPartition.leaderEpoch // ensure we set our latest epoch for the partition
@@ -2849,7 +2824,6 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 						partition: partition,
 						err:       errResetAfterUndefinedEpoch,
 						request: offsetLoad{
-							replica:           -1,
 							lastConsumedMilli: loadPart.lastConsumedMilli,
 							Offset:            NewOffset().At(offset).WithEpoch(loadPart.epoch),
 						},
