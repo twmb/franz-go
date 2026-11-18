@@ -487,7 +487,7 @@ func TestProduceStaleLeaderHintBacksOff(t *testing.T) {
 			name        string
 			epochDelta  int32 // hinted epoch, relative to the one the client has
 			leaderDelta int32 // hinted leader, relative to the real one
-			immediate   int32 // retries that go out at once because the hint moved us
+			immediate   int32 // retries that go out immediately because the hint moved us
 		}{
 			{name: "same_epoch"},
 			{name: "older_epoch", epochDelta: -1},
@@ -554,7 +554,7 @@ func TestProduceStaleLeaderHintBacksOff(t *testing.T) {
 				if got := produces.Load(); got != retries+1 {
 					t.Errorf("got %d produce requests, want %d", got, retries+1)
 				}
-				// A hint that moves us retries at once; every other retry,
+				// A hint that moves us retries immediately; every other retry,
 				// including one for a same-epoch hint at another leader,
 				// waits exactly once. Exactly once also pins drain checking
 				// its backoff after taking an inflight slot, not before.
@@ -566,8 +566,11 @@ func TestProduceStaleLeaderHintBacksOff(t *testing.T) {
 	}
 }
 
-// A hint that names a new leader still moves us and retries there at once.
-func TestProduceLeaderHintMovesWithoutBackoff(t *testing.T) {
+// A hint that names a new leader still moves us and retries there
+// immediately. The move waits for the metadata request in flight. Until the
+// move runs, the consumer does not fetch the partition from the old leader,
+// and after the move the consumer fetches from the new leader.
+func TestLeaderHintMovesWithoutBackoff(t *testing.T) {
 	t.Parallel()
 
 	const topic = "hint-move"
@@ -576,6 +579,7 @@ func TestProduceLeaderHintMovesWithoutBackoff(t *testing.T) {
 	cl := newPlainClient(t, c,
 		kgo.DisableClientMetrics(),
 		kgo.RetryBackoffFn(func(int) time.Duration { backoffs.Add(1); return time.Second }),
+		kgo.ConsumeTopics(topic),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -583,17 +587,41 @@ func TestProduceLeaderHintMovesWithoutBackoff(t *testing.T) {
 	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("warmup")}).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
+	consumeN(t, cl, 1, 5*time.Second)
 	backoffs.Store(0)
 
+	held, release := hold(c, kmsg.Metadata, 0)
+	defer release()
+	cl.ForceMetadataRefresh()
+	select {
+	case <-held:
+	case <-ctx.Done():
+		t.Fatal("the metadata refresh never arrived")
+	}
+
 	old := c.PartitionInfo(topic, 0)
+	fetches := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Fetch}, Nodes: []int32{old.Leader}, TopLevel: true, Observe: true, Count: -1})
 	if err := c.MoveTopicPartition(topic, 0, (old.Leader+1)%2); err != nil {
 		t.Fatal(err)
 	}
 	produces := c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Observe: true, Count: -1})
 
-	if err := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("probe")}).FirstErr(); err != nil {
+	probe := make(chan error, 1)
+	go func() { probe <- cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("probe")}).FirstErr() }()
+	waitHits(t, produces, 1, "the probe was never produced")
+	// The old leader answers its parked fetch at the move. fetches counts
+	// that fetch only if the fetch arrived after the observer was added.
+	spin, cancelSpin := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancelSpin()
+	if fetches.Wait(spin, 2) == nil {
+		t.Errorf("got %d fetches to the old leader while the move was pending, want at most 1", fetches.Hits())
+	}
+	release()
+
+	if err := <-probe; err != nil {
 		t.Fatal(err)
 	}
+	consumeN(t, cl, 1, 5*time.Second)
 	if got := produces.Hits(); got != 2 {
 		t.Errorf("got %d produce requests, want the rejected attempt and its retry", got)
 	}

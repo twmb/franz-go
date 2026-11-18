@@ -851,7 +851,7 @@ type ElectLeadersResults map[string]map[int32]ElectLeadersResult
 // If s is nil, this will elect leaders for all partitions.
 //
 // This will return *AuthError if you do not have ALTER on CLUSTER for
-// kafka-cluster.
+// kafka-cluster, and any other top-level error in the response as is.
 func (cl *Client) ElectLeaders(ctx context.Context, how ElectLeadersHow, s TopicsSet) (ElectLeadersResults, error) {
 	req := kmsg.NewPtrElectLeadersRequest()
 	req.ElectionType = int8(how)

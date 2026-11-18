@@ -788,23 +788,15 @@ const (
 //
 // Lastly, for cooperative consumers, this must selectively delete what was
 // lost from the uncommitted map.
-func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leaving bool) {
-	if !g.cooperative.Load() || leaving { // stage == revokeThisSession if not cooperative
+func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
+	if !g.cooperative.Load() { // stage == revokeThisSession if not cooperative
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
 		g.c.mu.Lock()
-		if leaving {
-			g.c.assignPartitions(nil, assignInvalidateAll, nil, "revoking all assignments because we are leaving the group")
-		} else {
-			g.c.assignPartitions(nil, assignInvalidateAll, nil, "revoking all assignments because we are not cooperative")
-		}
+		g.c.assignPartitions(nil, assignInvalidateAll, nil, "revoking all assignments because we are not cooperative")
 		g.c.mu.Unlock()
 
-		if !g.cooperative.Load() {
-			g.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions", "group", g.cfg.group, "revoking", mtps(g.nowAssigned.read()))
-		} else {
-			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", mtps(g.nowAssigned.read()))
-		}
+		g.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions", "group", g.cfg.group, "revoking", mtps(g.nowAssigned.read()))
 		g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
 		g.nowAssigned.store(nil)
 		g.lastAssigned = nil
@@ -1000,7 +992,7 @@ func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int3
 		defer close(s.prerevokeDone)
 		if g.cooperative.Load() && len(lost) > 0 {
 			g.c.waitAndAddRebalance()
-			g.revoke(revokeLastSession, lost, false)
+			g.revoke(revokeLastSession, lost)
 			g.c.unaddRebalance()
 		}
 		// Now that prerevoke is complete, clear prerevoking so
@@ -1055,7 +1047,7 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 // onRevoked does not run while polled records are processed, then cancels
 // fetchOffsets and waits for it to return so it cannot assign partitions this
 // revoke takes away.
-func (s *assignRevokeSession) revoke(g *groupConsumer, leaving bool) <-chan struct{} {
+func (s *assignRevokeSession) revoke(g *groupConsumer) <-chan struct{} {
 	go func() {
 		defer close(s.revokeDone)
 		<-s.assignDone
@@ -1063,7 +1055,7 @@ func (s *assignRevokeSession) revoke(g *groupConsumer, leaving bool) <-chan stru
 		defer g.c.unaddRebalance()
 		s.cancelFetch()
 		<-s.fetchDone
-		g.revoke(revokeThisSession, nil, leaving)
+		g.revoke(revokeThisSession, nil)
 	}()
 	return s.revokeDone
 }
@@ -1401,10 +1393,7 @@ func (g *groupConsumer) heartbeat(initialHb time.Duration, fetchErrCh <-chan err
 			// Now we call the user provided revoke callback, even
 			// if cooperative: if cooperative, this only revokes
 			// partitions we no longer want to consume.
-			//
-			// If the err is context.Canceled, the group is being
-			// left and we revoke everything.
-			revoked = s.revoke(g, errors.Is(err, context.Canceled))
+			revoked = s.revoke(g)
 			// The revoke cancels fetchOffsets; ignore the resulting
 			// context.Canceled, which manage would treat as leaving
 			// the group.
@@ -2069,8 +2058,8 @@ start:
 	// heartbeat that assigned partitions and this OffsetFetch.
 	// Under rebalance churn STALE can fire several times in a row
 	// while the server is still advancing epochs; force a
-	// heartbeat and retry up to 10 times (each attempt pauses for
-	// the HB roundtrip, so this is paced, not a spin). Beyond 10,
+	// heartbeat and retry up to 10 times (each attempt waits for
+	// the HB roundtrip, so this does not spin loop). Beyond 10,
 	// surface the error so manage848 can reset the member and
 	// re-initialJoin rather than looping here forever.
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -3958,14 +3947,14 @@ func (g *groupConsumer) commit(
 				}
 				_, newGen := g.memberGen.load()
 				if newGen != req.Generation {
-					// A partition left our assignment after we built
-					// this commit. It may have moved to another member
-					// and back to us, so its offset can be from the
-					// earlier ownership, and resending it under our new
-					// epoch could rewind the other member's commit. We
-					// return STALE_MEMBER_EPOCH instead; Kafka 4.3+ also
-					// rejects such a commit at its original epoch
-					// (KIP-1251).
+					// If a partition left our assignment after we
+					// built this commit, the partition may have moved
+					// to another member and back to us. Its offset can
+					// then be from the earlier ownership, and resending
+					// the offset under our new epoch could rewind the
+					// other member's commit. We return
+					// STALE_MEMBER_EPOCH instead; Kafka 4.3+ also rejects
+					// such a commit at its original epoch (KIP-1251).
 					if g.revokes.Load() != revokesAtBuild {
 						g.cfg.logger.Log(LogLevelInfo, "offset commit received STALE_MEMBER_EPOCH after a partition left our assignment, not retrying",
 							"group", g.cfg.group,

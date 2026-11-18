@@ -428,6 +428,7 @@ func TestValidateDSLAgainstKafkaJSON(t *testing.T) {
 }
 
 func validateMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
+	reported := make(map[string]bool)
 	t.Helper()
 
 	validVR := parseVersionRange(msg.ValidVersions)
@@ -474,7 +475,7 @@ func validateMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
 		maxV = jsonMax
 	}
 	for v := validVR.min; v <= maxV; v++ {
-		compareFieldsAtVersion(t, msg.Name, v, dsl.FlexibleAt, msg.Fields, dsl.Fields, commons)
+		compareFieldsAtVersion(t, reported, msg.Name, v, dsl.FlexibleAt, msg.Fields, dsl.Fields, commons)
 	}
 
 	// A request's top-level TimeoutMs is how long Kafka can hold the
@@ -499,7 +500,7 @@ func validateMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
 	}
 }
 
-func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt int, jsonFields []kafkaField, dslFields []StructField, commons map[string]kafkaStruct) {
+func compareFieldsAtVersion(t *testing.T, reported map[string]bool, msgName string, version, flexibleAt int, jsonFields []kafkaField, dslFields []StructField, commons map[string]kafkaStruct) {
 	t.Helper()
 
 	prefix := fmt.Sprintf("v%d", version)
@@ -565,14 +566,14 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 			t.Errorf("%s %s field %d (%s/%s): type mismatch: JSON %s (%s) vs DSL %s (%s)",
 				msgName, prefix, i, jf.Name, df.FieldName, jType, jf.Type, dType, df.Type.TypeName())
 		}
-		compareDefault(t, msgName, jf, df)
+		compareDefault(t, reported, msgName, jf, df)
 
 		// Recurse into struct fields.
 		if jType == "struct" || strings.HasPrefix(jType, "[]struct") {
 			innerJSON := resolvedJSONFields(jf, commons)
 			innerDSL := innerStructFields(df.Type)
 			if innerJSON != nil && innerDSL != nil {
-				compareFieldsAtVersion(t, msgName+"."+jf.Name, version, flexibleAt, innerJSON, innerDSL, commons)
+				compareFieldsAtVersion(t, reported, msgName+"."+jf.Name, version, flexibleAt, innerJSON, innerDSL, commons)
 			}
 		}
 	}
@@ -592,14 +593,14 @@ func compareFieldsAtVersion(t *testing.T, msgName string, version, flexibleAt in
 			t.Errorf("%s %s tag %d (%s/%s): type mismatch: JSON %s (%s) vs DSL %s (%s)",
 				msgName, prefix, tag, jf.Name, df.FieldName, jType, jf.Type, dType, df.Type.TypeName())
 		}
-		compareDefault(t, msgName, jf, df)
+		compareDefault(t, reported, msgName, jf, df)
 
 		// Recurse into struct fields.
 		if jType == "struct" || strings.HasPrefix(jType, "[]struct") {
 			innerJSON := resolvedJSONFields(jf, commons)
 			innerDSL := innerStructFields(df.Type)
 			if innerJSON != nil && innerDSL != nil {
-				compareFieldsAtVersion(t, msgName+"."+jf.Name, version, flexibleAt, innerJSON, innerDSL, commons)
+				compareFieldsAtVersion(t, reported, msgName+"."+jf.Name, version, flexibleAt, innerJSON, innerDSL, commons)
 			}
 		}
 	}
@@ -618,13 +619,12 @@ var acceptedDefaults = map[string]string{
 // JSON defines none.
 const defaultTimeoutMillis = "15000"
 
-var reportedDefaults = make(map[string]bool)
-
 // compareDefault reports a DSL default that differs from Kafka's JSON: a
 // default Kafka defines and the DSL lacks, or a DSL default Kafka does not
-// define. TimeoutMillis is the exception: where Kafka defines no default, the
-// DSL must use defaultTimeoutMillis.
-func compareDefault(t *testing.T, msgName string, jf kafkaField, df StructField) {
+// define. TimeoutMillis is the exception: where Kafka defines no default, a
+// DSL default must be defaultTimeoutMillis. A field is reported once per
+// message, not once per version.
+func compareDefault(t *testing.T, reported map[string]bool, msgName string, jf kafkaField, df StructField) {
 	t.Helper()
 	jd, jhas := jsonDefault(jf)
 	dd, dhas := dslDefault(df)
@@ -643,10 +643,10 @@ func compareDefault(t *testing.T, msgName string, jf kafkaField, df StructField)
 	if want, ok := acceptedDefaults[key]; ok && dd == want {
 		return
 	}
-	if reportedDefaults[key] {
+	if reported[key] {
 		return
 	}
-	reportedDefaults[key] = true
+	reported[key] = true
 	show := func(s string, has bool) string {
 		if !has {
 			return "none"
@@ -886,8 +886,9 @@ func validateMiscMessage(t *testing.T, msg kafkaMessage, dsl *Struct) {
 	if jsonMax >= 0 && jsonMax < maxV {
 		maxV = jsonMax
 	}
+	reported := make(map[string]bool)
 	for v := validVR.min; v <= maxV; v++ {
-		compareFieldsAtVersion(t, msg.Name, v, flexibleAt, msg.Fields, dslFields, commons)
+		compareFieldsAtVersion(t, reported, msg.Name, v, flexibleAt, msg.Fields, dslFields, commons)
 	}
 }
 
