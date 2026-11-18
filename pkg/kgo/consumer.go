@@ -2606,6 +2606,10 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			if err := kerr.ErrorForCode(rPartition.ErrorCode); err != nil {
+				delete(loadParts, partition)
+				if len(loadParts) == 0 {
+					delete(load, topic)
+				}
 				loaded.add(loadedOffset{
 					topic:     topic,
 					partition: partition,
@@ -2798,6 +2802,10 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 			}
 
 			if err := kerr.ErrorForCode(rPartition.ErrorCode); err != nil {
+				delete(loadParts, partition)
+				if len(loadParts) == 0 {
+					delete(load, topic)
+				}
 				loaded.add(loadedOffset{
 					topic:     topic,
 					partition: partition,
