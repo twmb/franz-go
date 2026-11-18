@@ -2837,7 +2837,7 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 				// without history, or a leader that diverged from the one we consumed from. Asking again gets
 				// the same answer, since a leader's cache only gains the epochs it writes itself. We cannot
 				// locate where the log diverged, so we reset exactly as an out of range fetch after consuming
-				// does; see the addList closure in source.go.
+				// does; see handleReqResp.
 				//
 				// lastConsumedMilli is non-zero only if we consumed something. With nothing consumed there is
 				// no loss to reset from, and with NoResetOffset we never move, so in both cases we keep the

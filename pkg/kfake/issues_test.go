@@ -205,8 +205,11 @@ func TestIssue885(t *testing.T) {
 		}
 
 		if req.Topics[0].Partitions[0].FetchOffset < followerLogStart {
+			// Kafka sends no offsets with this error.
 			rpp.ErrorCode = kerr.OffsetOutOfRange.Code
-			rpp.LogStartOffset = 2
+			rpp.HighWatermark = -1
+			rpp.LastStableOffset = -1
+			rpp.LogStartOffset = -1
 			followerOOOR = true
 			return resp, nil, true
 		}

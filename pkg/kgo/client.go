@@ -960,7 +960,7 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 // This function is always used *after* at least one request has been issued.
 //
 // NOTE: This is a weak check; we check if any broker in the cluster supports
-// the request. We use this function in three locations:
+// the request. We use this function in two locations:
 //
 //  1. When using the LeaderEpoch returned in a metadata response. This guards
 //     against buggy brokers that return 0 rather than -1 even if they do not
@@ -969,8 +969,6 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 //  2. When deciding whether to keep LeaderEpoch from fetched offsets.
 //     Realistically, clients should only commit epochs if the cluster supports
 //     them.
-//  3. When receiving OffsetOutOfRange when follower fetching and we fetched
-//     past the end.
 //
 // In any of these cases, if we OffsetForLeaderEpoch against a broker that does
 // not support (even though one in the cluster does), we will loop fail until
