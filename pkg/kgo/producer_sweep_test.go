@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -435,6 +436,15 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 			defer r.mu.Unlock()
 			if !r.needSeqReset {
 				return errors.New("the new partition's sequences were not reset")
+			}
+			return nil
+		}},
+		{"bumpRepeatedLoadErr", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
+			cl.bumpRepeatedLoadErr(io.EOF) // a retryable error, which does not fail the batch
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if len(r.batches) != 1 || r.batches[0].tries.Load() != 1 {
+				return errors.New("the new partition's batch did not count the load error")
 			}
 			return nil
 		}},

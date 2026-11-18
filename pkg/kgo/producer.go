@@ -1530,13 +1530,15 @@ func (cl *Client) Flush(ctx context.Context) error {
 func (cl *Client) bumpRepeatedLoadErr(err error) {
 	p := &cl.producer
 
+	// As in failBufferedRecords, we lock before reading the stored
+	// partitions to not miss a new topic's records.
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
 	for _, partitions := range p.topics.load() {
 		for _, partition := range partitions.load().partitions {
 			partition.records.bumpRepeatedLoadErr(err)
 		}
 	}
-	p.unknownTopicsMu.Lock()
-	defer p.unknownTopicsMu.Unlock()
 	for _, unknown := range p.unknownTopics {
 		select {
 		case unknown.wait <- err:
