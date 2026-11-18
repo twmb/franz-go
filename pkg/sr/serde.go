@@ -2,7 +2,9 @@ package sr
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"sync"
@@ -15,9 +17,10 @@ var (
 	// Decode with a missing new value function.
 	ErrNotRegistered = errors.New("registration is missing for encode/decode")
 
-	// ErrBadHeader is returned from Decode when the input slice is shorter
-	// than five bytes, or if the first byte is not the magic 0 byte.
-	ErrBadHeader = errors.New("5 byte header for value is missing or does not have 0 magic byte")
+	// ErrBadHeader is returned when decoding if the input is too short to
+	// contain a schema ID or GUID header, or if the first byte is not the
+	// expected magic byte.
+	ErrBadHeader = errors.New("schema header is missing, too short, or does not have the expected magic byte")
 )
 
 type (
@@ -435,6 +438,13 @@ var defaultSerdeHeader = new(ConfluentHeader)
 // then the encoded message.
 //
 // https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#wire-format
+//
+// Confluent also has a GUID form: 1, then the 16 byte schema GUID, then index
+// (only protobuf). This form is not prepended to the message; it is the value
+// of the "__key_schema_id" or "__value_schema_id" record header, and the
+// record key or value is the bare encoded message. AppendEncodeGUID,
+// DecodeGUID, and DecodeIDOrGUID support this form; setting and reading the
+// record header is up to the caller.
 type ConfluentHeader struct{}
 
 // AppendEncode appends an encoded header to b according to the Confluent wire
@@ -448,19 +458,35 @@ func (*ConfluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, err
 		byte(id>>8),
 		byte(id>>0),
 	)
+	return appendIndex(b, index), nil
+}
 
-	if len(index) > 0 {
-		if len(index) == 1 && index[0] == 0 {
-			b = append(b, 0) // first-index shortcut (one type in the protobuf)
-		} else {
-			b = binary.AppendVarint(b, int64(len(index)))
-			for _, idx := range index {
-				b = binary.AppendVarint(b, int64(idx))
-			}
-		}
+// AppendEncodeGUID appends the GUID form of the header to b, for use as the
+// value of a "__key_schema_id" or "__value_schema_id" record header. The guid
+// must be in the text form that the registry returns
+// ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").
+func (*ConfluentHeader) AppendEncodeGUID(b []byte, guid string, index []int) ([]byte, error) {
+	raw, ok := parseGUID(guid)
+	if !ok {
+		return nil, fmt.Errorf("invalid schema GUID %q", guid)
 	}
+	b = append(b, 1)
+	b = append(b, raw[:]...)
+	return appendIndex(b, index), nil
+}
 
-	return b, nil
+func appendIndex(b []byte, index []int) []byte {
+	if len(index) == 0 {
+		return b
+	}
+	if len(index) == 1 && index[0] == 0 {
+		return append(b, 0) // first-index shortcut (one type in the protobuf)
+	}
+	b = binary.AppendVarint(b, int64(len(index)))
+	for _, idx := range index {
+		b = binary.AppendVarint(b, int64(idx))
+	}
+	return b
 }
 
 // DecodeID strips and decodes the schema ID from b. It returns the ID alongside
@@ -472,6 +498,29 @@ func (*ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
 	}
 	id := binary.BigEndian.Uint32(b[1:5])
 	return int(id), b[5:], nil
+}
+
+// DecodeGUID strips and decodes the schema GUID from b, which is usually the
+// value of a "__key_schema_id" or "__value_schema_id" record header. It
+// returns the GUID in lowercase text form alongside the unread bytes. If b
+// does not begin with the magic 1 byte or b contains less than 17 bytes it
+// returns ErrBadHeader.
+func (*ConfluentHeader) DecodeGUID(b []byte) (string, []byte, error) {
+	if len(b) < 17 || b[0] != 1 {
+		return "", nil, ErrBadHeader
+	}
+	return formatGUID(b[1:17]), b[17:], nil
+}
+
+// DecodeIDOrGUID is DecodeID if b begins with the magic 0 byte and DecodeGUID
+// if b begins with the magic 1 byte. The returned guid is empty for an ID.
+func (h *ConfluentHeader) DecodeIDOrGUID(b []byte) (id int, guid string, out []byte, err error) {
+	if len(b) > 0 && b[0] == 1 {
+		guid, out, err = h.DecodeGUID(b)
+		return 0, guid, out, err
+	}
+	id, out, err = h.DecodeID(b)
+	return id, "", out, err
 }
 
 // UpdateID replaces the schema ID in b. If the header does not contain the
@@ -514,6 +563,34 @@ func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 		index[i] = int(idx)
 	}
 	return index, r.b, nil
+}
+
+func parseGUID(s string) (g [16]byte, ok bool) {
+	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return g, false
+	}
+	var h [32]byte
+	n := copy(h[:], s[:8])
+	n += copy(h[n:], s[9:13])
+	n += copy(h[n:], s[14:18])
+	n += copy(h[n:], s[19:23])
+	copy(h[n:], s[24:])
+	_, err := hex.Decode(g[:], h[:])
+	return g, err == nil
+}
+
+func formatGUID(g []byte) string {
+	var s [36]byte
+	hex.Encode(s[:8], g[:4])
+	s[8] = '-'
+	hex.Encode(s[9:13], g[4:6])
+	s[13] = '-'
+	hex.Encode(s[14:18], g[6:8])
+	s[18] = '-'
+	hex.Encode(s[19:23], g[8:10])
+	s[23] = '-'
+	hex.Encode(s[24:], g[10:16])
+	return string(s[:])
 }
 
 type bReader struct{ b []byte }
