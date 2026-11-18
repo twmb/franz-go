@@ -2781,7 +2781,7 @@ func (recBuf *recBuf) mergeSpan(span []*recBatch, total, size int, cc *compresso
 		swept        bool
 		err          error
 	)
-	// A consumer decompresses a batch into one allocation, so the
+	// A consumer decompresses a whole batch into memory, so the
 	// uncompressed size is bounded as well.
 	maxUncompressed := recBuf.cl.cfg.maxDecompressBatchBytes
 	fits := func(n int) bool {
