@@ -1537,8 +1537,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 						reset = NewOffset().AtStart()
 					}
 					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-						replica: -1,
-						Offset:  reset,
+						Offset: reset,
 					})
 					s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
 						"broker", logID(s.nodeID),
@@ -1554,7 +1553,6 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					// epoch never reaches the wire on a list load; we carry the epoch we consumed at so
 					// the reset can report it in ErrDataLoss.
 					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-						replica:           -1,
 						lastConsumedMilli: c.lastConsumedMilli(),
 						Offset:            NewOffset().At(partOffset.offset).WithEpoch(c.lastConsumedEpoch),
 					})
@@ -1581,7 +1579,6 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// not check KIP-320 support here.
 				if partOffset.lastConsumedEpoch >= 0 {
 					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
-						replica: -1,
 						// If the validation answers UNDEFINED_EPOCH_OFFSET, the reset it issues follows
 						// ConsumeResetOffset; see loadEpochsForBrokerLoad.
 						lastConsumedMilli: c.lastConsumedMilli(),
