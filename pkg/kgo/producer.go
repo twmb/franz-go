@@ -45,6 +45,11 @@ type producer struct {
 	// unknownTopics buffers all records for topics that are not loaded.
 	// The map is to a pointer to a slice for reasons documented in
 	// waitUnknownTopic.
+	//
+	// storePartitionsUpdate keeps unknownTopicsMu locked while it buffers
+	// a new topic's records and then stores the topic's partitions. A
+	// reader of topics that must not miss those partitions locks
+	// unknownTopicsMu first.
 	unknownTopicsMu xsync.Mutex
 	unknownTopics   map[string]*unknownTopicProduces
 
@@ -1121,6 +1126,8 @@ func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error)
 // 2.5+, it is safe to call this if the producer ID can be reset (KIP-360),
 // in EndTransaction.
 func (cl *Client) resetAllProducerSequences() {
+	cl.producer.unknownTopicsMu.Lock()
+	defer cl.producer.unknownTopicsMu.Unlock()
 	for _, tp := range cl.producer.topics.load() {
 		for _, p := range tp.load().partitions {
 			p.records.mu.Lock()
@@ -1441,11 +1448,13 @@ func (cl *Client) unlingerDueToMaxRecsBuffered() {
 	if cl.cfg.linger <= 0 {
 		return
 	}
+	cl.producer.unknownTopicsMu.Lock()
 	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
 			part.records.unlingerAndManuallyDrain()
 		}
 	}
+	cl.producer.unknownTopicsMu.Unlock()
 	cl.cfg.logger.Log(LogLevelDebug, "unlingered all partitions due to hitting max buffered")
 }
 
@@ -1472,11 +1481,13 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// must wake anything that could be lingering up, after which all sinks
 	// will loop draining.
 	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
+		p.unknownTopicsMu.Lock()
 		for _, parts := range p.topics.load() {
 			for _, part := range parts.load().partitions {
 				part.records.unlingerAndManuallyDrain()
 			}
 		}
+		p.unknownTopicsMu.Unlock()
 	}
 
 	quit := false
@@ -1517,13 +1528,13 @@ func (cl *Client) Flush(ctx context.Context) error {
 func (cl *Client) bumpRepeatedLoadErr(err error) {
 	p := &cl.producer
 
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
 	for _, partitions := range p.topics.load() {
 		for _, partition := range partitions.load().partitions {
 			partition.records.bumpRepeatedLoadErr(err)
 		}
 	}
-	p.unknownTopicsMu.Lock()
-	defer p.unknownTopicsMu.Unlock()
 	for _, unknown := range p.unknownTopics {
 		select {
 		case unknown.wait <- err:
@@ -1543,6 +1554,11 @@ func (cl *Client) bumpRepeatedLoadErr(err error) {
 func (cl *Client) failBufferedRecords(err error) {
 	p := &cl.producer
 
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
 	for _, partitions := range p.topics.load() {
 		for _, partition := range partitions.load().partitions {
 			recBuf := partition.records
@@ -1551,11 +1567,6 @@ func (cl *Client) failBufferedRecords(err error) {
 			recBuf.mu.Unlock()
 		}
 	}
-
-	p.topicsMu.Lock()
-	defer p.topicsMu.Unlock()
-	p.unknownTopicsMu.Lock()
-	defer p.unknownTopicsMu.Unlock()
 
 	toStore := p.topics.clone()
 	defer p.topics.storeData(toStore)

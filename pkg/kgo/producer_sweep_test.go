@@ -3,6 +3,8 @@ package kgo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -393,6 +395,136 @@ func TestAuditPurgeVsProduceUnknownTopicNoOrphan(t *testing.T) {
 	case <-pU2:
 	case <-time.After(10 * time.Second):
 		t.Fatal("second U record's promise never fired, even through client close")
+	}
+}
+
+// storePartitionsUpdate buffers a new topic's first records before it stores
+// the topic's partitions, both under unknownTopicsMu. Anything that must see
+// the partition of every buffered record has to wait for the store.
+//
+// Each case stops storePartitionsUpdate before it buffers the record
+// (doPartition blocks on partsMu, which the test locks), calls a function
+// that reads the topics, and then lets the store finish.
+func TestReadersWaitForFirstPartitions(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		opts []Opt
+		// read runs while the store is stopped. r is the new topic's
+		// only partition, and stored is closed once the store finished.
+		read func(cl *Client, r *recBuf, stored <-chan struct{}) error
+	}{
+		{"takeAddedToTxn", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
+			r.addedToTxn.Store(true) // as a produce response does
+			if added := cl.producer.takeAddedToTxn(); len(added) != 1 || added[0] != r {
+				return fmt.Errorf("took %d buffers, want the new partition's", len(added))
+			}
+			return nil
+		}},
+		{"failBufferedRecords", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
+			cl.UnsafeAbortBufferedRecords()
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if len(r.batches) != 0 {
+				return errors.New("the record is still buffered after the abort")
+			}
+			return nil
+		}},
+		{"resetAllProducerSequences", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
+			cl.resetAllProducerSequences()
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if !r.needSeqReset {
+				return errors.New("the new partition's sequences were not reset")
+			}
+			return nil
+		}},
+		{"bumpRepeatedLoadErr", nil, func(cl *Client, r *recBuf, _ <-chan struct{}) error {
+			cl.bumpRepeatedLoadErr(io.EOF) // a retryable error, which does not fail the batch
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if len(r.batches) != 1 || r.batches[0].tries.Load() != 1 {
+				return errors.New("the new partition's batch did not count the load error")
+			}
+			return nil
+		}},
+		{"unlingerDueToMaxRecsBuffered", []Opt{ProducerLinger(time.Minute)}, func(cl *Client, r *recBuf, stored <-chan struct{}) error {
+			cl.unlingerDueToMaxRecsBuffered()
+			<-stored // buffering the record starts its linger
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.isLingering {
+				return errors.New("the new partition's record is still lingering")
+			}
+			return nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cl, err := NewClient(append([]Opt{
+				SeedBrokers("127.0.0.1:1"), // metadata never loads; failures only tick retry counters
+				ManualFlushing(),           // the partitioned record stays buffered
+			}, test.opts...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cl.Close()
+			p := &cl.producer
+
+			// The first produce to T stores T in producer.topics without
+			// partitions and buffers the record in unknownTopics.
+			cl.Produce(context.Background(), &Record{Topic: "T", Value: []byte("v")}, nil)
+			p.unknownTopicsMu.Lock()
+			unknown := p.unknownTopics["T"]
+			p.unknownTopicsMu.Unlock()
+			if unknown == nil {
+				t.Fatal("first produce to T did not buffer in unknownTopics")
+			}
+
+			// The partitions a metadata load would build for T.
+			tp := metadataPartition{
+				topic:  "T",
+				leader: 1,
+				sns:    sinkAndSource{sink: cl.newSink(1)},
+			}.newPartition(cl, partitionKindProduce)
+			r := tp.records
+			r.sink.addRecBuf(r)
+			l := p.topics.load()["T"]
+			lv := &topicPartitionsData{
+				topic:              "T",
+				partitions:         []*topicPartition{tp},
+				writablePartitions: []*topicPartition{tp},
+			}
+
+			l.partsMu.Lock()
+			storeDone := make(chan struct{})
+			go func() {
+				defer close(storeDone)
+				cl.storePartitionsUpdate("T", l, lv, false)
+			}()
+
+			// storePartitionsUpdate closes the wait channel just before
+			// it partitions, so once the channel is closed the store is
+			// stopped in doPartition. Failed metadata loads may send
+			// errors on the channel first.
+			for range unknown.wait {
+			}
+
+			read := make(chan error, 1)
+			go func() { read <- test.read(cl, r, storeDone) }()
+			time.Sleep(100 * time.Millisecond) // let the read finish (without the lock) or block on unknownTopicsMu (with the lock)
+
+			l.partsMu.Unlock()
+			<-storeDone
+			select {
+			case err := <-read:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the read never returned after the store finished")
+			}
+		})
 	}
 }
 
