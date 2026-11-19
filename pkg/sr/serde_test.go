@@ -2,6 +2,7 @@ package sr
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"reflect"
@@ -261,6 +262,9 @@ func TestConfluentHeader(t *testing.T) {
 	}
 	if _, _, err := h.DecodeIndex([]byte{1}, 2); err != ErrBadHeader {
 		t.Errorf("got %v != exp ErrBadHeader", err)
+	}
+	if _, _, err := h.DecodeIndex(binary.AppendVarint(nil, 1<<62), 0); err != io.EOF {
+		t.Errorf("got %v != exp io.EOF", err)
 	}
 }
 
