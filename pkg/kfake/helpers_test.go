@@ -76,7 +76,7 @@ func newShareConsumer(t *testing.T, c *Cluster, topic, group string, opts ...kgo
 }
 
 // verifyZeroRecords polls for the given duration and fails if any records
-// are returned.
+// are returned, or if a poll returns with neither records nor an error.
 func verifyZeroRecords(t *testing.T, cl *kgo.Client, timeout time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -85,6 +85,9 @@ func verifyZeroRecords(t *testing.T, cl *kgo.Client, timeout time.Duration) {
 	for ctx.Err() == nil {
 		fetches := cl.PollFetches(ctx)
 		got += len(fetches.Records())
+		if fetches.Empty() && fetches.Err() == nil {
+			t.Fatal("poll returned with neither records nor an error")
+		}
 	}
 	if got > 0 {
 		t.Errorf("expected zero records, got %d", got)
@@ -376,6 +379,11 @@ func consumeN(t *testing.T, cl *kgo.Client, n int, timeout time.Duration) []*kgo
 			}
 			t.Fatalf("consume errors: %v", errs)
 		}
+		fs.EachPartition(func(p kgo.FetchTopicPartition) {
+			if len(p.Records) == 0 {
+				t.Fatalf("poll returned %s/%d with no records and no error", p.Topic, p.Partition)
+			}
+		})
 		fs.EachRecord(func(r *kgo.Record) {
 			records = append(records, r)
 		})

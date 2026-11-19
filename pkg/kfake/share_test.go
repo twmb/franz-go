@@ -3129,14 +3129,15 @@ func TestShareGroupPurgeSendsPendingAcks(t *testing.T) {
 }
 
 // TestShareGroupResumeWakesFetch verifies that resuming a paused partition
-// restarts a share source's fetch loop after it exited with nothing to fetch.
+// restarts a share source's fetch loop after it exited with nothing to fetch,
+// and that a poll waits while every buffered partition is paused.
 func TestShareGroupResumeWakesFetch(t *testing.T) {
 	t.Parallel()
 
 	const topic = "share-resume"
 	const group = "share-resume-g"
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-	produceShareN(t, c, topic, group, 1)
+	produceShareN(t, c, topic, group, 2)
 
 	var forgets atomic.Int32
 	c.ControlKey(int16(kmsg.ShareFetch), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
@@ -3151,13 +3152,14 @@ func TestShareGroupResumeWakesFetch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for n := 0; n < 1 && ctx.Err() == nil; {
-		n += len(cl.PollFetches(ctx).Records())
+		n += len(cl.PollRecords(ctx, 1).Records())
 	}
 
 	// Pausing the only partition forgets it, after which the source's
 	// loop has nothing to do and exits. The sleep only gives the loop time
 	// to exit; if it has not, the test passes without covering the bug.
 	cl.PauseFetchTopics(topic)
+	verifyZeroRecords(t, cl, 200*time.Millisecond) // the second record is buffered and paused
 	waitFor(t, 5*time.Second, "partition never forgotten after pause", func() bool { return forgets.Load() > 0 })
 	time.Sleep(100 * time.Millisecond)
 
