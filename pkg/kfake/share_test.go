@@ -341,6 +341,81 @@ func TestShareGroupAcquisitionLockExpiry(t *testing.T) {
 	leaveShareGroupRaw(t, cl1, group, memberID1)
 }
 
+// TestShareGroupPollSkipsExpiredBufferedRecords verifies that a poll does not
+// return buffered records whose acquisition lock has already expired. Such
+// records are no longer held by this member: the broker can hand them to
+// another member and acks for them fail. They end up in the buffer when the
+// user stops polling for longer than the lock, either because a partial
+// PollRecords left them behind or because the source fetched again in the
+// background once the previous poll drained it.
+func TestShareGroupPollSkipsExpiredBufferedRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		poll func(context.Context, *kgo.Client) kgo.Fetches
+	}{
+		{"PollFetches", func(ctx context.Context, cl *kgo.Client) kgo.Fetches { return cl.PollFetches(ctx) }},
+		{"PollRecords", func(ctx context.Context, cl *kgo.Client) kgo.Fetches { return cl.PollRecords(ctx, 2) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			topic := "share-expired-buffer-" + tc.name
+			group := "share-test-expired-buffer-" + tc.name
+			const total = 5
+
+			c := newCluster(t,
+				NumBrokers(1),
+				SeedTopics(1, topic),
+				BrokerConfigs(map[string]string{
+					"group.share.record.lock.duration.ms": "500",
+					"share.record.lock.sweep.interval.ms": "20",
+				}),
+			)
+			produceShareN(t, c, topic, group, total)
+
+			cl := newShareConsumer(t, c, topic, group)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			// First delivery, left unacked.
+			var first int
+			for first == 0 && ctx.Err() == nil {
+				first = len(tc.poll(ctx, cl).Records())
+			}
+
+			// Stop polling for longer than the lock. Records left in the
+			// buffer (PollRecords), or acquired again in the background
+			// once the first lock expired (PollFetches), outlive their
+			// own lock while nobody polls.
+			time.Sleep(2 * time.Second)
+
+			var got int
+			for got < total && ctx.Err() == nil {
+				fetches := tc.poll(ctx, cl)
+				now := time.Now()
+				for _, r := range fetches.Records() {
+					if deadline := r.AcquisitionDeadline(); now.After(deadline) {
+						t.Fatalf("poll returned offset %d (delivery %d) %v after its acquisition lock expired",
+							r.Offset, r.DeliveryCount(), now.Sub(deadline).Round(time.Millisecond))
+					}
+					r.Ack(kgo.AckAccept)
+					got++
+				}
+			}
+			if got < total {
+				t.Fatalf("expected %d records after the stall, got %d", total, got)
+			}
+			if err := cl.FlushAcks(ctx); err != nil {
+				t.Fatalf("flush: %v", err)
+			}
+			verifyZeroRecords(t, cl, time.Second)
+		})
+	}
+}
+
 // TestShareGroupSessionEpoch verifies that share session epoch tracking works:
 // invalid epoch returns INVALID_SHARE_SESSION_EPOCH, and unknown session
 // returns SHARE_SESSION_NOT_FOUND.

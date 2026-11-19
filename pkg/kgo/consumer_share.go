@@ -1586,6 +1586,7 @@ func (s *sourceShare) takeBuffered(paused pausedTopics) Fetch {
 			}
 			t.Partitions = keepp
 		}
+		t.Partitions = dropExpiredShareRecords(t.Partitions)
 		if len(t.Partitions) > 0 {
 			keep = append(keep, t)
 		}
@@ -1593,6 +1594,37 @@ func (s *sourceShare) takeBuffered(paused pausedTopics) Fetch {
 	f.Topics = keep
 
 	return f
+}
+
+// dropExpiredShareRecords removes records whose acquisition lock has passed
+// while they were buffered. The broker has taken them back: it can deliver
+// them to another member, and acks for them fail. They are not acked here
+// either. A partition left with no records is removed unless it carries an
+// error.
+func dropExpiredShareRecords(ps []FetchPartition) []FetchPartition {
+	now := time.Now().UnixNano()
+	keep := ps[:0]
+	for _, p := range ps {
+		if shareRecordsExpired(p.Records, now) {
+			p.Records = nil
+			if p.Err == nil {
+				continue
+			}
+		}
+		keep = append(keep, p)
+	}
+	return keep
+}
+
+// shareRecordsExpired returns whether the acquisition lock of a buffered
+// partition's records has passed. All records from one ShareFetch response
+// share one deadline.
+func shareRecordsExpired(rs []*Record, now int64) bool {
+	if len(rs) == 0 {
+		return false
+	}
+	st := shareAckFromCtx(rs[0])
+	return st != nil && st.slab.acqLockDeadlineNanos <= now
 }
 
 func (s *sourceShare) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
@@ -1605,6 +1637,7 @@ func (s *sourceShare) takeNBuffered(paused pausedTopics, n int) (Fetch, int, boo
 
 	b := &s.buffered
 	bf := &b.fetch
+	now := time.Now().UnixNano()
 	for len(bf.Topics) > 0 && n > 0 {
 		t := &bf.Topics[0]
 
@@ -1645,6 +1678,16 @@ func (s *sourceShare) takeNBuffered(paused pausedTopics, n int) (Fetch, int, boo
 				batchAckRecords(sc, p.Records, AckRelease, false)
 				t.Partitions = t.Partitions[1:]
 				continue
+			}
+
+			if shareRecordsExpired(p.Records, now) {
+				ensureTopicStripped()
+				rtstrip.Partitions = append(rtstrip.Partitions, *p)
+				p.Records = nil
+				if p.Err == nil {
+					t.Partitions = t.Partitions[1:]
+					continue
+				}
 			}
 
 			ensureTopicAdded()
