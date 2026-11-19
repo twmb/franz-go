@@ -414,7 +414,9 @@ func (sc *shareConsumer) poll(ctx context.Context, maxPollRecords int) Fetches {
 		sc.c.sourcesReadyMu.Lock()
 		if maxPollRecords < 0 {
 			for _, s := range sc.c.sourcesReadyForDraining {
-				fetches = append(fetches, s.share.takeBuffered(paused))
+				if f := s.share.takeBuffered(paused); len(f.Topics) > 0 {
+					fetches = append(fetches, f)
+				}
 			}
 			sc.c.sourcesReadyForDraining = nil
 		} else {
@@ -426,7 +428,9 @@ func (sc *shareConsumer) poll(ctx context.Context, maxPollRecords int) Fetches {
 					sc.c.sourcesReadyForDraining = sc.c.sourcesReadyForDraining[1:]
 				}
 				remaining -= taken
-				fetches = append(fetches, f)
+				if len(f.Topics) > 0 {
+					fetches = append(fetches, f)
+				}
 			}
 		}
 		fetches = append(fetches, sc.c.fakeReadyForDraining...)
@@ -438,46 +442,43 @@ func (sc *shareConsumer) poll(ctx context.Context, maxPollRecords int) Fetches {
 		}
 	}
 
-	fill()
-	sc.c.mu.Unlock()
-	sc.c.runDeferredFetchHooks()
-	if len(fetches) > 0 || ctx == nil {
-		return fetches
-	}
-
-	done := make(chan struct{})
-	quit := false
-	go func() {
-		sc.c.sourcesReadyMu.Lock()
-		defer sc.c.sourcesReadyMu.Unlock()
-		defer close(done)
-		for !quit && len(sc.c.sourcesReadyForDraining) == 0 && len(sc.c.fakeReadyForDraining) == 0 {
-			sc.c.sourcesReadyCond.Wait()
-		}
-	}()
-
-	exit := func() {
-		sc.c.sourcesReadyMu.Lock()
-		quit = true
-		sc.c.sourcesReadyMu.Unlock()
-		sc.c.sourcesReadyCond.Broadcast()
-	}
-
-	select {
-	case <-sc.fm.ctx.Done():
-		exit()
-		return NewErrFetch(ErrClientClosed)
-	case <-ctx.Done():
-		exit()
-		return NewErrFetch(ctx.Err())
-	case <-done:
-		sc.c.mu.Lock()
+	for {
 		fill()
 		sc.c.mu.Unlock()
 		sc.c.runDeferredFetchHooks()
-	}
+		if len(fetches) > 0 || ctx == nil {
+			return fetches
+		}
 
-	return fetches
+		done := make(chan struct{})
+		quit := false
+		go func() {
+			sc.c.sourcesReadyMu.Lock()
+			defer sc.c.sourcesReadyMu.Unlock()
+			defer close(done)
+			for !quit && len(sc.c.sourcesReadyForDraining) == 0 && len(sc.c.fakeReadyForDraining) == 0 {
+				sc.c.sourcesReadyCond.Wait()
+			}
+		}()
+
+		exit := func() {
+			sc.c.sourcesReadyMu.Lock()
+			quit = true
+			sc.c.sourcesReadyMu.Unlock()
+			sc.c.sourcesReadyCond.Broadcast()
+		}
+
+		select {
+		case <-sc.fm.ctx.Done():
+			exit()
+			return NewErrFetch(ErrClientClosed)
+		case <-ctx.Done():
+			exit()
+			return NewErrFetch(ctx.Err())
+		case <-done:
+			sc.c.mu.Lock()
+		}
+	}
 }
 
 // finalizePreviousPoll auto-accepts every record from the previous

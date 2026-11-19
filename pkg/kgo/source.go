@@ -675,6 +675,9 @@ func (s *source) takeBuffered(paused pausedTopics) Fetch {
 					}
 					keepp = append(keepp, p)
 				}
+				if len(keepp) == 0 {
+					continue
+				}
 				t.Partitions = keepp
 			}
 			keep = append(keep, t)
@@ -1464,14 +1467,13 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					// - unsupported compression
 					// - unsupported message version
 					// - unknown error
-					// - or, no error
 					keep = true
 				}
 
 			case nil:
 				c.unknownIDFails.Store(0)
 				c.fetchFails.Store(0)
-				keep = true
+				keep = len(fp.Records) > 0
 
 			case kerr.UnknownTopicID:
 				// We need to keep UnknownTopicID even though it is

@@ -629,7 +629,9 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		c.sourcesReadyMu.Lock()
 		if maxPollRecords < 0 {
 			for _, ready := range c.sourcesReadyForDraining {
-				fetches = append(fetches, ready.takeBuffered(paused))
+				if f := ready.takeBuffered(paused); len(f.Topics) > 0 {
+					fetches = append(fetches, f)
+				}
 			}
 			c.sourcesReadyForDraining = nil
 		} else {
@@ -644,6 +646,9 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 					c.sourcesReadyForDraining = c.sourcesReadyForDraining[1:]
 				}
 				maxPollRecords -= taken
+				if len(fetch.Topics) == 0 {
+					continue // every partition was paused
+				}
 				if one != nil {
 					one.f[0] = fetch
 					fetches = one.f[:]
@@ -681,46 +686,44 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 
 	// We try filling fetches once before waiting. If we have no context,
 	// we guarantee that we just drain anything available and return.
-	fill()
-	c.runDeferredFetchHooks()
-	if len(fetches) > 0 || ctx == nil {
-		return fetches
-	}
-
-	done := make(chan struct{})
-	quit := false
-	go func() {
-		c.sourcesReadyMu.Lock()
-		defer c.sourcesReadyMu.Unlock()
-		defer close(done)
-
-		for !quit && len(c.sourcesReadyForDraining) == 0 && len(c.fakeReadyForDraining) == 0 {
-			c.sourcesReadyCond.Wait()
+	for {
+		fill()
+		c.runDeferredFetchHooks()
+		if len(fetches) > 0 || ctx == nil {
+			return fetches
 		}
-	}()
 
-	exit := func() {
-		c.sourcesReadyMu.Lock()
-		quit = true
-		c.sourcesReadyMu.Unlock()
-		c.sourcesReadyCond.Broadcast()
+		done := make(chan struct{})
+		quit := false
+		go func() {
+			c.sourcesReadyMu.Lock()
+			defer c.sourcesReadyMu.Unlock()
+			defer close(done)
+
+			for !quit && len(c.sourcesReadyForDraining) == 0 && len(c.fakeReadyForDraining) == 0 {
+				c.sourcesReadyCond.Wait()
+			}
+		}()
+
+		exit := func() {
+			c.sourcesReadyMu.Lock()
+			quit = true
+			c.sourcesReadyMu.Unlock()
+			c.sourcesReadyCond.Broadcast()
+		}
+
+		select {
+		case <-cl.ctx.Done():
+			exit()
+			c.waitAndAddPoller()
+			return NewErrFetch(ErrClientClosed)
+		case <-ctx.Done():
+			exit()
+			c.waitAndAddPoller()
+			return NewErrFetch(ctx.Err())
+		case <-done:
+		}
 	}
-
-	select {
-	case <-cl.ctx.Done():
-		exit()
-		c.waitAndAddPoller()
-		return NewErrFetch(ErrClientClosed)
-	case <-ctx.Done():
-		exit()
-		c.waitAndAddPoller()
-		return NewErrFetch(ctx.Err())
-	case <-done:
-	}
-
-	fill()
-	c.runDeferredFetchHooks()
-	return fetches
 }
 
 // AllowRebalance allows a consumer group to rebalance if it was blocked by you
