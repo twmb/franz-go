@@ -505,6 +505,9 @@ func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 	if maxLength > 0 && int(l) > maxLength { // index count is greater than expected
 		return nil, nil, ErrNotRegistered
 	}
+	if l > int64(len(r.b)) { // each index is at least one byte
+		return nil, nil, io.EOF
+	}
 	index := make([]int, l)
 	for i := range index {
 		idx, err := binary.ReadVarint(br)
