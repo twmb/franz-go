@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -266,6 +268,221 @@ func TestConfluentHeader(t *testing.T) {
 	if _, _, err := h.DecodeIndex(binary.AppendVarint(nil, 1<<62), 0); err != io.EOF {
 		t.Errorf("got %v != exp io.EOF", err)
 	}
+}
+
+const testGUID = "01234567-89ab-cdef-0123-456789abcdef"
+
+var testGUIDHeader = []byte{1, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
+
+func TestConfluentHeaderAppendEncodeGUID(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		b      []byte
+		guid   string
+		index  []int
+		exp    []byte
+		expErr bool
+	}{
+		{name: "nil index", guid: testGUID, exp: testGUIDHeader},
+		{name: "empty index", guid: testGUID, index: []int{}, exp: testGUIDHeader},
+		{name: "first index", guid: testGUID, index: []int{0}, exp: slices.Concat(testGUIDHeader, []byte{0})},
+		{name: "one index", guid: testGUID, index: []int{1}, exp: slices.Concat(testGUIDHeader, []byte{2, 2})},
+		{name: "nested index", guid: testGUID, index: []int{1, 2, 3}, exp: slices.Concat(testGUIDHeader, []byte{6, 2, 4, 6})},
+		{name: "uppercase", guid: strings.ToUpper(testGUID), exp: testGUIDHeader},
+		{name: "appends to b", b: []byte("foo"), guid: testGUID, exp: slices.Concat([]byte("foo"), testGUIDHeader)},
+
+		{name: "empty", guid: "", expErr: true},
+		{name: "too short", guid: testGUID[:35], expErr: true},
+		{name: "too long", guid: testGUID + "0", expErr: true},
+		{name: "no hyphens", guid: "0123456789abcdef0123456789abcdef", expErr: true},
+		{name: "hyphens at end", guid: "0123456789abcdef0123456789abcdef----", expErr: true},
+		{name: "misplaced hyphen", guid: "0123456-789ab-cdef-0123-456789abcdef", expErr: true},
+		{name: "not hex", guid: "0123456g-89ab-cdef-0123-456789abcdef", expErr: true},
+		{name: "braces", guid: "{" + testGUID + "}", expErr: true},
+		{name: "urn", guid: "urn:uuid:" + testGUID, expErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var h ConfluentHeader
+			got, err := h.AppendEncodeGUID(test.b, test.guid, test.index)
+			if test.expErr {
+				if err == nil {
+					t.Errorf("got nil err, exp err")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("got unexpected err %v", err)
+			}
+			if !bytes.Equal(got, test.exp) {
+				t.Errorf("got bytes(%v) != exp(%v)", got, test.exp)
+			}
+		})
+	}
+}
+
+func TestConfluentHeaderDecodeGUID(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		in      []byte
+		expGUID string
+		expOut  []byte
+		expErr  error
+	}{
+		{name: "guid", in: testGUIDHeader, expGUID: testGUID},
+		{name: "guid and rest", in: slices.Concat(testGUIDHeader, []byte("msg")), expGUID: testGUID, expOut: []byte("msg")},
+
+		{name: "empty", in: nil, expErr: ErrBadHeader},
+		{name: "magic only", in: testGUIDHeader[:1], expErr: ErrBadHeader},
+		{name: "truncated", in: testGUIDHeader[:16], expErr: ErrBadHeader},
+		{name: "id header", in: []byte{0, 0, 0, 0, 7, 2, 2}, expErr: ErrBadHeader},
+		{name: "magic 2", in: slices.Concat([]byte{2}, testGUIDHeader[1:]), expErr: ErrBadHeader},
+		{name: "magic 0xff", in: slices.Concat([]byte{0xff}, testGUIDHeader[1:]), expErr: ErrBadHeader},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var h ConfluentHeader
+			guid, out, err := h.DecodeGUID(test.in)
+			if err != test.expErr {
+				t.Errorf("got err(%v) != exp(%v)", err, test.expErr)
+			}
+			if guid != test.expGUID {
+				t.Errorf("got guid(%q) != exp(%q)", guid, test.expGUID)
+			}
+			if !bytes.Equal(out, test.expOut) {
+				t.Errorf("got bytes(%v) != exp(%v)", out, test.expOut)
+			}
+		})
+	}
+}
+
+func TestConfluentHeaderDecodeIDOrGUID(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		in      []byte
+		expID   int
+		expGUID string
+		expOut  []byte
+		expErr  error
+	}{
+		{name: "id", in: []byte{0, 0, 0, 0, 7}, expID: 7},
+		{name: "id and rest", in: []byte{0, 0, 0, 0, 7, 2, 2}, expID: 7, expOut: []byte{2, 2}},
+		{name: "guid", in: testGUIDHeader, expGUID: testGUID},
+		{name: "guid and rest", in: slices.Concat(testGUIDHeader, []byte("msg")), expGUID: testGUID, expOut: []byte("msg")},
+
+		{name: "empty", in: nil, expErr: ErrBadHeader},
+		{name: "truncated id", in: []byte{0, 0, 0, 0}, expErr: ErrBadHeader},
+		{name: "truncated guid", in: testGUIDHeader[:16], expErr: ErrBadHeader},
+		{name: "magic 2", in: slices.Concat([]byte{2}, testGUIDHeader[1:]), expErr: ErrBadHeader},
+		{name: "magic 0xff", in: slices.Concat([]byte{0xff}, testGUIDHeader[1:]), expErr: ErrBadHeader},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var h ConfluentHeader
+			id, guid, out, err := h.DecodeIDOrGUID(test.in)
+			if err != test.expErr {
+				t.Errorf("got err(%v) != exp(%v)", err, test.expErr)
+			}
+			if id != test.expID || guid != test.expGUID {
+				t.Errorf("got id(%d), guid(%q) != exp id(%d), guid(%q)", id, guid, test.expID, test.expGUID)
+			}
+			if !bytes.Equal(out, test.expOut) {
+				t.Errorf("got bytes(%v) != exp(%v)", out, test.expOut)
+			}
+		})
+	}
+}
+
+func TestConfluentHeaderGUIDIndex(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		index []int
+	}{
+		{name: "first index", index: []int{0}},
+		{name: "one index", index: []int{1}},
+		{name: "nested index", index: []int{1, 2, 3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var h ConfluentHeader
+			b, err := h.AppendEncodeGUID(nil, testGUID, test.index)
+			if err != nil {
+				t.Fatalf("AppendEncodeGUID: got unexpected err %v", err)
+			}
+			guid, rest, err := h.DecodeGUID(append(b, "msg"...))
+			if err != nil || guid != testGUID {
+				t.Fatalf("DecodeGUID: got guid(%q), err(%v) != exp guid(%q), nil err", guid, err, testGUID)
+			}
+			index, out, err := h.DecodeIndex(rest, len(test.index))
+			if err != nil {
+				t.Fatalf("DecodeIndex: got unexpected err %v", err)
+			}
+			if !slices.Equal(index, test.index) {
+				t.Errorf("got index(%v) != exp(%v)", index, test.index)
+			}
+			if string(out) != "msg" {
+				t.Errorf("got bytes(%q) != exp(msg)", out)
+			}
+		})
+	}
+}
+
+func FuzzConfluentHeaderDecodeIDOrGUID(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{0, 0, 0, 0, 1})
+	f.Add([]byte{0, 0, 0, 0, 1, 2, 2, 'm'})
+	f.Add(append([]byte{1}, make([]byte, 16)...))
+	f.Add(append([]byte{1}, make([]byte, 20)...))
+	f.Add(append([]byte{2}, make([]byte, 16)...))
+	f.Fuzz(func(t *testing.T, in []byte) {
+		var h ConfluentHeader
+		id, guid, out, err := h.DecodeIDOrGUID(in)
+		_, _, idErr := h.DecodeID(in)
+		_, _, guidErr := h.DecodeGUID(in)
+		if err != nil {
+			if err != ErrBadHeader || idErr == nil || guidErr == nil {
+				t.Fatalf("got err(%v), DecodeID err(%v), DecodeGUID err(%v)", err, idErr, guidErr)
+			}
+			return
+		}
+		var enc []byte
+		if guid != "" {
+			if idErr == nil || guidErr != nil {
+				t.Fatalf("GUID form: got DecodeID err(%v), DecodeGUID err(%v)", idErr, guidErr)
+			}
+			enc, err = h.AppendEncodeGUID(nil, guid, nil)
+		} else {
+			if idErr != nil || guidErr == nil {
+				t.Fatalf("ID form: got DecodeID err(%v), DecodeGUID err(%v)", idErr, guidErr)
+			}
+			enc, err = h.AppendEncode(nil, id, nil)
+		}
+		if err != nil {
+			t.Fatalf("re-encode: got unexpected err %v", err)
+		}
+		if got := append(enc, out...); !bytes.Equal(got, in) {
+			t.Fatalf("re-encode: bytes(%v) != exp(%v)", got, in)
+		}
+	})
+}
+
+func FuzzConfluentHeaderAppendEncodeGUID(f *testing.F) {
+	f.Add("")
+	f.Add("01234567-89ab-cdef-0123-456789abcdef")
+	f.Add("01234567-89AB-CDEF-0123-456789ABCDEF")
+	f.Add("0123456789abcdef0123456789abcdef")
+	f.Add("0123456g-89ab-cdef-0123-456789abcdef")
+	f.Fuzz(func(t *testing.T, guid string) {
+		var h ConfluentHeader
+		b, err := h.AppendEncodeGUID(nil, guid, nil)
+		if err != nil {
+			if b != nil {
+				t.Fatalf("got bytes(%v) with err %v", b, err)
+			}
+			return
+		}
+		exp := strings.ToLower(guid)
+		got, out, err := h.DecodeGUID(b)
+		if err != nil || len(out) != 0 || got != exp {
+			t.Fatalf("got guid(%q), bytes(%v), err(%v) != exp guid(%q), bytes([]), nil err", got, out, err, exp)
+		}
+	})
 }
 
 func TestIsRegistered(t *testing.T) {
