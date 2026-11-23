@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -605,4 +606,30 @@ func TestCreateSchemaWithContext(t *testing.T) {
 			t.Errorf("expected ID 1, got %d", ss.ID)
 		}
 	})
+}
+
+func TestCommSubjectSchemasDuplicates(t *testing.T) {
+	a := SubjectSchema{Subject: "a", Version: 1, ID: 1}
+	b := SubjectSchema{Subject: "b", Version: 1, ID: 2}
+	c := SubjectSchema{Subject: "c", Version: 1, ID: 3}
+
+	// a is only in l, b is in both, c is only in r; every schema is
+	// repeated on the side it is in.
+	luniq, runiq, common := CommSubjectSchemas(
+		[]SubjectSchema{a, a, b, b},
+		[]SubjectSchema{b, b, c, c},
+	)
+	for _, tt := range []struct {
+		name string
+		got  []SubjectSchema
+		exp  []SubjectSchema
+	}{
+		{"luniq", luniq, []SubjectSchema{a}},
+		{"runiq", runiq, []SubjectSchema{c}},
+		{"common", common, []SubjectSchema{b}},
+	} {
+		if !reflect.DeepEqual(tt.got, tt.exp) {
+			t.Errorf("%s: got %v != exp %v", tt.name, tt.got, tt.exp)
+		}
+	}
 }
