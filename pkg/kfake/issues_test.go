@@ -2401,7 +2401,8 @@ func TestKadmCachedMetadata(t *testing.T) {
 	)
 
 	cl := newPlainClient(t, c,
-		kgo.MetadataMinAge(5*time.Second),
+		kgo.MetadataMinAge(time.Hour),
+		kgo.MetadataMaxAge(time.Hour),
 	)
 
 	ctx := context.Background()
@@ -2486,6 +2487,56 @@ func TestKadmCachedMetadata(t *testing.T) {
 		}
 		if metadataRequests.Load() != countAfterFirst {
 			t.Fatalf("expected cached, got %d total (was %d)", metadataRequests.Load(), countAfterFirst)
+		}
+	})
+
+	t.Run("CreateDeleteTopics", func(t *testing.T) {
+		defer metadataRequests.Store(0)
+
+		list := func(topics ...string) kadm.TopicDetails {
+			t.Helper()
+			ts, err := adm.ListTopics(ctx, topics...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return ts
+		}
+
+		// Ensure missing topics asked for by name are not listed with all
+		// topics, and do not stay missing once we create them.
+		list()
+		list("t3", "t4")
+		if ts := list(); len(ts) != 2 {
+			t.Fatalf("all topics are %v, want t1 and t2", ts.Names())
+		}
+		if _, err := adm.CreateTopics(ctx, 1, 1, nil, "t3", "t4"); err != nil {
+			t.Fatal(err)
+		}
+		if !list("t3").Has("t3") {
+			t.Fatal("t3 is missing after we created it")
+		}
+		if !list().Has("t4") {
+			t.Fatal("all topics are missing t4 after we created it")
+		}
+
+		// Ensure a topic stays in all topics, with its new partitions, after
+		// we add partitions to it.
+		if _, err := adm.CreatePartitions(ctx, 1, "t4"); err != nil {
+			t.Fatal(err)
+		}
+		if ps := list()["t4"].Partitions; len(ps) != 2 {
+			t.Fatalf("all topics list t4 with %d partitions, want 2", len(ps))
+		}
+
+		// Ensure a cached topic does not outlive our delete of it.
+		if _, err := adm.DeleteTopics(ctx, "t3", "t4"); err != nil {
+			t.Fatal(err)
+		}
+		if list("t3").Has("t3") {
+			t.Fatal("t3 exists after we deleted it")
+		}
+		if list().Has("t4") {
+			t.Fatal("all topics have t4 after we deleted it")
 		}
 	})
 }

@@ -104,7 +104,7 @@ type Client struct {
 		mu     xsync.Mutex
 		topics map[string]cachedMetaTopic
 		byID   map[[16]byte]string // TopicID => topic name
-		allAt  time.Time           // when last all-topics fetch completed
+		allAt  time.Time           // when the last all-topics fetch completed; zero makes the next all-topics request refetch
 	}
 }
 
@@ -2435,18 +2435,6 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		return cl.controller(ctx)
 	})
 
-	// The only request that can break cached metadata is CreatePartitions,
-	// because our mapping will still be "valid" but behind the scenes,
-	// more partitions exist. If CreatePartitions is going through this
-	// client, we preemptively delete any mapping for these topics.
-	if t, ok := req.(*kmsg.CreatePartitionsRequest); ok {
-		var topics []string
-		for i := range t.Topics {
-			topics = append(topics, t.Topics[i].Topic)
-		}
-		cl.maybeDeleteCachedMeta(false, topics...)
-	}
-
 	d := failDial{clearFn: func() {
 		cl.forgetControllerID(r.last.meta.NodeID)
 		cl.deleteStaleCoordinatorsByNode(r.last.meta.NodeID)
@@ -2506,6 +2494,58 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 	}
 
 	resp, err := r.Request(ctx, req)
+
+	// CreateTopics, CreatePartitions, and DeleteTopics break cached
+	// metadata: a cached all-topics response is missing a created topic, a
+	// topic requested before we created it remains cached as missing, a
+	// topic's cached mapping misses its new partitions, and a deleted topic
+	// remains cached. We update the cache after the request, so that a fetch
+	// that finishes while the request runs does not leave the old state
+	// cached. We update the cache even if the request failed, because the
+	// broker may have applied the request. We drop each topic the request
+	// names, and expire the cached all-topics response, which loses the
+	// dropped topics.
+	var (
+		topics []string
+		ids    [][16]byte
+	)
+	switch t := req.(type) {
+	case *kmsg.CreateTopicsRequest:
+		for i := range t.Topics {
+			topics = append(topics, t.Topics[i].Topic)
+		}
+	case *kmsg.CreatePartitionsRequest:
+		for i := range t.Topics {
+			topics = append(topics, t.Topics[i].Topic)
+		}
+	case *kmsg.DeleteTopicsRequest:
+		topics = append(topics, t.TopicNames...)
+		for _, dt := range t.Topics {
+			if dt.Topic != nil {
+				topics = append(topics, *dt.Topic)
+			} else {
+				ids = append(ids, dt.TopicID)
+			}
+		}
+	default:
+		return shard(r.last, req, resp, err)
+	}
+
+	cl.metaCache.mu.Lock()
+	cl.metaCache.allAt = time.Time{}
+	for _, id := range ids {
+		if topic, ok := cl.metaCache.byID[id]; ok {
+			topics = append(topics, topic)
+		}
+	}
+	for _, topic := range topics {
+		if ct, ok := cl.metaCache.topics[topic]; ok {
+			delete(cl.metaCache.topics, topic)
+			delete(cl.metaCache.byID, ct.id)
+		}
+	}
+	cl.metaCache.mu.Unlock()
+
 	return shard(r.last, req, resp, err)
 }
 
@@ -3243,14 +3283,19 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 		cl.brokersMu.RUnlock()
 	}
 
-	// All-topics: return a copy of the cache if fresh.
+	// All-topics: return a copy of the cache if fresh. We skip topics cached
+	// with an error: a request by name for a missing or unauthorized topic
+	// caches the topic with its error, and Kafka's all-topics response lists
+	// neither.
 	if all && useCache {
 		var cached map[string]cachedMetaTopic
 		cl.metaCache.mu.Lock()
 		if cl.metaCache.topics != nil && time.Since(cl.metaCache.allAt) < limit {
 			cached = make(map[string]cachedMetaTopic, len(cl.metaCache.topics))
 			for k, v := range cl.metaCache.topics {
-				cached[k] = v
+				if v.t.ErrorCode == 0 {
+					cached[k] = v
+				}
 			}
 		}
 		cl.metaCache.mu.Unlock()
@@ -3298,14 +3343,14 @@ func leaderGone(cached map[string]cachedMetaTopic, brokers map[int32]bool) bool 
 }
 
 // storeCachedMeta caches the fetched metadata in the Client, and
-// optionally stores each topic in results. If the request was for all
-// topics, stale entries not in the response are evicted.
+// optionally stores each topic in results.
 //
-// If prune is true, we also evict entries older than MetadataMinAge that the
+// If prune is true, we evict entries older than MetadataMinAge that the
 // response does not contain. Only requests that say something about what we
 // want cached prune: the metadata loop, a user's own metadata request, and
-// RequestCachedMetadata. Internal targeted fetches say nothing about the
-// topics they did not ask for, so loading brokers, resolving topic IDs,
+// resolveTopicMeta, which RequestCachedMetadata and the sharded requests use.
+// Internal targeted fetches say nothing about the topics they did not ask
+// for, so loading brokers, looking up topics with resolveTopicMetaByID,
 // creating unknown produce topics, and loading the group's topics to balance
 // all leave the rest of the cache alone.
 //
