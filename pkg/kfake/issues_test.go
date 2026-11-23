@@ -6026,3 +6026,63 @@ func TestIssue1531(t *testing.T) {
 		})
 	}
 }
+
+// Ensure DescribeAllLogDirs and AlterAllReplicaLogDirs keep every broker's
+// results when a shard is retried. kgo reshards the retried request to every
+// replica of its partitions, so a broker that already answered can answer
+// again, and kadm previously replaced the broker's first response.
+func TestKadmLogDirsRetriedShard(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(3))
+	adm := kadm.NewClient(newPlainClient(t, c, kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond })))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Partition 0 is on brokers 0 and 1, and partition 1 is on brokers 1
+	// and 2. Failing broker 0 once reshards partition 0 to brokers 0 and
+	// 1, and broker 1 answers again with partition 0 alone.
+	if _, err := adm.CreateTopics(ctx, 2, 2, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	for p := range int32(2) {
+		if err := c.MoveTopicPartition("t", p, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := kadm.TopicsSet{"t": {0: {}, 1: {}}}
+	// Open the connection to broker 0 first: kgo does not retry an EOF on a connection's first read.
+	dirs, err := adm.DescribeAllLogDirs(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var alter kadm.AlterReplicaLogDirsReq
+	alter.Add(dirs.Sorted()[0].Dir, s)
+
+	for _, test := range []struct {
+		key kmsg.Key
+		run func() (int, error) // replicas in the result
+	}{
+		{kmsg.DescribeLogDirs, func() (int, error) {
+			ds, err := adm.DescribeAllLogDirs(ctx, s)
+			var n int
+			for _, d := range ds {
+				d.EachPartition(func(kadm.DescribedLogDirPartition) { n++ })
+			}
+			return n, err
+		}},
+		{kmsg.AlterReplicaLogDirs, func() (int, error) {
+			rs, err := adm.AlterAllReplicaLogDirs(ctx, alter)
+			return len(rs.Sorted()), err
+		}},
+	} {
+		c.ControlKey(int16(test.key), func(kmsg.Request) (kmsg.Response, error, bool) {
+			if c.CurrentNode() != 0 {
+				return nil, nil, false
+			}
+			return nil, errors.New("broker down"), true // closes the connection
+		})
+		if n, err := test.run(); err != nil || n != 4 {
+			t.Errorf("%s with a retried shard: %d replicas, err %v; want 4", test.key.Name(), n, err)
+		}
+	}
+}
