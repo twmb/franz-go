@@ -521,6 +521,9 @@ func (p DescribedLogDirPartition) LessBySize(other DescribedLogDirPartition) boo
 	if p.Size < other.Size {
 		return true
 	}
+	if p.Size > other.Size {
+		return false
+	}
 	return p.Less(other)
 }
 
