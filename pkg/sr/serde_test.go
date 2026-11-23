@@ -37,12 +37,20 @@ func TestSerde(t *testing.T) {
 			Foo string `json:"foo,omitempty"`
 			Bar string `json:"bar,omitempty"`
 		}
+		moved struct {
+			Moved string `json:"moved,omitempty"`
+		}
 	)
 
 	serde := NewSerde(
 		EncodeFn(json.Marshal),
 		DecodeFn(json.Unmarshal),
 	)
+	serde.Register(126, moved{}, Index(1))
+	serde.Register(128, moved{})
+	serde.Register(128, moved{}, Index(1))      // moved now encodes with ID 128, index 1
+	serde.Register(126, overridden{}, Index(1)) // overrides moved's old 126, index 1
+	serde.Register(128, overridden{})           // overrides moved's old 128
 	serde.Register(127, overridden{}, GenerateFn(func() any { return new(overridden) }))
 	serde.Register(127, overrides{})
 	serde.Register(3, idx1{}, Index(0))
@@ -87,6 +95,10 @@ func TestSerde(t *testing.T) {
 		{
 			enc:    idx4{Bingo: "bango"},
 			expEnc: append([]byte{0, 0, 0, 0, 3, 6, 0, 0, 2}, `{"bingo":"bango"}`...),
+		},
+		{
+			enc:    moved{"m"},
+			expEnc: append([]byte{0, 0, 0, 0, 128, 2, 2}, `{"moved":"m"}`...),
 		},
 		{
 			enc:    oneidx{Bar: "bar"},
@@ -486,163 +498,27 @@ func FuzzConfluentHeaderAppendEncodeGUID(f *testing.F) {
 }
 
 func TestIsRegistered(t *testing.T) {
-	type testStruct1 struct {
-		Field1 string `json:"field1"`
-	}
-	type testStruct2 struct {
-		Field2 string `json:"field2"`
-	}
-	type testStruct3 struct {
-		Field3 string `json:"field3"`
-	}
-
 	serde := NewSerde()
+	serde.Register(2, struct{}{}, EncodeFn(json.Marshal), DecodeFn(json.Unmarshal))
+	serde.Register(3, struct{}{}, AppendEncodeFn(func(b []byte, _ any) ([]byte, error) { return b, nil }), GenerateFn(func() any { return new(struct{}) }))
 
-	// Test unregistered ID
-	if serde.IsRegistered(1) {
-		t.Error("expected ID 1 is not registered")
-	}
-
-	// Register ID 1 with all functions
-	serde.Register(1, testStruct1{},
-		EncodeFn(json.Marshal),
-		AppendEncodeFn(func(b []byte, v any) ([]byte, error) {
-			bb, err := json.Marshal(v)
-			if err != nil {
-				return b, err
-			}
-			return append(b, bb...), nil
-		}),
-		DecodeFn(json.Unmarshal),
-		GenerateFn(func() any { return new(testStruct1) }),
-	)
-
-	// Test registered ID without options (should return true if exists)
-	if serde.IsRegistered(1) {
-		t.Error("expected ID 1 is not registered")
-	}
-
-	// Test registered ID with EncodeFn option
-	if !serde.IsRegistered(1, EncodeFn) {
-		t.Error("expected ID 1 to have EncodeFn")
-	}
-
-	// Test registered ID with AppendEncodeFn option
-	if !serde.IsRegistered(1, AppendEncodeFn) {
-		t.Error("expected ID 1 to have AppendEncodeFn")
-	}
-
-	// Test registered ID with DecodeFn option
-	if !serde.IsRegistered(1, DecodeFn) {
-		t.Error("expected ID 1 to have DecodeFn")
-	}
-
-	// Test registered ID with GenerateFn option
-	if !serde.IsRegistered(1, GenerateFn) {
-		t.Error("expected ID 1 to have GenerateFn")
-	}
-
-	// Test multiple options - all should be true
-	if !serde.IsRegistered(1, EncodeFn, DecodeFn, GenerateFn) {
-		t.Error("expected ID 1 to have EncodeFn, DecodeFn, and GenerateFn")
-	}
-
-	// Test with string option names
-	if !serde.IsRegistered(1, "EncodeFn") {
-		t.Error("expected ID 1 to have EncodeFn when checked with string")
-	}
-
-	// Register ID 2 with only EncodeFn
-	serde.Register(2, testStruct2{}, EncodeFn(json.Marshal))
-
-	// Test ID 2 has EncodeFn
-	if !serde.IsRegistered(2, EncodeFn) {
-		t.Error("expected ID 2 to have EncodeFn")
-	}
-
-	// Test ID 2 does not have DecodeFn
-	if serde.IsRegistered(2, DecodeFn) {
-		t.Error("expected ID 2 to not have DecodeFn")
-	}
-
-	// Test ID 2 does not have GenerateFn
-	if serde.IsRegistered(2, GenerateFn) {
-		t.Error("expected ID 2 to not have GenerateFn")
-	}
-
-	// Test ID 2 with multiple options where one is missing
-	if serde.IsRegistered(2, EncodeFn, DecodeFn) {
-		t.Error("expected ID 2 to not have both EncodeFn and DecodeFn")
-	}
-
-	// Register ID 3 with only DecodeFn and GenerateFn
-	serde.Register(3, testStruct3{},
-		DecodeFn(json.Unmarshal),
-		GenerateFn(func() any { return new(testStruct3) }),
-	)
-
-	// Test ID 3 does not have EncodeFn
-	if serde.IsRegistered(3, EncodeFn) {
-		t.Error("expected ID 3 to not have EncodeFn")
-	}
-
-	// Test ID 3 has DecodeFn
-	if !serde.IsRegistered(3, DecodeFn) {
-		t.Error("expected ID 3 to have DecodeFn")
-	}
-
-	// Test ID 3 has GenerateFn
-	if !serde.IsRegistered(3, GenerateFn) {
-		t.Error("expected ID 3 to have GenerateFn")
-	}
-
-	// Test ID 3 has both DecodeFn and GenerateFn
-	if !serde.IsRegistered(3, DecodeFn, GenerateFn) {
-		t.Error("expected ID 3 to have both DecodeFn and GenerateFn")
-	}
-
-	// Test non-existent ID with options
-	if serde.IsRegistered(99, EncodeFn) {
-		t.Error("expected ID 99 to not be registered")
-	}
-
-	// Test registered ID without any functions (should still return true if exists)
-	serde.Register(4, testStruct1{})
-	if serde.IsRegistered(4) {
-		t.Error("expected ID 4 is not registered (exists but no functions)")
-	}
-
-	// Test registered ID 4 without functions, checking for EncodeFn
-	if serde.IsRegistered(4, EncodeFn) {
-		t.Error("expected ID 4 to not have EncodeFn")
-	}
-}
-
-func TestRegisterOverrideKeepsMovedType(t *testing.T) {
-	type moved struct {
-		A int `json:"a"`
-	}
-	type other struct {
-		B int `json:"b"`
-	}
-
-	var serde Serde
-	serde.Register(1, moved{}, EncodeFn(json.Marshal))
-	serde.Register(2, moved{}, EncodeFn(json.Marshal)) // moved now encodes with ID 2
-	serde.Register(1, other{}, EncodeFn(json.Marshal)) // overriding ID 1 must not drop moved
-
-	b, err := serde.Encode(moved{A: 1})
-	if err != nil {
-		t.Fatalf("unable to encode type registered to ID 2: %v", err)
-	}
-	if id, _, err := serde.DecodeID(b); err != nil || id != 2 {
-		t.Errorf("got id %d, err %v; want id 2", id, err)
-	}
-	b, err = serde.Encode(other{B: 1})
-	if err != nil {
-		t.Fatalf("unable to encode type registered to ID 1: %v", err)
-	}
-	if id, _, err := serde.DecodeID(b); err != nil || id != 1 {
-		t.Errorf("got id %d, err %v; want id 1", id, err)
+	for i, test := range []struct {
+		id  int
+		fns []any
+		exp bool
+	}{
+		{99, []any{EncodeFn}, false}, // missing ID
+		{2, nil, false},              // no functions to check
+		{2, []any{EncodeFn, DecodeFn}, true},
+		{2, []any{"EncodeFn"}, true},
+		{2, []any{EncodeFn, GenerateFn}, false},
+		{2, []any{AppendEncodeFn}, false},
+		{3, []any{AppendEncodeFn, GenerateFn}, true},
+		{3, []any{EncodeFn}, false},
+		{3, []any{DecodeFn}, false},
+	} {
+		if got := serde.IsRegistered(test.id, test.fns...); got != test.exp {
+			t.Errorf("#%d: got IsRegistered(%d) = %v != exp %v", i, test.id, got, test.exp)
+		}
 	}
 }

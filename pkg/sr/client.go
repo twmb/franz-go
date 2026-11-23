@@ -150,8 +150,8 @@ func (cl *Client) Opts() []ClientOpt {
 }
 
 // OptValue returns the value for the given configuration option. If the
-// given option does not exist, this returns nil. This function takes either a
-// raw ClientOpt, or an Opt function name.
+// given option does not exist, this returns nil. This function takes either
+// the option function, such as UserAgent, or its name.
 //
 // If a configuration option has multiple inputs, this function returns only
 // the first input. Variadic option inputs are returned as a single slice.
@@ -159,15 +159,13 @@ func (cl *Client) Opts() []ClientOpt {
 // string input; you can see if the option is internally nil by looking at
 // the second value returned from OptValues.
 //
-//		var (
-//	 		cl, _ := NewClient(
-//	 			URLs("foo", "bar"),
-//				UserAgent("baz"),
-//	 		)
-//	 		urls = cl.OptValue("URLs")     // urls is []string{"foo", "bar"}; string lookup for the option works
-//	 		ua   = cl.OptValue(UserAgent)  // ua is "baz"
-//	 		unk  = cl.OptValue("Unknown"), // unk is nil
-//		)
+//	cl, _ := NewClient(
+//		URLs("foo", "bar"),
+//		UserAgent("baz"),
+//	)
+//	urls := cl.OptValue("URLs")   // urls is []string{"http://foo", "http://bar"}; string lookup for the option works
+//	ua := cl.OptValue(UserAgent)  // ua is "baz"
+//	unk := cl.OptValue("Unknown") // unk is nil
 func (cl *Client) OptValue(opt any) any {
 	vs := cl.OptValues(opt)
 	if len(vs) > 0 {
@@ -181,19 +179,18 @@ func (cl *Client) OptValue(opt any) any {
 // for options that are internally stored as a pointer -- this function will
 // return the string value of the option but also whether the option is non-nil.
 // Boolean options are returned as a single-element slice with the bool value.
-// Variadic inputs are returned as a signle slice. If the input option does not
+// Variadic inputs are returned as a single slice. If the input option does not
 // exist, this returns nil.
 //
-//	     var (
-//		 		cl, _ := NewClient(
-//		 			URLs("foo", "bar"),
-//					UserAgent("baz"),
-//		 		)
-//		 		urls = cl.OptValues("URLs")     // urls is []any{[]string{"foo", "bar"}}
-//		 		ua   = cl.OptValues(UserAgent)  // ua is []any{"baz"}
-//		 		ba   = cl.OptValues(BasicAuth)  // ba is []any{"user", "pass"}
-//		 		unk  = cl.OptValues("Unknown"), // unk is nil
-//	     )
+//	cl, _ := NewClient(
+//		URLs("foo", "bar"),
+//		UserAgent("baz"),
+//		BasicAuth("user", "pass"),
+//	)
+//	urls := cl.OptValues("URLs")   // urls is []any{[]string{"http://foo", "http://bar"}}
+//	ua := cl.OptValues(UserAgent)  // ua is []any{"baz"}
+//	ba := cl.OptValues(BasicAuth)  // ba is []any{"user", "pass"}
+//	unk := cl.OptValues("Unknown") // unk is nil
 func (cl *Client) OptValues(opt any) []any {
 	name := namefn(opt)
 	if s, ok := opt.(string); ok {

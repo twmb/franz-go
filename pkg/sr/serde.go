@@ -176,8 +176,8 @@ func (s *Serde) DecodeID(b []byte) (id int, out []byte, err error) {
 }
 
 // DecodeIndex decodes at most maxLength of a schema index from in, returning
-// the index and remaining bytes, or an error. It expects b to be the output of
-// DecodeID (schema ID should already be stripped away).
+// the index and remaining bytes, or an error. It expects in to be the output
+// of DecodeID (schema ID should already be stripped away).
 func (s *Serde) DecodeIndex(in []byte, maxLength int) (index []int, out []byte, err error) {
 	return s.header().DecodeIndex(in, maxLength)
 }
@@ -249,10 +249,8 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	}
 
 	// If this value was already registered, we are overriding the
-	// previous registration and need to delete the previous type. We
-	// only delete if the type still encodes to this node: the type may
-	// have since been registered to a different ID or index, and that
-	// newer registration must survive.
+	// previous registration and need to delete the previous type,
+	// unless the type was since registered to another ID or index.
 	if at.exists {
 		if prev := dupTypes[at.typeof]; prev.id == at.id && slices.Equal(prev.index, at.index) {
 			delete(dupTypes, at.typeof)
