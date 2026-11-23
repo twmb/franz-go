@@ -830,7 +830,10 @@ func (os OffsetResponses) Ok() bool {
 // failures are included in the responses.
 func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (OffsetResponses, error) {
 	// Resolve topic names to IDs via metadata for v10+ support.
-	t2id := cl.resolveTopicIDs(ctx, os)
+	t2id, terrs, err := cl.resolveTopicIDs(ctx, os)
+	if err != nil {
+		return nil, err
+	}
 
 	rs := make(OffsetResponses)
 
@@ -839,14 +842,19 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 	for t, ps := range os {
 		id, ok := t2id[t]
 		if !ok {
-			// Cannot resolve topic name to ID -- inject error
-			// for all partitions and skip in the request.
+			// Cannot resolve topic name to ID -- inject the
+			// metadata error for all partitions and skip in the
+			// request.
+			terr := terrs[t]
+			if terr == nil {
+				terr = kerr.UnknownTopicOrPartition // missing from the metadata response
+			}
 			rt := make(map[int32]OffsetResponse)
 			rs[t] = rt
 			for p, o := range ps {
 				rt[p] = OffsetResponse{
 					Offset: o,
-					Err:    kerr.UnknownTopicOrPartition,
+					Err:    terr,
 				}
 			}
 			continue
@@ -2540,44 +2548,50 @@ func (cl *Client) DescribeShareGroups(ctx context.Context, groups ...string) (De
 }
 
 // resolveTopicIDs issues a metadata request for the topics in the given
-// Offsets map and returns a name-to-TopicID mapping.
-func (cl *Client) resolveTopicIDs(ctx context.Context, os Offsets) map[string]TopicID {
-	topics := make([]string, 0, len(os))
+// Offsets map and returns each topic's ID, or the error the broker returned
+// for the topic. We do not use Metadata: it fails entirely if one topic is not
+// authorized, while Kafka commits the authorized topics of an offset commit.
+func (cl *Client) resolveTopicIDs(ctx context.Context, os Offsets) (map[string]TopicID, map[string]error, error) {
+	t2id := make(map[string]TopicID, len(os))
+	terrs := make(map[string]error)
+	if len(os) == 0 {
+		return t2id, terrs, nil
+	}
+	req := kmsg.NewPtrMetadataRequest()
 	for t := range os {
-		topics = append(topics, t)
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(t)
+		req.Topics = append(req.Topics, rt)
 	}
-	t2id := make(map[string]TopicID, len(topics))
-	if len(topics) == 0 {
-		return t2id
-	}
-	meta, err := cl.Metadata(ctx, topics...)
+	resp, err := cl.cl.RequestCachedMetadata(ctx, req, 0)
 	if err != nil {
-		return t2id
+		return nil, nil, err
 	}
-	for _, td := range meta.Topics {
-		if td.Err != nil {
+	for _, t := range resp.Topics {
+		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
+			terrs[unptrStr(t.Topic)] = err
 			continue
 		}
-		t2id[td.Topic] = td.ID
+		t2id[unptrStr(t.Topic)] = t.TopicID
 	}
-	return t2id
+	return t2id, terrs, nil
 }
 
 // resolveTopicNames issues a metadata request for all topics and returns
 // a TopicID-to-name mapping.
-func (cl *Client) resolveTopicNames(ctx context.Context) map[TopicID]string {
-	id2name := make(map[TopicID]string)
+func (cl *Client) resolveTopicNames(ctx context.Context) (map[TopicID]string, error) {
 	meta, err := cl.Metadata(ctx)
 	if err != nil {
-		return id2name
+		return nil, err
 	}
+	id2name := make(map[TopicID]string, len(meta.Topics))
 	for _, td := range meta.Topics {
 		if td.Err != nil {
 			continue
 		}
 		id2name[td.ID] = td.Topic
 	}
-	return id2name
+	return id2name, nil
 }
 
 // CommitOffsetsByID issues an offset commit request for the input offsets,
@@ -2589,7 +2603,10 @@ func (cl *Client) resolveTopicNames(ctx context.Context) map[TopicID]string {
 // failures are included in the responses.
 func (cl *Client) CommitOffsetsByID(ctx context.Context, group string, os OffsetsByID) (OffsetResponsesByID, error) {
 	// Resolve IDs to names for backward compat with v0-v9 brokers.
-	id2name := cl.resolveTopicNames(ctx)
+	id2name, err := cl.resolveTopicNames(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	req := kmsg.NewPtrOffsetCommitRequest()
 	req.Group = group
