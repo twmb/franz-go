@@ -487,9 +487,7 @@ func (b *ACLBuilder) Operations(operations ...ACLOperation) *ACLBuilder {
 // MaybeOperations is the same as Operations, but does not match all operations
 // if none are provided.
 func (b *ACLBuilder) MaybeOperations(operations ...ACLOperation) *ACLBuilder {
-	if len(operations) > 0 {
-		b.Operations(operations...)
-	}
+	b.ops = operations
 	return b
 }
 
@@ -965,12 +963,12 @@ func (cl *Client) DescribeACLs(ctx context.Context, b *ACLBuilder) (DescribeACLs
 			if err == nil {
 				return
 			}
-			cancel()
 			mu.Lock()
-			defer mu.Unlock()
 			if firstErr == nil { // keep the first err
 				firstErr = err
 			}
+			mu.Unlock()
+			cancel() // after recording our error, so a sibling's context.Canceled is not the first
 		}()
 	}
 	wg.Wait()

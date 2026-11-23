@@ -16,6 +16,14 @@ type Principal struct {
 	Name string // Name is the name of a principal owner or renewer.
 }
 
+// The Principal docs promise an empty Type defaults to "User".
+func principalType(t string) string {
+	if t == "" {
+		return "User"
+	}
+	return t
+}
+
 // DelegationToken contains information about a delegation token.
 type DelegationToken struct {
 	// Owner is the owner of the delegation token.
@@ -84,21 +92,17 @@ type CreateDelegationToken struct {
 // This can return *AuthError.
 func (cl *Client) CreateDelegationToken(ctx context.Context, d CreateDelegationToken) (DelegationToken, error) {
 	req := kmsg.NewPtrCreateDelegationTokenRequest()
-	// The Principal docs promise an empty Type defaults to "User".
-	principalType := func(t string) string {
-		if t == "" {
-			return "User"
-		}
-		return t
-	}
 	if d.Owner != nil {
 		ownerType := principalType(d.Owner.Type)
 		req.OwnerPrincipalType = &ownerType
 		req.OwnerPrincipalName = &d.Owner.Name
 	}
+	var renewers []Principal
 	for _, renewer := range d.Renewers {
+		renewer.Type = principalType(renewer.Type)
+		renewers = append(renewers, renewer)
 		rr := kmsg.NewCreateDelegationTokenRequestRenewer()
-		rr.PrincipalType = principalType(renewer.Type)
+		rr.PrincipalType = renewer.Type
 		rr.PrincipalName = renewer.Name
 		req.Renewers = append(req.Renewers, rr)
 	}
@@ -128,7 +132,7 @@ func (cl *Client) CreateDelegationToken(ctx context.Context, d CreateDelegationT
 		MaxTimestamp:    time.UnixMilli(resp.MaxTimestamp).UTC(),
 		TokenID:         resp.TokenID,
 		HMAC:            resp.HMAC,
-		Renewers:        append([]Principal(nil), d.Renewers...),
+		Renewers:        renewers,
 	}
 	if resp.Version < 3 {
 		t.TokenRequesterPrincipal = t.Owner
@@ -168,6 +172,9 @@ func (cl *Client) ExpireDelegationToken(ctx context.Context, hmac []byte, expiry
 	req := kmsg.NewPtrExpireDelegationTokenRequest()
 	req.HMAC = hmac
 	req.ExpiryPeriodMillis = expiry.Milliseconds()
+	if expiry < 0 {
+		req.ExpiryPeriodMillis = -1 // Milliseconds truncates -1ns to 0, and 0 does not expire the token immediately
+	}
 	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
 		return time.Time{}, err
@@ -190,7 +197,7 @@ func (cl *Client) DescribeDelegationTokens(ctx context.Context, owners ...Princi
 	req := kmsg.NewPtrDescribeDelegationTokenRequest()
 	for _, owner := range owners {
 		ro := kmsg.NewDescribeDelegationTokenRequestOwner()
-		ro.PrincipalType = owner.Type
+		ro.PrincipalType = principalType(owner.Type)
 		ro.PrincipalName = owner.Name
 		req.Owners = append(req.Owners, ro)
 	}

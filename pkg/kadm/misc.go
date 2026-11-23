@@ -247,8 +247,12 @@ func (v *BrokerApiVersions) EachKeySorted(fn func(key, min, max int16)) {
 //
 //	kversion.FromApiVersionsResponse(v.Raw()).VersionGuess(opt...)
 //
-// Check the kversion.VersionGuess API docs for more details.
+// Check the kversion.VersionGuess API docs for more details. If the request to
+// this broker failed, this returns "unknown custom version".
 func (v *BrokerApiVersions) VersionGuess(opt ...kversion.VersionGuessOpt) string {
+	if v.raw == nil {
+		return "unknown custom version"
+	}
 	return kversion.FromApiVersionsResponse(v.raw).VersionGuess(opt...)
 }
 
@@ -855,6 +859,7 @@ type ElectLeadersResults map[string]map[int32]ElectLeadersResult
 func (cl *Client) ElectLeaders(ctx context.Context, how ElectLeadersHow, s TopicsSet) (ElectLeadersResults, error) {
 	req := kmsg.NewPtrElectLeadersRequest()
 	req.ElectionType = int8(how)
+	req.TimeoutMillis = cl.timeoutMillis
 	for _, t := range s.IntoList() {
 		rt := kmsg.NewElectLeadersRequestTopic()
 		rt.Topic = t.Topic
