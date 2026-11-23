@@ -160,6 +160,27 @@ func Test848GroupTypeIsConsumer(t *testing.T) {
 	if got := dg.AssignedPartitions(); len(got) != 1 || len(got[topic]) != 1 {
 		t.Errorf("described assignment %v, want partition 0 of %s", got, topic)
 	}
+
+	// Lag describes the group with ConsumerGroupDescribe, named or listed,
+	// next to a classic group.
+	classic := group + "-classic"
+	consumeN(t, newPlainClient(t, c,
+		kgo.ConsumeTopics(topic),
+		kgo.ConsumerGroup(classic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	), 10, 10*time.Second)
+	for _, groups := range [][]string{{group, classic}, nil} {
+		lags, err := adm.Lag(ctx, groups...)
+		if err != nil {
+			t.Fatalf("lag of %v failed: %v", groups, err)
+		}
+		for _, g := range []string{group, classic} {
+			l := lags[g]
+			if m, ok := l.Lag.Lookup(topic, 0); l.Error() != nil || !ok || m.Member == nil {
+				t.Errorf("lag of %s from %v: err %v, partition 0 found %v with member %v; want a member", g, groups, l.Error(), ok, m.Member)
+			}
+		}
+	}
 }
 
 // Test848DeleteGroup verifies that deleting a non-empty consumer group

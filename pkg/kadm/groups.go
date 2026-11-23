@@ -1430,7 +1430,8 @@ type GroupMemberLag struct {
 	Err error // Err is either the commit error, or the list end offsets error, or nil.
 }
 
-// IsEmpty returns if the this lag is for a group in the Empty state.
+// IsEmpty returns if no member is consuming this partition, which is true
+// for every partition of a group in the Empty state.
 func (g *GroupMemberLag) IsEmpty() bool { return g.Member == nil }
 
 // GroupLag is the per-topic, per-partition lag of members in a group.
@@ -1471,14 +1472,19 @@ func (l GroupLag) Sorted() []GroupMemberLag {
 	return all
 }
 
-// IsEmpty returns if the group is empty.
+// IsEmpty returns if the lag has partitions and none of them has a member, as
+// for a group in the Empty state.
 func (l GroupLag) IsEmpty() bool {
+	var empty bool
 	for _, ps := range l {
-		for _, m := range ps { //nolint:gocritic // rangeValCopy: intentional single-iteration return
-			return m.IsEmpty()
+		for p := range ps {
+			if ps[p].Member != nil {
+				return false
+			}
+			empty = true
 		}
 	}
-	return false
+	return empty
 }
 
 // Total returns the total lag across all topics.
@@ -1606,6 +1612,11 @@ func (ls DescribedGroupLags) Ok() bool {
 // be fetched, an error is returned for the group. If any topic cannot have its
 // end offsets listed, the lag for the partition has a corresponding error. If
 // any request fails with an auth error, this returns *AuthError.
+//
+// If no groups are given, this returns the lag of every classic and consumer
+// group. A broker that fails to list its groups is skipped, and its groups are
+// left out without an error. Members of a KIP-848 consumer group are described
+// only on Kafka 4.0+; older brokers describe the group as Dead.
 func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags, error) {
 	set := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
@@ -1622,6 +1633,23 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	}
 	lags := make(DescribedGroupLags)
 
+	// DescribeGroups lists only classic groups when given none, so we list
+	// classic and consumer groups ourselves. If only some brokers fail, we
+	// continue with the groups the others listed, as DescribeGroups does,
+	// and drop the errors of the brokers that failed.
+	if len(set) == 0 {
+		listed, err := cl.ListGroupsByType(ctx, []string{"classic", "consumer"})
+		if se, ok := errors.AsType[*ShardErrors](err); err != nil && (!ok || se.AllFailed) {
+			return nil, err
+		}
+		for g := range listed {
+			set[g] = struct{}{}
+		}
+		if len(set) == 0 {
+			return lags, nil
+		}
+	}
+
 	described, err := cl.DescribeGroups(ctx, rem()...)
 	// For auth err: always return.
 	// For shard errors, if we had some partial success, then we continue
@@ -1634,7 +1662,6 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 		return nil, err
 	case isShardErr && !se.AllFailed:
 		for _, se := range se.Errs {
-			// can be ListGroupsRequest as well
 			req, ok := se.Req.(*kmsg.DescribeGroupsRequest)
 			if !ok {
 				continue
@@ -1651,6 +1678,65 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	case err != nil:
 		return nil, err
 	}
+
+	// Kafka 4.0+ answers DescribeGroups with GROUP_ID_NOT_FOUND for a
+	// KIP-848 consumer group. For each group that DescribeGroups answered
+	// with GROUP_ID_NOT_FOUND, we call DescribeConsumerGroups and convert
+	// the consumer group into the DescribedGroup that
+	// CalculateGroupLagWithStartOffsets reads.
+	var consumerGroups []string
+	for _, g := range described {
+		if errors.Is(g.Err, kerr.GroupIDNotFound) {
+			consumerGroups = append(consumerGroups, g.Group)
+		}
+	}
+	if len(consumerGroups) > 0 {
+		cdescribed, err := cl.DescribeConsumerGroups(ctx, consumerGroups...)
+		se, isShardErr := errors.AsType[*ShardErrors](err)
+		switch {
+		case isShardErr:
+			for _, se := range se.Errs {
+				req, ok := se.Req.(*kmsg.ConsumerGroupDescribeRequest)
+				if !ok {
+					continue
+				}
+				for _, g := range req.Groups {
+					cdescribed[g] = DescribedConsumerGroup{Group: g, Coordinator: se.Broker, Err: se.Err}
+				}
+			}
+		case err != nil:
+			return nil, err
+		}
+		for _, cg := range cdescribed {
+			if errors.Is(cg.Err, kerr.GroupIDNotFound) {
+				continue // not a consumer group either: keep the DescribeGroups answer
+			}
+			g := DescribedGroup{
+				Group:        cg.Group,
+				Coordinator:  cg.Coordinator,
+				State:        cg.State,
+				ProtocolType: "consumer",
+				Protocol:     cg.AssignorName,
+				Err:          cg.Err,
+			}
+			for _, m := range cg.Members {
+				assigned := new(kmsg.ConsumerMemberAssignment)
+				m.Assignment.EachPartitions(func(t string, ps []int32) {
+					assigned.Topics = append(assigned.Topics, kmsg.ConsumerMemberAssignmentTopic{Topic: t, Partitions: ps})
+				})
+				g.Members = append(g.Members, DescribedGroupMember{
+					MemberID:   m.MemberID,
+					InstanceID: m.InstanceID,
+					ClientID:   m.ClientID,
+					ClientHost: m.ClientHost,
+					Join:       GroupMemberMetadata{&kmsg.ConsumerMemberMetadata{Topics: m.SubscribedTopics}},
+					Assigned:   GroupMemberAssignment{assigned},
+				})
+			}
+			described[g.Group] = g
+		}
+	}
+
 	for _, g := range described {
 		lags[g.Group] = DescribedGroupLag{
 			Group:        g.Group,
@@ -1663,13 +1749,7 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 		}
 		if g.Err != nil {
 			delete(set, g.Group)
-			continue
 		}
-
-		// If the input set of groups is empty, DescribeGroups returns all groups.
-		// We add to `set` here so that the Lag function itself can calculate
-		// lag for all groups.
-		set[g.Group] = struct{}{}
 	}
 	if len(set) == 0 {
 		return lags, nil

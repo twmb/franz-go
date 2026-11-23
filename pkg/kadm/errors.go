@@ -97,7 +97,7 @@ func shardErrEachBroker(req kmsg.Request, shards []kgo.ResponseShard, fn func(Br
 			// with a nil error whenever one broker answered with,
 			// e.g., COORDINATOR_LOAD_IN_PROGRESS past kgo's retry
 			// budget -- and everything built on those lists
-			// (no-arg Describes, Lag) under-reported with no
+			// (the no-arg Describes) under-reported with no
 			// signal.
 			se.Errs = append(se.Errs, ShardError{
 				Req:    shard.Req,
