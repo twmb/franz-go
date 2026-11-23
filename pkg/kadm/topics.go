@@ -74,6 +74,9 @@ func (rs CreateTopicResponses) Sorted() []CreateTopicResponse {
 		if l.ID.Less(r.ID) {
 			return true
 		}
+		if r.ID.Less(l.ID) {
+			return false
+		}
 		return l.Topic < r.Topic
 	})
 	return s
@@ -257,6 +260,9 @@ func (rs DeleteTopicResponses) Sorted() []DeleteTopicResponse {
 		l, r := s[i], s[j]
 		if l.ID.Less(r.ID) {
 			return true
+		}
+		if r.ID.Less(l.ID) {
+			return false
 		}
 		return l.Topic < r.Topic
 	})
