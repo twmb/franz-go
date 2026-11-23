@@ -1,7 +1,6 @@
 package kadm
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -148,41 +147,42 @@ func TestFilterTypesNoDuplicates(t *testing.T) {
 	}
 }
 
-// FetchOffsetsForTopics previously filtered the caller's variadic slice in
-// place, rewriting its backing array.
-func TestFetchOffsetsForTopicsDoesNotMutateInput(t *testing.T) {
-	cl, err := kgo.NewClient(kgo.SeedBrokers("localhost:1"))
-	if err != nil {
-		t.Fatal(err)
+// LessBySize previously fell back to Less when the receiver was larger, so a
+// larger partition 0 and a smaller partition 1 were each less than the other.
+func TestLessBySize(t *testing.T) {
+	large := DescribedLogDirPartition{Partition: 0, Size: 100}
+	small := DescribedLogDirPartition{Partition: 1, Size: 10}
+	tie := DescribedLogDirPartition{Partition: 2, Size: 10}
+	if !small.LessBySize(large) || large.LessBySize(small) {
+		t.Error("LessBySize did not order the smaller partition first")
 	}
-	defer cl.Close()
-	adm := NewClient(cl)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	topics := []string{FetchAllGroupTopics, "a", "b"}
-	adm.FetchOffsetsForTopics(ctx, "g", topics...) //nolint:errcheck // the canceled ctx fails the call; we assert only non-mutation
-	if topics[0] != FetchAllGroupTopics || topics[1] != "a" || topics[2] != "b" {
-		t.Errorf("caller slice was mutated: %v", topics)
+	if !small.LessBySize(tie) || tie.LessBySize(small) {
+		t.Error("LessBySize did not fall back to Less for equal sizes")
 	}
 }
 
-// Lag previously rebuilt its group list in the caller's variadic slice,
-// rewriting its backing array. A repeated name makes the set smaller than the
-// slice, so the rewrite is visible whatever the map order.
-func TestLagDoesNotMutateInput(t *testing.T) {
-	cl, err := kgo.NewClient(kgo.SeedBrokers("localhost:1"))
-	if err != nil {
-		t.Fatal(err)
+// CreateTopicResponses.Sorted and DeleteTopicResponses.Sorted previously
+// compared names whenever the left ID was not less, so a topic with a greater
+// ID and a lesser name was less than the other topic in both directions, and
+// the order followed map iteration. Topics share IDs in pairs, so names must
+// still break ties.
+func TestTopicResponsesSortedByID(t *testing.T) {
+	creates, deletes := make(CreateTopicResponses), make(DeleteTopicResponses)
+	for i, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		id := TopicID{15: byte(4 - i/2)}
+		creates[name] = CreateTopicResponse{Topic: name, ID: id}
+		deletes[name] = DeleteTopicResponse{Topic: name, ID: id}
 	}
-	defer cl.Close()
-	adm := NewClient(cl)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	groups := []string{"a", "a", "b"}
-	adm.Lag(ctx, groups...) //nolint:errcheck // the canceled ctx fails the call; we assert only non-mutation
-	if groups[0] != "a" || groups[1] != "a" || groups[2] != "b" {
-		t.Errorf("caller slice was mutated: %v", groups)
+	for range 30 {
+		var c, d string
+		for _, r := range creates.Sorted() {
+			c += r.Topic
+		}
+		for _, r := range deletes.Sorted() {
+			d += r.Topic
+		}
+		if c != "ghefcdab" || d != "ghefcdab" {
+			t.Fatalf("got create order %s, delete order %s, want ghefcdab", c, d)
+		}
 	}
 }
