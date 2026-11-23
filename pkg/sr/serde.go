@@ -563,6 +563,9 @@ func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 		if err != nil {
 			return nil, nil, err
 		}
+		if int64(int(idx)) != idx { // overflows int on 32-bit builds
+			return nil, nil, ErrBadHeader
+		}
 		index[i] = int(idx)
 	}
 	return index, b, nil
