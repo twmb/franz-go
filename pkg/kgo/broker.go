@@ -192,6 +192,9 @@ type broker struct {
 
 	// reqs manages incoming message requests.
 	reqs ring[promisedReq]
+	// reqBuf is the buffer handleReq appends requests into, kept across
+	// requests. Only the broker worker goroutine (handleReqs) uses it.
+	reqBuf []byte
 	// dead is an atomic so a backed up reqs cannot block broker stoppage.
 	dead atomic.Bool
 }
@@ -714,7 +717,7 @@ start:
 
 	// Everything we read from req, before abandonOnCancel: once a cancel
 	// fails the request, the caller may reuse req.
-	a := cxn.appendReq(req)
+	a := cxn.appendReqTo(b.reqBuf[:0], req)
 	var resp kmsg.Response
 	if !isNoResp {
 		resp = req.ResponseKind()
@@ -723,6 +726,7 @@ start:
 	// From here on, a cancel fails the request; see abandonOnCancel.
 	ioCtx, promise, stop := cxn.abandonOnCancel(pr)
 	corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(ioCtx, pr.enqueue, a)
+	b.reqBuf = keptReqBuf(a.buf)
 
 	if writeErr != nil {
 		cxn.die()
@@ -1552,28 +1556,53 @@ func maybeUpdateCtxErr(clientCtx, reqCtx context.Context, err *error) {
 	}
 }
 
-// appendedReq is a request appended to a pooled buffer, with everything else
-// we read from the request to write it and read its response.
+// appendedReq is a request appended to a buffer, with everything else we read
+// from the request to write it and read its response.
 type appendedReq struct {
 	key, version   int16
 	buf            []byte
+	pooled         bool // buf came from the client's bufPool
 	rt, wt         time.Duration
 	flexibleHeader bool
 }
 
-// appendReq appends req for writeRequest, which returns the buffer to the
-// pool.
+// appendReq appends req to a pooled buffer for writeRequest, which returns the
+// buffer to the pool.
 func (cxn *brokerCxn) appendReq(req kmsg.Request) appendedReq {
+	a := cxn.appendReqTo(cxn.cl.bufPool.get()[:0], req)
+	a.pooled = true
+	return a
+}
+
+// appendReqTo appends req to buf for writeRequest, which leaves buf to the
+// caller.
+func (cxn *brokerCxn) appendReqTo(buf []byte, req kmsg.Request) appendedReq {
 	key := req.Key()
 	rt, wt := cxn.cl.connTimeouter.timeouts(req)
 	return appendedReq{
 		key:            key,
 		version:        req.GetVersion(),
-		buf:            cxn.cl.reqFormatter.AppendRequest(cxn.cl.bufPool.get()[:0], req, cxn.corrID),
+		buf:            cxn.cl.reqFormatter.AppendRequest(buf, req, cxn.corrID),
 		rt:             rt,
 		wt:             wt,
 		flexibleHeader: req.IsFlexible() && key != 18, // response header not flexible if ApiVersions; see promisedResp doc
 	}
+}
+
+// maxKeptReqBuf is the largest request buffer a broker keeps between requests,
+// so an idle broker doesn't hold on to one very large request's memory.
+const maxKeptReqBuf = 4 << 20
+
+// keptReqBuf returns buf, which a request was just written from, to keep for
+// the broker's next request, or nil for one too large to keep. A sync.Pool doesn't keep it well for this: a buffer put back on one P is
+// not seen by a Get on another, and the pool drops buffers across garbage
+// collections, so each produce request could start from a small buffer and
+// regrow it by doubling to the request's size.
+func keptReqBuf(buf []byte) []byte {
+	if cap(buf) > maxKeptReqBuf {
+		return nil
+	}
+	return buf[:0]
 }
 
 // writeRequest writes a message request to the broker connection, bumping the
@@ -1581,7 +1610,9 @@ func (cxn *brokerCxn) appendReq(req kmsg.Request) appendedReq {
 func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt time.Time, a appendedReq) (corrID int32, bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
 	bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr = cxn.writeConn(ctx, a.buf, a.wt, enqueuedForWritingAt)
 
-	cxn.cl.bufPool.put(a.buf)
+	if a.pooled {
+		cxn.cl.bufPool.put(a.buf)
+	}
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerWrite); ok {
