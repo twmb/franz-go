@@ -577,8 +577,8 @@ func newDescribeLogDirsResp(ds DescribedLogDirs, node int32, resp *kmsg.Describe
 }
 
 // DescribeAllLogDirs describes the log directories for every input topic
-// partition on every broker. If the input set is nil, this describes all log
-// directories.
+// partition on every broker. If the input set is nil or empty, this describes
+// all log directories.
 //
 // This may return *ShardErrors.
 func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (DescribedAllLogDirs, error) {
@@ -599,8 +599,8 @@ func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (Describe
 }
 
 // DescribeBrokerLogDirs describes the log directories for the input topic
-// partitions on the given broker. If the input set is nil, this describes all
-// log directories.
+// partitions on the given broker. If the input set is nil or empty, this
+// describes all log directories.
 func (cl *Client) DescribeBrokerLogDirs(ctx context.Context, broker int32, s TopicsSet) (DescribedLogDirs, error) {
 	req := describeLogDirsReq(s)
 	b := cl.cl.Broker(int(broker))

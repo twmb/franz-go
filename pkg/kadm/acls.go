@@ -330,7 +330,7 @@ func (b *ACLBuilder) MaybeDenyHosts(hosts ...string) *ACLBuilder {
 //	GROUPS
 //	======
 //	FindCoordinator  DESCRIBE on GROUP for group (if finding group coordinator)
-//	                 DESCRIBE on TRANSACTIONAL_ID for id (if finding transactiona coordinator)
+//	                 DESCRIBE on TRANSACTIONAL_ID for id (if finding transactional coordinator)
 //
 //	OffsetCommit     READ on GROUP for group
 //	                 READ on TOPIC for topics
@@ -499,14 +499,13 @@ func (b *ACLBuilder) MaybeOperations(operations ...ACLOperation) *ACLBuilder {
 // name. The name by default is "literal", meaning created ACLs will have the
 // exact name, and matched ACLs must match completely.
 //
-// Prefixed names allow for creating an ACL that matches any prefix: principals
-// foo-bar and foo-baz both have the prefix "foo-", meaning a READ on TOPIC for
-// User:foo- with prefix pattern will allow both of those principals to read
-// the topic.
+// Prefixed names allow for creating an ACL that matches any prefix: topics
+// foo-bar and foo-baz both have the prefix "foo-", meaning a READ on TOPIC
+// foo- with prefix pattern will allow reading both of those topics.
 //
-// Any and match are used for listing and deleting. Any will match any name, be
-// it literal or prefix or a wildcard name. There is no need for specifying
-// topics, groups, etc. when using any resource pattern.
+// Any and match are used for listing and deleting. Any matches ACLs of any
+// pattern type, literal or prefix, with exactly the requested name. To match
+// every name, call Topics, Groups, etc. with no names.
 //
 // Alternatively, match requires a name, but it matches any literal name (exact
 // match), any prefix, and any wildcard.
@@ -535,6 +534,9 @@ const (
 // This returns the input pointer.
 //
 // For creating, only LITERAL and PREFIXED are supported.
+//
+// The pattern type is sent only to Kafka 2.0+; older brokers treat every
+// pattern as LITERAL.
 func (b *ACLBuilder) ResourcePatternType(pattern ACLPattern) *ACLBuilder {
 	b.pattern = pattern
 	return b
@@ -835,7 +837,7 @@ type DeleteACLsResults []DeleteACLsResult
 //
 // Deleting ACLs works on a filter basis: a single filter can match many ACLs.
 // For example, deleting with operation ANY matches any operation. For safety /
-// verification purposes, you an DescribeACLs with the same builder first to
+// verification purposes, you can DescribeACLs with the same builder first to
 // see what would be deleted.
 func (cl *Client) DeleteACLs(ctx context.Context, b *ACLBuilder) (DeleteACLsResults, error) {
 	dels, _, err := createDelDescACL(b)
@@ -1180,7 +1182,7 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 //
 // Function Behavior
 //   - If the bitfield equals `math.MinInt32` (-2147483648), it indicates that "AUTHORIZED_OPERATIONS_OMITTED"
-//     is set, and the function returns an empty slice.
+//     is set, and the function returns nil.
 //   - For non-omitted values, the function iterates through all 32 bits of the bitfield. Each bit that
 //     is set (`1`) corresponds to an ACL operation, which is then mapped to its respective `kmsg.ACLOperation` value.
 //   - Undefined or unknown bits (e.g., bit 0 for `kmsg.ACLOperationUnknown`) are ignored.

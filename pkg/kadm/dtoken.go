@@ -64,8 +64,9 @@ type CreateDelegationToken struct {
 	// Owner overrides the owner of the token from the principal issuing
 	// the request to the principal in this field. This allows a superuser
 	// to create tokens without requiring individual user credentials, and
-	// for a superuser to run clients on behalf of another user. These
-	// fields require Kafka 3.3+; see KIP-373 for more details.
+	// for a superuser to run clients on behalf of another user. Owner is
+	// sent only to Kafka 3.3+ (KIP-373); older brokers issue the token to
+	// the requester.
 	Owner *Principal
 	// Renewers is a list of principals that can renew the delegation
 	// token in addition to the owner of the token. This list does not

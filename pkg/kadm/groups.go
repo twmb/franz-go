@@ -624,7 +624,7 @@ func (ls LeaveGroupResponses) Ok() bool {
 //
 // This function allows manually removing members using instance IDs from a
 // group, which allows for fast scale down / host replacement (see KIP-345 for
-// more detail). This returns an *AuthErr if the use is not authorized to
+// more detail). This returns an *AuthError if the user is not authorized to
 // remove members from groups.
 func (cl *Client) LeaveGroup(ctx context.Context, b *LeaveGroupBuilder) (LeaveGroupResponses, error) {
 	if b == nil || len(b.instanceIDs) == 0 {
@@ -750,7 +750,7 @@ func (os *OffsetResponses) Add(o OffsetResponse) {
 	ot[o.Partition] = o
 }
 
-// EachError calls fn for every offset that as a non-nil error.
+// EachError calls fn for every offset that has a non-nil error.
 func (os OffsetResponses) EachError(fn func(o OffsetResponse)) {
 	for _, ps := range os {
 		for _, o := range ps {
@@ -1050,7 +1050,7 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 // FetchAllGroupTopics is a kadm "internal" topic name that can be used in
 // [FetchOffsetsForTopics]. By default, [FetchOffsetsForTopics] only returns
 // topics that are explicitly requested. Other topics that may be committed to
-// in the group are not returned. Using FetchAllRequestedTopics switches the
+// in the group are not returned. Using FetchAllGroupTopics switches the
 // behavior to return the union of all committed topics and all requested
 // topics.
 const FetchAllGroupTopics = "|fetch-all-group-topics|"
@@ -1061,8 +1061,7 @@ const FetchAllGroupTopics = "|fetch-all-group-topics|"
 //
 // If any partition fetched or listed has an error, this function returns an
 // error. The returned offset responses are ready to be used or converted
-// directly to pure offsets with `Into`, and again into kgo offsets with
-// another `Into`.
+// directly to pure offsets with Offsets, or into kgo offsets with KOffsets.
 //
 // By default, this function returns offsets for only the requested topics. You
 // can use the special "topic" [FetchAllGroupTopics] to return all committed-to
@@ -1159,7 +1158,7 @@ func (r FetchOffsetsResponse) CommittedPartitions() TopicsSet {
 // FetchOffsetsResponses contains responses for many fetch offsets requests.
 type FetchOffsetsResponses map[string]FetchOffsetsResponse
 
-// EachError calls fn for every response that as a non-nil error.
+// EachError calls fn for every response that has a non-nil error.
 func (rs FetchOffsetsResponses) EachError(fn func(FetchOffsetsResponse)) {
 	for _, r := range rs {
 		if r.Err != nil {
@@ -1324,7 +1323,7 @@ func (ds DeleteOffsetsResponses) Lookup(t string, p int32) (error, bool) { //nol
 	return r, exists
 }
 
-// EachError calls fn for every partition that as a non-nil deletion error.
+// EachError calls fn for every partition that has a non-nil deletion error.
 func (ds DeleteOffsetsResponses) EachError(fn func(string, int32, error)) {
 	for t, ps := range ds {
 		for p, err := range ps {
@@ -1360,10 +1359,10 @@ func (ds DeleteOffsetsResponses) Error() error {
 // request to allow admins to manually delete offsets for no longer consumed
 // topics.
 //
-// This method requires talking to Kafka v2.4+. This returns an *AuthErr if the
-// user is not authorized to delete offsets in the group at all. This does not
-// return on per-topic authorization failures, instead, per-topic authorization
-// failures are included in the responses.
+// This method requires talking to Kafka v2.4+. This returns an *AuthError if
+// the user is not authorized to delete offsets in the group at all. This does
+// not return on per-topic authorization failures, instead, per-topic
+// authorization failures are included in the responses.
 func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) (DeleteOffsetsResponses, error) {
 	if len(s) == 0 {
 		return nil, nil
@@ -1407,9 +1406,10 @@ func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) 
 // GroupMemberLag is the lag between a group member's current offset commit and
 // the current end offset.
 //
-// If either the offset commits have load errors, or the listed end offsets
-// have load errors, the Lag field will be -1 and the Err field will be set (to
-// the first of either the commit error, or else the list error).
+// If the partition is missing from the listed end offsets, or the offset
+// commit or the listed end offset has a load error, the Lag field will be -1
+// and the Err field will be set (to the first of the missing end offset, the
+// commit error, or the end offset error).
 //
 // If the group is in the Empty state, lag is calculated for all partitions in
 // a topic, but the member is nil. The calculate function assumes that any
@@ -1417,7 +1417,8 @@ func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) 
 // topics could not be listed, some partitions may be missing.
 type GroupMemberLag struct {
 	// Member is a reference to the group member consuming this partition.
-	// If the group is in state Empty, the member will be nil.
+	// The member is nil if no member is assigned this partition, as for
+	// every partition of a group in state Empty.
 	Member    *DescribedGroupMember
 	Topic     string // Topic is the topic this lag is for.
 	Partition int32  // Partition is the partition this lag is for.
@@ -1425,9 +1426,9 @@ type GroupMemberLag struct {
 	Commit Offset       // Commit is this member's current offset commit.
 	Start  ListedOffset // Start is a reference to the start of this partition, if provided. Start offsets are optional; if not provided, Start.Err is a non-nil error saying this partition is missing from list offsets. This is always present if lag is calculated via Client.Lag.
 	End    ListedOffset // End is a reference to the end offset of this partition.
-	Lag    int64        // Lag is how far behind this member is, or -1 if there is a commit error or list offset error.
+	Lag    int64        // Lag is how far behind this member is, or -1 if Err is non-nil. A Start error is ignored: with no commit and a Start error, Lag is the end offset.
 
-	Err error // Err is either the commit error, or the list end offsets error, or nil.
+	Err error // Err is an error saying the end offset is missing from list offsets, or else the commit error, or else the end offset error, or nil.
 }
 
 // IsEmpty returns if no member is consuming this partition, which is true
@@ -1796,7 +1797,7 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 			*list.dst = listed
 			// As above: return on auth error. If there are shard errors,
 			// the topics will be missing in the response and then
-			// CalculateGroupLag will return UnknownTopicOrPartition.
+			// their partitions' lag will have errListMissing.
 			_, isAuthErr = errors.AsType[*AuthError](err)
 			_, isShardErr = errors.AsType[*ShardErrors](err)
 			switch {
@@ -1848,11 +1849,11 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 //	groups := DescribeGroups(ctx, group)
 //	commits := FetchManyOffsets(ctx, group)
 //	var endOffsets ListedOffsets
-//	listPartitions := described.AssignedPartitions()
-//	listPartitions.MergeTopics(described.JoinTopics())
-//	listPartitions.Merge(commits.CommittedPartitions()
+//	listPartitions := groups.AssignedPartitions()
+//	listPartitions.MergeTopics(groups.JoinTopics())
+//	listPartitions.Merge(commits.CommittedPartitions())
 //	if topics := listPartitions.Topics(); len(topics) > 0 {
-//		endOffsets = ListEndOffsets(ctx, listPartitions.Topics())
+//		endOffsets = ListEndOffsets(ctx, topics...)
 //	}
 //	for _, group := range groups {
 //		lag := CalculateGroupLag(group, commits[group.Group].Fetched, endOffsets)
@@ -2784,7 +2785,7 @@ func (cl *Client) CommitAllOffsetsByID(ctx context.Context, group string, os Off
 // Use [RequireStable] to block until pending transactional offset commits are
 // resolved.
 //
-// This method requires talking to Kafka v0.11+.
+// This method requires talking to Kafka v2.8+, which has topic IDs.
 func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetResponsesByID, error) {
 	req := kmsg.NewPtrOffsetFetchRequest()
 	req.Group = group

@@ -27,8 +27,8 @@ func (t TopicID) Less(other TopicID) bool {
 }
 
 // PartitionDetail is the detail of a partition as returned by a metadata
-// response. If the partition fails to load / has an error, then only the
-// partition number itself and the Err fields will be set.
+// response. If the partition has a load error, Err is set and the other
+// fields are still what the broker returned, such as a Leader of -1.
 type PartitionDetail struct {
 	Topic     string // Topic is the topic this partition belongs to.
 	Partition int32  // Partition is the partition number these details are for.
@@ -189,7 +189,7 @@ type Metadata struct {
 	Controller           int32          // Controller is the node ID of the controller broker, if available, otherwise -1.
 	Brokers              BrokerDetails  // Brokers contains broker details, sorted by default.
 	Topics               TopicDetails   // Topics contains topic details.
-	AuthorizedOperations []ACLOperation // AuthorizedOperations contains operations the requesting client is allowed to perform, if the client has Describe permissions on the cluster (requires [WithAuthorizedOps]).
+	AuthorizedOperations []ACLOperation // AuthorizedOperations contains operations the requesting client is allowed to perform, if the client has Describe permissions on the cluster (requires [WithAuthorizedOps]). Only Kafka 2.3 through 2.7 (Metadata v8 and v9) return cluster operations.
 }
 
 func int32s(is []int32) []int32 {
@@ -210,7 +210,7 @@ func (cl *Client) ListBrokers(ctx context.Context) (BrokerDetails, error) {
 // BrokerMetadata issues a metadata request and returns it, and does not ask
 // for any topics.
 //
-// This returns an error if the request fails to be issued, or an *AuthErr.
+// This returns an error if the request fails to be issued, or an *AuthError.
 func (cl *Client) BrokerMetadata(ctx context.Context) (Metadata, error) {
 	return cl.metadata(ctx, true, nil)
 }
@@ -219,7 +219,7 @@ func (cl *Client) BrokerMetadata(ctx context.Context) (Metadata, error) {
 // describe can be passed as additional arguments. If no topics are specified,
 // all topics are requested.
 //
-// This returns an error if the request fails to be issued, or an *AuthErr.
+// This returns an error if the request fails to be issued, or an *AuthError.
 func (cl *Client) Metadata(
 	ctx context.Context,
 	topics ...string,
@@ -326,7 +326,7 @@ type ListedOffset struct {
 	Topic     string // Topic is the topic this offset is for.
 	Partition int32  // Partition is the partition this offset is for.
 
-	Timestamp   int64 // Timestamp is the millisecond of the offset if listing after a time, otherwise -1.
+	Timestamp   int64 // Timestamp is the millisecond of the offset if listing after a time or listing max timestamps, otherwise -1.
 	Offset      int64 // Offset is the record offset, or -1 if one could not be found.
 	LeaderEpoch int32 // LeaderEpoch is the leader epoch at this offset, if any, otherwise -1.
 
@@ -398,9 +398,7 @@ func (l ListedOffsets) KOffsets() map[string]map[int32]kgo.Offset {
 
 // ListStartOffsets returns the start (oldest) offsets for each partition in
 // each requested topic. In Kafka terms, this returns the log start offset. If
-// no topics are specified, all topics are listed. If a requested topic does
-// not exist, no offsets for it are listed and it is not present in the
-// response.
+// no topics are specified, all topics except internal topics are listed.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -412,8 +410,7 @@ func (cl *Client) ListStartOffsets(ctx context.Context, topics ...string) (Liste
 
 // ListEndOffsets returns the end (newest) offsets for each partition in each
 // requested topic. In Kafka terms, this returns high watermarks. If no topics
-// are specified, all topics are listed. If a requested topic does not exist,
-// no offsets for it are listed and it is not present in the response.
+// are specified, all topics except internal topics are listed.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -431,9 +428,8 @@ func (cl *Client) ListEndOffsets(ctx context.Context, topics ...string) (ListedO
 //     ListEndOffsets returns 31, this returns 30.
 //   - ListEndOffsets does not return the timestamp of the offset; this does.
 //
-// If no topics are specified, all topics are listed. If a requested topic does
-// not exist, no offsets for it are listed and it is not present in the
-// response. This requires Kafka 3.0+.
+// If no topics are specified, all topics except internal topics are listed.
+// This requires Kafka 3.0+.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -446,9 +442,7 @@ func (cl *Client) ListMaxTimestampOffsets(ctx context.Context, topics ...string)
 // ListLocalLogStartOffsets returns the start (oldest) offsets for each
 // partition in each requested topic on the broker's disk, rather than in the
 // cloud (i.e. if you are using tiered storage). If no topics are specified,
-// all topics are listed. If a requested topic does not exist, no offsets for
-// it are listed and it is not present in the response. This requires Kafka
-// 3.4+.
+// all topics except internal topics are listed. This requires Kafka 3.4+.
 //
 // If any topics being listed do not exist, a special -1 partition is added to
 // the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -461,8 +455,7 @@ func (cl *Client) ListLocalLogStartOffsets(ctx context.Context, topics ...string
 // ListLatestRemoteOffsets returns the latest (newest) offsets for each
 // partition in each requested topic in the cloud, rather than the latest on
 // disk (i.e. if you are using tiered storage). If no topics are specified, all
-// topics are listed. If a requested topic does not exist, no offsets for it
-// are listed and it is not present in the response. This requires Kafka 3.9+.
+// topics except internal topics are listed. This requires Kafka 3.9+.
 //
 // If any topics being listed do not exist, a special -1 partition is added to
 // the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -477,8 +470,7 @@ func (cl *Client) ListLatestRemoteOffsets(ctx context.Context, topics ...string)
 // latest offset. In Kafka terms, committed means the last stable offset, and
 // newest means the high watermark. Record offsets in active, uncommitted
 // transactions will not be returned. If no topics are specified, all topics
-// are listed. If a requested topic does not exist, no offsets for it are
-// listed and it is not present in the response.
+// except internal topics are listed.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -491,10 +483,9 @@ func (cl *Client) ListCommittedOffsets(ctx context.Context, topics ...string) (L
 // ListOffsetsAfterMilli returns the first offsets at or after the requested
 // millisecond timestamp. Unlike listing start/end/committed offsets, offsets
 // returned from this function also include the timestamp of the offset. If no
-// topics are specified, all topics are listed. If a partition has no offsets
-// after the requested millisecond, the offset will be the current end offset.
-// If a requested topic does not exist, no offsets for it are listed and it is
-// not present in the response.
+// topics are specified, all topics except internal topics are listed. If a
+// partition has no offsets after the requested millisecond, the offset will be
+// the current end offset.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.

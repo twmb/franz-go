@@ -61,7 +61,7 @@
 //	First(slice)
 //	FirstE(slice, err)
 //
-// The intended use case of these is something like `kadm.AnyE(kadm.CreateTopics(..., "my-one-topic"))`,
+// The intended use case of these is something like `kadm.AnyE(adm.CreateTopics(..., "my-one-topic"))`,
 // such that you can immediately get the response for the one topic you are
 // creating.
 package kadm
@@ -116,7 +116,7 @@ type Client struct {
 
 // NewClient returns an admin client.
 func NewClient(cl *kgo.Client) *Client {
-	return &Client{cl, 15000} // 15s timeout default, matching kmsg
+	return &Client{cl, 15000} // 15s timeout default
 }
 
 // NewOptClient returns a new client directly from kgo options. This is a
@@ -193,7 +193,7 @@ type Offset struct {
 	Topic       string
 	TopicID     TopicID // TopicID, if known; used for OffsetCommit/OffsetFetch v10+.
 	Partition   int32
-	At          int64  // Offset is the partition to set.
+	At          int64  // At is the offset to set.
 	LeaderEpoch int32  // LeaderEpoch is the broker leader epoch of the record at this offset.
 	Metadata    string // Metadata, if non-empty, is used for offset commits.
 }
@@ -405,7 +405,7 @@ func OffsetsFromRecords(rs ...kgo.Record) Offsets {
 	return os
 }
 
-// OffsetsByID is like Offsets but keyed by topic ID instead of topic name.
+// OffsetsByID contains offsets keyed by topic ID instead of topic name.
 type OffsetsByID map[TopicID]map[int32]Offset
 
 // Lookup returns the offset at id and p and whether it exists.
@@ -421,8 +421,9 @@ func (os OffsetsByID) Lookup(id TopicID, p int32) (Offset, bool) {
 	return o, exists
 }
 
-// Add adds an offset for a given topic ID / partition. If the offset's
-// TopicID is empty (zero value), this is a no-op.
+// Add adds an offset for a given topic ID / partition, replacing any offset
+// already there. If the offset's TopicID is empty (zero value), this is a
+// no-op.
 func (os *OffsetsByID) Add(o Offset) {
 	if o.TopicID == (TopicID{}) {
 		return
@@ -550,7 +551,8 @@ func (os OffsetResponsesByID) Ok() bool {
 
 // TopicsSet is a set of topics and, per topic, a set of partitions.
 //
-// All methods provided for TopicsSet are safe to use on a nil (default) set.
+// All methods provided for TopicsSet are safe to use on a nil (default) set,
+// except Merge and MergeTopics, which need a non-nil set to merge into.
 type TopicsSet map[string]map[int32]struct{}
 
 // Lookup returns whether the topic and partition exists.
@@ -729,7 +731,7 @@ func (l TopicsList) EmptyTopics() []string {
 	return e
 }
 
-// Topics returns all topics in this set in sorted order.
+// Topics returns all topics in this list in sorted order.
 func (l TopicsList) Topics() []string {
 	ts := make([]string, 0, len(l))
 	for _, t := range l {

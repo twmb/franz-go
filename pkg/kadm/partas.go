@@ -84,7 +84,9 @@ func (rs AlterPartitionAssignmentsResponses) Error() error {
 var forbidAlterRf = func() *string { s := "forbid_alter_rf"; return &s }()
 
 // ForbidAlterRf returns a context that ensures [AlterPartitionAssignments]
-// will not alter the replication factor of any topics. Requires Kafka 4.1+.
+// will not alter the replication factor of any topics. AlterPartitionAssignments
+// sends the restriction only to Kafka 4.1+ (KIP-860); older brokers allow
+// replication factor changes.
 func ForbidAlterRf(ctx context.Context) context.Context {
 	return context.WithValue(ctx, forbidAlterRf, forbidAlterRf)
 }
@@ -94,8 +96,8 @@ func ForbidAlterRf(ctx context.Context) context.Context {
 // do not have permissions.
 //
 // If you want to forbid replication factor changes and receive an error if a
-// request contains tries to alter any rf, you can use a context decorated with
-// [ForbidAlterRf] (requires Kafka 4.1+).
+// request tries to alter any rf, you can use a context decorated with
+// [ForbidAlterRf].
 func (cl *Client) AlterPartitionAssignments(ctx context.Context, req AlterPartitionAssignmentsReq) (AlterPartitionAssignmentsResponses, error) {
 	if len(req) == 0 {
 		return make(AlterPartitionAssignmentsResponses), nil

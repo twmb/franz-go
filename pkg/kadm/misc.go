@@ -22,7 +22,7 @@ import (
 // responded to, but the response indicates failure with a message.
 type ErrAndMessage struct {
 	Err        error  // Err is the response ErrorCode.
-	ErrMessage string // Message is the response ErrorMessage.
+	ErrMessage string // ErrMessage is the response ErrorMessage.
 }
 
 func (e *ErrAndMessage) Error() string {
@@ -243,7 +243,7 @@ func (v *BrokerApiVersions) EachKeySorted(fn func(key, min, max int16)) {
 }
 
 // VersionGuess returns the best guess of Kafka that this broker is. This is a
-// shorcut for:
+// shortcut for:
 //
 //	kversion.FromApiVersionsResponse(v.Raw()).VersionGuess(opt...)
 //
@@ -377,7 +377,7 @@ type QuotasMatchType = kmsg.QuotasMatchType
 // match, and the match name if needed.
 type DescribeClientQuotaComponent struct {
 	Type      string          // Type is the type of entity component to describe ("user", "client-id", "ip").
-	MatchName *string         // MatchName is the name to match again; this is only needed when MatchType is 0 (exact).
+	MatchName *string         // MatchName is the name to match against; this is only needed when MatchType is 0 (exact).
 	MatchType QuotasMatchType // MatchType is how to match an entity.
 }
 
@@ -386,7 +386,7 @@ type DescribeClientQuotaComponent struct {
 // component of the entity, and "client-id=bar" is another.
 type DescribedClientQuota struct {
 	Entity ClientQuotaEntity // Entity is the entity of this described client quota.
-	Values ClientQuotaValues // Values contains the quota valies for this entity.
+	Values ClientQuotaValues // Values contains the quota values for this entity.
 }
 
 // DescribedClientQuotas contains client quotas that were described.
@@ -824,7 +824,7 @@ type ElectLeadersHow int8
 const (
 	// ElectPreferredReplica elects the preferred replica for a partition.
 	ElectPreferredReplica ElectLeadersHow = 0
-	// ElectLiveReplica elects the first life replica if there are no
+	// ElectLiveReplica elects the first live replica if there are no
 	// in-sync replicas (i.e., this is unclean leader election).
 	ElectLiveReplica ElectLeadersHow = 1
 )
@@ -852,7 +852,7 @@ type ElectLeadersResults map[string]map[int32]ElectLeadersResult
 // instead fall back to preferred replica (clean) leader election. You can
 // check the result's How function (or field) to see.
 //
-// If s is nil, this will elect leaders for all partitions.
+// If s is nil or empty, this elects leaders for all partitions.
 //
 // This will return *AuthError if you do not have ALTER on CLUSTER for
 // kafka-cluster, and any other top-level error in the response as is.
@@ -1018,7 +1018,7 @@ func (cl *Client) OffsetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpo
 // FeatureUpdate represents a request to update a single feature.
 type FeatureUpdate struct {
 	Feature         string // Feature is the name of the finalized feature to update.
-	MaxVersionLevel int16  // MaxVersionLevel is the new maximum version level for the feature. A value >= 1 is valid. A value < 1 requests deletion of the feature.
+	MaxVersionLevel int16  // MaxVersionLevel is the new maximum version level for the feature. A value of 0 deletes the feature, which Kafka 3.3+ allows only with UpgradeType 2 or 3.
 	UpgradeType     int8   // UpgradeType determines which type of upgrade: 1 = upgrade only (default), 2 = safe downgrades only (lossless), 3 = unsafe downgrades (lossy). Only used in v1+.
 }
 
@@ -1056,7 +1056,8 @@ func (u UpdatedFeatures) Error() error {
 // UpgradeType values: 1 = upgrade only (default), 2 = safe downgrades only (lossless),
 // 3 = unsafe downgrades (lossy).
 //
-// If validateOnly is true, the request is validated but not performed (only against Kafka 3.3+!).
+// If validateOnly is true, the request is validated but not performed.
+// validateOnly is sent only to Kafka 3.3+; older brokers apply the update.
 //
 // This may return *AuthError.
 func (cl *Client) UpdateFeatures(ctx context.Context, validateOnly bool, updates ...FeatureUpdate) (UpdatedFeatures, error) {
