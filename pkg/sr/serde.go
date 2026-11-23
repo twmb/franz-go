@@ -603,19 +603,19 @@ func formatGUID(g []byte) string {
 type bReader struct{ b []byte }
 
 // IsRegistered returns whether the schema ID is registered for the given
-// encoding/decoding/generate option functions.
-// Example:
-// isRegistered := c.serde.IsRegistered(5, sr.DecodeFn) // check only DecodeFn
-// isRegistered := c.serde.IsRegistered(5, sr.EncodeFn, sr.AppendEncodeFn) // check both EncodeFn and AppendEncodeFn
-// If no encodingOptFns are provided, it returns false.
+// encoding/decoding/generate option functions. IsRegistered also returns true
+// if the ID's default message index, Index(0), is registered for the
+// functions. If no encodingOptFns are provided, it returns false. For example:
+//
+//	serde.IsRegistered(5, sr.DecodeFn)                    // checks only DecodeFn
+//	serde.IsRegistered(5, sr.EncodeFn, sr.AppendEncodeFn) // checks both EncodeFn and AppendEncodeFn
 func (s *Serde) IsRegistered(id int, encodingOptFns ...any) bool {
-	ids := s.loadIDs()
-	t, ok := ids[id]
-	if !ok || !t.exists {
-		return false
-	}
+	t := s.loadIDs()[id]
+	return t.has(encodingOptFns) || t.subindex[0].has(encodingOptFns)
+}
 
-	if len(encodingOptFns) == 0 {
+func (t tserde) has(encodingOptFns []any) bool {
+	if !t.exists || len(encodingOptFns) == 0 {
 		return false
 	}
 
@@ -634,6 +634,8 @@ func (s *Serde) IsRegistered(id int, encodingOptFns ...any) bool {
 			is = is && t.decode != nil
 		case namefn(GenerateFn):
 			is = is && t.gen != nil
+		default:
+			return false
 		}
 	}
 	return is

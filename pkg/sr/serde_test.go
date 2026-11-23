@@ -501,6 +501,8 @@ func TestIsRegistered(t *testing.T) {
 	serde := NewSerde()
 	serde.Register(2, struct{}{}, EncodeFn(json.Marshal), DecodeFn(json.Unmarshal))
 	serde.Register(3, struct{}{}, AppendEncodeFn(func(b []byte, _ any) ([]byte, error) { return b, nil }), GenerateFn(func() any { return new(struct{}) }))
+	serde.Register(5, struct{}{}, DecodeFn(json.Unmarshal), Index(0))
+	serde.Register(6, struct{}{}, DecodeFn(json.Unmarshal), Index(1))
 
 	for i, test := range []struct {
 		id  int
@@ -511,11 +513,16 @@ func TestIsRegistered(t *testing.T) {
 		{2, nil, false},              // no functions to check
 		{2, []any{EncodeFn, DecodeFn}, true},
 		{2, []any{"EncodeFn"}, true},
+		{2, []any{"encodeFn"}, false}, // unknown name
+		{2, []any{nil}, false},
 		{2, []any{EncodeFn, GenerateFn}, false},
 		{2, []any{AppendEncodeFn}, false},
 		{3, []any{AppendEncodeFn, GenerateFn}, true},
 		{3, []any{EncodeFn}, false},
 		{3, []any{DecodeFn}, false},
+		{5, []any{DecodeFn}, true}, // default index
+		{5, []any{EncodeFn}, false},
+		{6, []any{DecodeFn}, false}, // only a non-default index
 	} {
 		if got := serde.IsRegistered(test.id, test.fns...); got != test.exp {
 			t.Errorf("#%d: got IsRegistered(%d) = %v != exp %v", i, test.id, got, test.exp)

@@ -131,7 +131,7 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 
 func namefn(fn any) string {
 	v := reflect.ValueOf(fn)
-	if v.Type().Kind() != reflect.Func {
+	if v.Kind() != reflect.Func {
 		return ""
 	}
 	name := runtime.FuncForPC(v.Pointer()).Name()
