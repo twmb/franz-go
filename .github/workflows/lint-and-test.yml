@@ -32,7 +32,7 @@ jobs:
           go-version: 'stable'
       - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
       # kfake library code is constrained to the published franz-go dep (the
-      # test-kfake job verifies that with `go test` against the pinned
+      # test-kfake job verifies that with `go build` against the pinned
       # version). kfake's *test* files legitimately exercise HEAD kgo APIs
       # (Ack, ShareGroup, FlushAcks); golangci-lint typechecks tests too,
       # so we need a workspace to resolve those.
@@ -46,7 +46,7 @@ jobs:
     container: golang:latest
     steps:
       - uses: actions/checkout@v4
-      - run: cd pkg/kfake && go work init . ../.. ../kadm ../kmsg && go test ./... && go test -race ./...
+      - run: cd pkg/kfake && GOWORK=off go build ./... && go work init . ../.. ../kadm ../kmsg && go test ./... && go test -race ./...
 
   test-sr:
     if: github.repository == 'twmb/franz-go'
@@ -56,6 +56,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cd pkg/sr && go work init ../.. . && go test ./... && go test -race ./...
+
+  test-kadm:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "test kadm"
+    container: golang:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd pkg/kadm && go work init ../.. . ../kmsg && go test ./... && go test -race ./...
+
+  test-kmsg:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "test kmsg"
+    container: golang:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd pkg/kmsg && go test ./... && go test -race ./...
+
+  test-plugins:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "test plugins and examples"
+    container: golang:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: for d in plugin/*/; do (cd $d && go work init ../.. . && go test ./... && go test -race ./...) || exit 1; done
+      - run: cd examples/testing_with_kfake_and_synctest && go test -mod=mod ./...
 
   integration-test-kfake:
     if: github.repository == 'twmb/franz-go'
