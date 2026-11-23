@@ -6080,7 +6080,8 @@ func TestRetention(t *testing.T) {
 
 // offsetCommitVersions crosses a cluster that speaks OffsetCommit and
 // OffsetFetch v10, which identify a topic by ID, with one capped at v9,
-// which identifies it by name.
+// which identifies it by name. A third cluster caps OffsetFetch at v7,
+// which answers one group in top-level fields instead of in Groups.
 var offsetCommitVersions = []struct {
 	name string
 	opts []Opt
@@ -6092,10 +6093,15 @@ var offsetCommitVersions = []struct {
 		v.SetMaxKeyVersion(9, 9) // OffsetFetch
 		return []Opt{MaxVersions(v)}
 	}()},
+	{"v7", func() []Opt {
+		v := kversion.Stable()
+		v.SetMaxKeyVersion(9, 7) // OffsetFetch
+		return []Opt{MaxVersions(v)}
+	}()},
 }
 
 // TestOffsetCommitTopicID commits an offset and reads it back through each
-// API that can do so, against both a v10 and a v9 broker.
+// API that can do so, against each cluster in offsetCommitVersions.
 func TestOffsetCommitTopicID(t *testing.T) {
 	t.Parallel()
 	for _, api := range []struct {
@@ -6177,6 +6183,24 @@ func TestOffsetCommitTopicID(t *testing.T) {
 			}
 			if fo.TopicID != topicID {
 				t.Errorf("expected TopicID %v, got %v", topicID, fo.TopicID)
+			}
+		}},
+
+		// Below v8, kgo splits a fetch of many groups per group.
+		{"kadm-many", func(t *testing.T, c *Cluster, producer *kgo.Client, topic, group string) {
+			adm := kadm.NewClient(producer)
+			os := kadm.Offsets{}
+			os.Add(kadm.Offset{Topic: topic, Partition: 0, At: 7, LeaderEpoch: -1})
+			if _, err := adm.CommitOffsets(context.Background(), "other", os); err != nil {
+				t.Fatalf("commit failed: %v", err)
+			}
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.OffsetFetch}, Group: group, Err: kerr.GroupAuthorizationFailed, Count: -1})
+			fetched := adm.FetchManyOffsets(context.Background(), "other", group)
+			if len(fetched) != 2 || fetched["other"].Err != nil || !errors.Is(fetched[group].Err, kerr.GroupAuthorizationFailed) {
+				t.Fatalf("fetched %v, want other without an error and %s with GROUP_AUTHORIZATION_FAILED", fetched, group)
+			}
+			if o, ok := fetched["other"].Fetched.Lookup(topic, 0); !ok || o.TopicID == (kadm.TopicID{}) {
+				t.Errorf("other's offset for %s is %v (found %v), want it with a topic ID", topic, o, ok)
 			}
 		}},
 

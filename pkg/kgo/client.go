@@ -3018,12 +3018,12 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 			var (
 				myIssue     = issues[i]
 				isPinned    bool
-				ctx         = ctx         // loop local context, in case we override by pinning
-				avoidBroker = avoidBroker // same
+				reqCtx      = ctx         // loop local context for the shard's own request, in case we pin
+				avoidBroker = avoidBroker // loop local
 				tries       = try.tries   // same
 			)
 			if isPinned = myIssue.pin != nil; isPinned {
-				ctx = context.WithValue(ctx, ctxPinReq, myIssue.pin)
+				reqCtx = context.WithValue(ctx, ctxPinReq, myIssue.pin)
 			}
 
 			if myIssue.err != nil {
@@ -3056,7 +3056,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 					return
 				}
 
-				resp, err := br.waitResp(ctx, myIssue.req)
+				resp, err := br.waitResp(reqCtx, myIssue.req)
 				var errIsFromResp bool
 				if err == nil {
 					err = sharder.onResp(ctx, myIssue.req, resp) // perform some potential cleanup, and potentially receive an error to retry
@@ -3704,6 +3704,8 @@ func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequest
 	return g
 }
 
+// The request is valid at every version: v0-v7 send Group, and v8+ send
+// Groups.
 func offsetFetchGroupToReq(requireStable bool, group kmsg.OffsetFetchRequestGroup) *kmsg.OffsetFetchRequest {
 	req := kmsg.NewPtrOffsetFetchRequest()
 	req.RequireStable = requireStable
@@ -3714,6 +3716,7 @@ func offsetFetchGroupToReq(requireStable bool, group kmsg.OffsetFetchRequestGrou
 		reqTopic.Partitions = topic.Partitions
 		req.Topics = append(req.Topics, reqTopic)
 	}
+	req.Groups = []kmsg.OffsetFetchRequestGroup{group}
 	return req
 }
 
@@ -3903,7 +3906,6 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 			}
 		} else if len(req.Groups) <= 1 {
 			single := offsetFetchGroupToReq(req.RequireStable, req.Groups[0])
-			single.Groups = req.Groups
 			issues = append(issues, issueShard{
 				req:    single,
 				broker: id,
@@ -3936,17 +3938,25 @@ func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kre
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
+	// A v0-v7 response has no groups, so we move the top level into Groups
+	// for v8+ forward compat. We move before resolving below, so that the
+	// moved topics are resolved as well.
+	moved := len(resp.Groups) == 0
+	if moved {
+		resp.Groups = append(resp.Groups, offsetFetchRespToGroup(req, resp))
+	}
+
 	// All-topics fetches could leave topics nil, in which case we do not
 	// bi-directionally resolve the name in shard, so we handle it here.
 	//
-	// We always run the resolution from cache (it lets clients use the
-	// "by ID" APIs against v9 brokers via name -> ID fallback). What we
-	// gate on resp.Version >= 10 is the safety-net error injection:
-	// below v10, TopicID is structurally absent from the wire, so a
-	// zero TopicID after cache lookup is expected, not an error. At v10+
-	// the broker should have sent the missing side; failing to resolve
-	// is a real surprise. See #1312 for the EH case where a v8/v9 OffsetFetch
-	// against a sub-v10 Metadata broker would synthesize a bogus
+	// We resolve names to IDs whenever the cluster has topic IDs, which lets
+	// clients use the "by ID" APIs against brokers before OffsetFetch v10.
+	// What we gate on resp.Version >= 10 is the safety-net error injection:
+	// below v10, TopicID is structurally absent from the wire, so a zero
+	// TopicID after cache lookup is expected, not an error. At v10+ the
+	// broker should have sent the missing side; failing to resolve is a real
+	// surprise. See #1312 for the EH case where a v8/v9 OffsetFetch against
+	// a sub-v10 Metadata broker would synthesize a bogus
 	// UNKNOWN_TOPIC_OR_PARTITION on every partition.
 	var unresolvedIDs [][16]byte
 	var unresolvedNames []string
@@ -3962,11 +3972,12 @@ func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kre
 		}
 	}
 
-	// If anything is unresolved, resolve both, then do the walk again.
+	// If anything is unresolved, we resolve what we can, then do the walk
+	// again.
 	if len(unresolvedIDs) > 0 {
 		cl.resolveTopicMetaByID(ctx, unresolvedIDs)
 	}
-	if len(unresolvedNames) > 0 {
+	if len(unresolvedNames) > 0 && cl.supportsKeyVersion(int16(kmsg.Metadata), 10) { // topic IDs need Metadata v10
 		cl.resolveTopicMeta(ctx, unresolvedNames, false, 0)
 	}
 	if len(unresolvedIDs) > 0 || len(unresolvedNames) > 0 {
@@ -4011,15 +4022,9 @@ func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kre
 		cl.metaCache.mu.Unlock()
 	}
 
-	switch len(resp.Groups) {
-	case 0:
-		// Requested no groups: move top level into batch for v0-v7 to
-		// v8 forward compat.
-		resp.Groups = append(resp.Groups, offsetFetchRespToGroup(req, resp))
-	case 1:
-		// Requested 1 group v8+: set top level for v0-v7 back-compat.
+	// Requested 1 group v8+: set top level for v0-v7 back-compat.
+	if !moved && len(resp.Groups) == 1 {
 		offsetFetchRespGroupIntoResp(resp.Groups[0], resp)
-	default:
 	}
 
 	var retErr error
