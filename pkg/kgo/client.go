@@ -4124,6 +4124,7 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 		sreq := kmsg.NewPtrFindCoordinatorRequest()
 		sreq.CoordinatorType = req.CoordinatorType
 		sreq.CoordinatorKey = key
+		sreq.CoordinatorKeys = []string{key} // not sent below v4, but a caller reads a failed shard's keys from it
 		issues = append(issues, issueShard{
 			req: sreq,
 			pin: &pinReq{pinMax: true, max: 3},

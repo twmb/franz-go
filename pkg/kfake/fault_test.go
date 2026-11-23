@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -944,6 +945,15 @@ func TestFaultFindCoordinator(t *testing.T) {
 	}
 	if code := find(1, "untouched"); code != 0 {
 		t.Errorf("unselected transaction key answered %d", code)
+	}
+
+	// Below v4, kgo splits a request for many keys per key, and kadm reads
+	// a failed request's keys from CoordinatorKeys.
+	c.Fault(Fault{Group: "denied", Err: kerr.GroupAuthorizationFailed, Count: -1})
+	adm := kadm.NewClient(newPlainClient(t, c, kgo.MaxVersions(kversion.V2_8_0())))
+	rs := adm.FindGroupCoordinators(context.Background(), "untouched", "denied")
+	if len(rs) != 2 || rs["untouched"].Err != nil || !errors.Is(rs["denied"].Err, kerr.GroupAuthorizationFailed) {
+		t.Errorf("found %v, want untouched without an error and denied with GROUP_AUTHORIZATION_FAILED", rs)
 	}
 }
 
