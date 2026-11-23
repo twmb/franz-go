@@ -172,7 +172,9 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 		sort.Slice(s, func(i, j int) bool {
 			l, r := s[i], s[j]
 			return l.Subject < r.Subject ||
-				l.Subject == r.Subject && l.Version > r.Version
+				l.Subject == r.Subject && l.Version > r.Version ||
+				l.Subject == r.Subject && l.Version == r.Version && l.ID < r.ID ||
+				l.Subject == r.Subject && l.Version == r.Version && l.ID == r.ID && l.GUID < r.GUID
 		})
 	}
 
