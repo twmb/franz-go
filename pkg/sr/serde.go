@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -248,9 +249,14 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	}
 
 	// If this value was already registered, we are overriding the
-	// previous registration and need to delete the previous type.
+	// previous registration and need to delete the previous type. We
+	// only delete if the type still encodes to this node: the type may
+	// have since been registered to a different ID or index, and that
+	// newer registration must survive.
 	if at.exists {
-		delete(dupTypes, at.typeof)
+		if prev := dupTypes[at.typeof]; prev.id == at.id && slices.Equal(prev.index, at.index) {
+			delete(dupTypes, at.typeof)
+		}
 	}
 
 	// Now, we initialize the end node.

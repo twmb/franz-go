@@ -617,3 +617,32 @@ func TestIsRegistered(t *testing.T) {
 		t.Error("expected ID 4 to not have EncodeFn")
 	}
 }
+
+func TestRegisterOverrideKeepsMovedType(t *testing.T) {
+	type moved struct {
+		A int `json:"a"`
+	}
+	type other struct {
+		B int `json:"b"`
+	}
+
+	var serde Serde
+	serde.Register(1, moved{}, EncodeFn(json.Marshal))
+	serde.Register(2, moved{}, EncodeFn(json.Marshal)) // moved now encodes with ID 2
+	serde.Register(1, other{}, EncodeFn(json.Marshal)) // overriding ID 1 must not drop moved
+
+	b, err := serde.Encode(moved{A: 1})
+	if err != nil {
+		t.Fatalf("unable to encode type registered to ID 2: %v", err)
+	}
+	if id, _, err := serde.DecodeID(b); err != nil || id != 2 {
+		t.Errorf("got id %d, err %v; want id 2", id, err)
+	}
+	b, err = serde.Encode(other{B: 1})
+	if err != nil {
+		t.Fatalf("unable to encode type registered to ID 1: %v", err)
+	}
+	if id, _, err := serde.DecodeID(b); err != nil || id != 1 {
+		t.Errorf("got id %d, err %v; want id 1", id, err)
+	}
+}
