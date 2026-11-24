@@ -1914,17 +1914,22 @@ func TestIssue1331(t *testing.T) {
 		t.Fatalf("baseline PartitionLeader epoch = %d, err = %v; want a real non-negative epoch", epoch, err)
 	}
 
-	// A Metadata response below v9 can have a stale leader epoch, so a
-	// client capped there must not use the epoch. The poll waits for the
-	// client to load the topic.
+	// A Metadata response below v9 can have a stale leader epoch, and
+	// without OffsetForLeaderEpoch v2 we cannot validate an epoch, so a
+	// client capped either way must not use the epoch. The poll waits for
+	// the client to load the topic.
 	v8 := kversion.Stable()
 	v8.SetMaxKeyVersion(int16(kmsg.Metadata), 8)
-	old := newPlainClient(t, c, kgo.ConsumeTopics(testTopic), kgo.MaxVersions(v8))
-	if fs := old.PollFetches(ctx); fs.NumRecords() == 0 {
-		t.Fatalf("a client below Metadata v9 consumed nothing: %v", fs.Errors())
-	}
-	if _, epoch, err := old.PartitionLeader(testTopic, 0); err != nil || epoch != -1 {
-		t.Fatalf("below Metadata v9, PartitionLeader epoch = %d, err = %v; want -1", epoch, err)
+	noOFLE := kversion.Stable()
+	noOFLE.SetMaxKeyVersion(int16(kmsg.OffsetForLeaderEpoch), -1)
+	for _, vs := range []*kversion.Versions{v8, noOFLE} {
+		old := newPlainClient(t, c, kgo.ConsumeTopics(testTopic), kgo.MaxVersions(vs))
+		if fs := old.PollFetches(ctx); fs.NumRecords() == 0 {
+			t.Fatalf("a capped client consumed nothing: %v", fs.Errors())
+		}
+		if _, epoch, err := old.PartitionLeader(testTopic, 0); err != nil || epoch != -1 {
+			t.Fatalf("capped, PartitionLeader epoch = %d, err = %v; want -1", epoch, err)
+		}
 	}
 
 	// Arm the leaderless window and wait until it spans well past

@@ -983,21 +983,7 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 // v1 introduces support for regex and requires the client to generate
 // the member ID, and fully stabilizes KIP-848.
 func (cl *Client) supportsKIP848v1() bool {
-	if !cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1) {
-		return false
-	}
-	// The 848 manage loop runs v1 semantics (client-generated member ID,
-	// regex subscriptions). If the user's MaxVersions caps the heartbeat
-	// below v1, the wire request would be v0 while we behave as v1: v0
-	// has no SubscribedTopicRegex field at all, so a regex consumer's
-	// join would carry no subscription and silently consume nothing.
-	// Only opt in if the cap allows v1, mirroring supportsKIP890p2.
-	if mv := cl.cfg.maxVersions; mv != nil {
-		if v, ok := mv.LookupMaxKeyVersion(int16(kmsg.ConsumerGroupHeartbeat)); !ok || v < 1 {
-			return false
-		}
-	}
-	return true
+	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
 }
 
 // Called after the first metric observed, which is always after a response.
@@ -1006,9 +992,18 @@ func (cl *Client) supportsClientMetrics() bool {
 		cl.supportsKeyVersion(int16(kmsg.PushTelemetry), 0)
 }
 
-// A broker may not support some requests we want to make. This function checks
-// support. This should only be used *after* at least one successful response.
+// A broker, or the user's MaxVersions, may not support some requests we want
+// to make. This function checks support. A request that MaxVersions caps
+// below version would go out at a lower version than we act on, or, if
+// MaxVersions lacks the key, fail before it is sent. This should only be used
+// *after* at least one successful response.
 func (cl *Client) supportsKeyVersion(key, version int16) bool {
+	if mv := cl.cfg.maxVersions; mv != nil {
+		if v, ok := mv.LookupMaxKeyVersion(key); !ok || v < version {
+			return false
+		}
+	}
+
 	cl.brokersMu.RLock()
 	defer cl.brokersMu.RUnlock()
 
