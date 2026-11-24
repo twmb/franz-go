@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -125,5 +126,20 @@ func TestAuditShareMetadataMigrationWaitsForLeave(t *testing.T) {
 	}
 	if newtp.shareCursor != c {
 		t.Errorf("new.shareCursor was not set after migration")
+	}
+
+	// A source that sinksAndSources does not have can still have a fetch
+	// buffered. Leaving takes the fetch, which finishes the fetch for
+	// the fetch manager.
+	gone := cl.newSource(2)
+	doneFetch := make(chan bool, 1)
+	gone.share.buffered = shareBufferedFetch{doneFetch: doneFetch}
+	gone.sem = make(chan struct{})
+	sc.c.addSourceReadyForDraining(gone)
+	sc.leave(context.Background())
+	select {
+	case <-doneFetch:
+	default:
+		t.Error("leave did not take the buffered fetch of a source that sinksAndSources does not have")
 	}
 }

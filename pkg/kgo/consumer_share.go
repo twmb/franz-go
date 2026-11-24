@@ -584,7 +584,7 @@ func (cl *Client) FlushAcks(ctx context.Context) error {
 //  2. Cancel fm.ctx so manage + source loops exit.
 //  3. Wait for all workers (manage + source loops) to reach 0.
 //  4. Release lastPolled and buffered records, drain fetchManager slots.
-//  5. Per-source FINAL_EPOCH ShareFetch with remaining acks.
+//  5. Per-source FINAL_EPOCH ShareAcknowledge with remaining acks.
 //  6. Leave heartbeat (MemberEpoch=-1).
 //
 // Called from a fresh goroutine by LeaveGroupContext. The caller
@@ -614,13 +614,23 @@ func (sc *shareConsumer) leave(ctx context.Context) {
 	// A user PollRecords could still be in flight: even after
 	// fm.cancel, the non-deterministic select may wake on the
 	// sourcesReady channel instead of fm.ctx.Done. c.mu blocks
-	// poll entirely. Under it we clear the source queue (so any
-	// racing poll sees nothing -- the records are still on
-	// s.share.buffered; closeShareSession finds and releases them)
-	// and release unacked lastPolled records (AckRelease so another
-	// consumer gets them, not auto-accept).
+	// poll entirely. Under it we take every buffered fetch, as the
+	// classic consumer does when its session stops, and release the
+	// buffered records and the unacked lastPolled records (AckRelease
+	// so another consumer gets them, not auto-accept). The acks are
+	// queued on cursor.pendingAcks, and the FINAL_EPOCH requests
+	// below send them.
 	sc.c.mu.Lock()
 	sc.c.sourcesReadyMu.Lock()
+	for _, s := range sc.c.sourcesReadyForDraining {
+		f := s.share.takeBufferedFn(false)
+		for ti := range f.Topics {
+			t := &f.Topics[ti]
+			for pi := range t.Partitions {
+				batchAckRecords(sc, t.Partitions[pi].Records, AckRelease, true)
+			}
+		}
+	}
 	sc.c.sourcesReadyForDraining = nil
 	sc.c.sourcesReadyMu.Unlock()
 	if len(sc.lastPolled) > 0 {
@@ -629,8 +639,7 @@ func (sc *shareConsumer) leave(ctx context.Context) {
 	}
 	sc.c.mu.Unlock()
 
-	// Per-source: release buffered records, drain fetchManager
-	// slots, then close the share session (FINAL_EPOCH ShareAcknowledge
+	// Per-source: close the share session (FINAL_EPOCH ShareAcknowledge
 	// with all remaining acks piggybacked).
 	var wg sync.WaitGroup
 	sc.cl.allSources(func(s *source) {
@@ -641,6 +650,7 @@ func (sc *shareConsumer) leave(ctx context.Context) {
 		}()
 	})
 	wg.Wait()
+	sc.c.runDeferredFetchHooks() // for the buffered fetches released above
 
 	// Leave heartbeat.
 	memberID, _ := sc.memberGen.load()
@@ -672,26 +682,11 @@ func (sc *shareConsumer) leave(ctx context.Context) {
 	sc.leaveErr = err
 }
 
-// closeShareSession releases any buffered records on this source,
-// drains fetchManager slots, then sends a FINAL_EPOCH ShareAcknowledge
-// (-1) with all remaining cursor.pendingAcks piggybacked. Called
-// from sc.leave after all workers have exited.
+// closeShareSession sends a FINAL_EPOCH ShareAcknowledge (-1) with all
+// remaining cursor.pendingAcks piggybacked. Called from sc.leave after
+// all workers have exited and every buffered fetch is released.
 func (s *source) closeShareSession(ctx context.Context) {
 	sc := s.share.sc
-	// Release buffered-but-never-polled records. Their acks land
-	// on cursor.pendingAcks and get piggybacked on the FINAL_EPOCH
-	// request below.
-	b := s.share.buffered
-	s.share.buffered = shareBufferedFetch{}
-	if b.doneFetch != nil { // source had a buffered fetch
-		b.doneFetch <- false
-		for ti := range b.fetch.Topics {
-			t := &b.fetch.Topics[ti]
-			for pi := range t.Partitions {
-				batchAckRecords(sc, t.Partitions[pi].Records, AckRelease, true)
-			}
-		}
-	}
 
 	// Drain all cursor acks. drainAcks(true) sets the closed flag
 	// atomically with the drain so post-leave Record.Ack gets a
@@ -1555,15 +1550,23 @@ func (s *source) loopShareFetch() {
 	}
 }
 
-func (s *sourceShare) takeBuffered(paused pausedTopics) Fetch {
-	sc := s.sc
+// Clears the buffered fetch, finishes the fetch for the fetch manager, and
+// counts the fetch's records as unbuffered. Every path that removes a
+// buffered fetch goes through here.
+//
+// Must be called with c.sourcesReadyMu held.
+func (s *sourceShare) takeBufferedFn(polled bool) Fetch {
 	b := s.buffered
 	s.buffered = shareBufferedFetch{}
 	b.doneFetch <- true
 	close(s.s.sem)
+	s.s.hookDeferUnbuffered(&b.fetch, polled) // callers strip or release only after this capture
+	return b.fetch
+}
 
-	f := b.fetch
-	s.s.hookDeferUnbuffered(&f, true) // unbuffered, polled; capture precedes the strip below
+func (s *sourceShare) takeBuffered(paused pausedTopics) Fetch {
+	sc := s.sc
+	f := s.takeBufferedFn(true)
 
 	// Strip paused partitions from the returned fetch and release
 	// their records back to the broker for redelivery.

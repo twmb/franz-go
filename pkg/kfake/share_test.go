@@ -3250,6 +3250,15 @@ func TestShareGroupFetchAfterTimerWhileBuffered(t *testing.T) {
 	before := fetches.Load()
 	cl.PollFetches(ctx) // takes the buffered fetch
 	waitFor(t, 3*time.Second, "no ShareFetch after taking the buffered fetch", func() bool { return fetches.Load() > before })
+
+	// Closing with a fetch buffered and not polled counts the fetch's
+	// record as unbuffered.
+	produceShareN(t, c, topic, group, 1)
+	waitFor(t, 5*time.Second, "the next fetch was not buffered", func() bool { return cl.BufferedFetchRecords() == 1 })
+	cl.Close()
+	if n := cl.BufferedFetchRecords(); n != 0 {
+		t.Errorf("%d records still count as buffered after Close, want 0", n)
+	}
 }
 
 // TestShareGroupFetchPastDeadline verifies that a share source keeps
