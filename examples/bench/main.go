@@ -41,8 +41,8 @@ var (
 	linger              = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	batchMaxBytes       = flag.Int("batch-max-bytes", 1000000, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 
-	batchRecs  = flag.Int("batch-recs", 1, "number of records to create before produce calls")
-	psync      = flag.Bool("psync", false, "produce synchronously")
+	batchRecs = flag.Int("batch-recs", 1, "number of records to create before produce calls")
+	psync     = flag.Bool("psync", false, "produce synchronously")
 
 	pgoros = flag.Int("pgoros", 1, "number of goroutines concurrently spawn to produce")
 
