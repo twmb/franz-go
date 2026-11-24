@@ -160,9 +160,9 @@ func TestACLsWithPermission(t *testing.T) {
 		User("PLAIN", "testuser", "testpass",
 			// A CIDR host matches the client's address (Kafka 4.4).
 			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationWrite, Allow: true, Host: "127.0.0.0/8"},
-			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
+			ACL{Resource: kmsg.ACLResourceTypeTopic, Name: "test-topic", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationRead, Allow: true},
 			ACL{Resource: kmsg.ACLResourceTypeCluster, Name: "kafka-cluster", Operation: kmsg.ACLOperationIdempotentWrite, Allow: true},
-			ACL{Resource: kmsg.ACLResourceTypeGroup, Name: "g", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationDescribe, Allow: true},
+			ACL{Resource: kmsg.ACLResourceTypeGroup, Name: "g", Pattern: kmsg.ACLResourcePatternTypeLiteral, Operation: kmsg.ACLOperationRead, Allow: true},
 		),
 	)
 
@@ -203,6 +203,18 @@ func TestACLsWithPermission(t *testing.T) {
 		if err := adm.CommitAllOffsets(ctx, g, offsets); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	// Kafka commits the topics you may read and fails the others.
+	rs, err := kadm.NewClient(cl).CommitOffsets(ctx, "g", offsets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := rs.Lookup("test-topic", 0); r.Err != nil {
+		t.Errorf("committing test-topic: %v", r.Err)
+	}
+	if r, _ := rs.Lookup("t2", 0); r.Err != kerr.TopicAuthorizationFailed {
+		t.Errorf("committing t2: %v, want TOPIC_AUTHORIZATION_FAILED", r.Err)
 	}
 
 	// Kafka leaves out the topics you may not describe, and fails them

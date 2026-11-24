@@ -24,7 +24,7 @@ type Config struct {
 	Source    kmsg.ConfigSource // Source is where this config is defined from.
 
 	// Synonyms contains fallback key/value pairs for this same
-	// configuration key in order or preference. That is, if a config entry
+	// configuration key in order of preference. That is, if a config entry
 	// is both dynamically defined and has a default value as well, the top
 	// level config will be the dynamic value, while the synonym will be
 	// the default.
@@ -73,7 +73,7 @@ func (rs ResourceConfigs) On(name string, fn func(*ResourceConfig) error) (Resou
 
 // DescribeTopicConfigs returns the configuration for the requested topics.
 //
-// This may return *ShardErrors.
+// This may return *ShardErrors or *AuthError.
 func (cl *Client) DescribeTopicConfigs(
 	ctx context.Context,
 	topics ...string,
@@ -88,7 +88,7 @@ func (cl *Client) DescribeTopicConfigs(
 // brokers are requested, a single request is issued and any broker in the
 // cluster replies with the cluster-level dynamic config values.
 //
-// This may return *ShardErrors.
+// This may return *ShardErrors or *AuthError.
 func (cl *Client) DescribeBrokerConfigs(
 	ctx context.Context,
 	brokers ...int32,
@@ -351,7 +351,7 @@ func (cl *Client) ValidateAlterTopicConfigsState(ctx context.Context, configs []
 // All prior configuration is lost.
 //
 // This may return *ShardErrors. You may consider checking
-// ValidateAlterBrokerConfigs before using this method.
+// ValidateAlterBrokerConfigsState before using this method.
 func (cl *Client) AlterBrokerConfigsState(ctx context.Context, configs []AlterConfig, brokers ...int32) (AlterConfigsResponses, error) {
 	var names []string
 	if len(brokers) == 0 {
@@ -479,7 +479,8 @@ func (l ListedConfigResources) Names() []string {
 	return names
 }
 
-// ListConfigResources lists config resources (requires Kafka 4.1+).
+// ListConfigResources lists config resources. The resource types are sent only
+// to Kafka 4.1+; Kafka 3.7 through 4.0 list only client metrics resources.
 //
 // If no resource types are specified, Kafka uses its default supported config
 // resource types.

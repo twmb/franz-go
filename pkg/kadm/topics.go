@@ -159,6 +159,9 @@ func (cl *Client) CreateTopic(
 // authorization failures are included in the responses. This only returns an
 // error if the request fails to be issued. You may consider checking
 // ValidateCreateTopics before using this method.
+//
+// Without DESCRIBE_CONFIGS on a topic, Kafka does not return the topic's
+// settings: NumPartitions and ReplicationFactor are -1 and Configs is empty.
 func (cl *Client) CreateTopics(
 	ctx context.Context,
 	partitions int32,
@@ -454,10 +457,10 @@ func (ds DeleteRecordsResponses) Error() error {
 }
 
 // DeleteRecords issues a delete records request for the given offsets. Per
-// offset, only the Offset field needs to be set.
+// offset, only the At field needs to be set.
 //
 // To delete records, Kafka sets the LogStartOffset for partitions to the
-// requested offset. All segments whose max partition is before the requested
+// requested offset. All segments whose max offset is before the requested
 // offset are deleted, and any records within the segment before the requested
 // offset can no longer be read.
 //

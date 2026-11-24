@@ -16,6 +16,14 @@ type Principal struct {
 	Name string // Name is the name of a principal owner or renewer.
 }
 
+// The Principal docs promise an empty Type defaults to "User".
+func principalType(t string) string {
+	if t == "" {
+		return "User"
+	}
+	return t
+}
+
 // DelegationToken contains information about a delegation token.
 type DelegationToken struct {
 	// Owner is the owner of the delegation token.
@@ -56,8 +64,9 @@ type CreateDelegationToken struct {
 	// Owner overrides the owner of the token from the principal issuing
 	// the request to the principal in this field. This allows a superuser
 	// to create tokens without requiring individual user credentials, and
-	// for a superuser to run clients on behalf of another user. These
-	// fields require Kafka 3.3+; see KIP-373 for more details.
+	// for a superuser to run clients on behalf of another user. Owner is
+	// sent only to Kafka 3.3+ (KIP-373); older brokers issue the token to
+	// the requester.
 	Owner *Principal
 	// Renewers is a list of principals that can renew the delegation
 	// token in addition to the owner of the token. This list does not
@@ -84,21 +93,17 @@ type CreateDelegationToken struct {
 // This can return *AuthError.
 func (cl *Client) CreateDelegationToken(ctx context.Context, d CreateDelegationToken) (DelegationToken, error) {
 	req := kmsg.NewPtrCreateDelegationTokenRequest()
-	// The Principal docs promise an empty Type defaults to "User".
-	principalType := func(t string) string {
-		if t == "" {
-			return "User"
-		}
-		return t
-	}
 	if d.Owner != nil {
 		ownerType := principalType(d.Owner.Type)
 		req.OwnerPrincipalType = &ownerType
 		req.OwnerPrincipalName = &d.Owner.Name
 	}
+	var renewers []Principal
 	for _, renewer := range d.Renewers {
+		renewer.Type = principalType(renewer.Type)
+		renewers = append(renewers, renewer)
 		rr := kmsg.NewCreateDelegationTokenRequestRenewer()
-		rr.PrincipalType = principalType(renewer.Type)
+		rr.PrincipalType = renewer.Type
 		rr.PrincipalName = renewer.Name
 		req.Renewers = append(req.Renewers, rr)
 	}
@@ -128,7 +133,7 @@ func (cl *Client) CreateDelegationToken(ctx context.Context, d CreateDelegationT
 		MaxTimestamp:    time.UnixMilli(resp.MaxTimestamp).UTC(),
 		TokenID:         resp.TokenID,
 		HMAC:            resp.HMAC,
-		Renewers:        append([]Principal(nil), d.Renewers...),
+		Renewers:        renewers,
 	}
 	if resp.Version < 3 {
 		t.TokenRequesterPrincipal = t.Owner
@@ -168,6 +173,9 @@ func (cl *Client) ExpireDelegationToken(ctx context.Context, hmac []byte, expiry
 	req := kmsg.NewPtrExpireDelegationTokenRequest()
 	req.HMAC = hmac
 	req.ExpiryPeriodMillis = expiry.Milliseconds()
+	if expiry < 0 {
+		req.ExpiryPeriodMillis = -1 // Milliseconds truncates -1ns to 0, and 0 does not expire the token immediately
+	}
 	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
 		return time.Time{}, err
@@ -190,7 +198,7 @@ func (cl *Client) DescribeDelegationTokens(ctx context.Context, owners ...Princi
 	req := kmsg.NewPtrDescribeDelegationTokenRequest()
 	for _, owner := range owners {
 		ro := kmsg.NewDescribeDelegationTokenRequestOwner()
-		ro.PrincipalType = owner.Type
+		ro.PrincipalType = principalType(owner.Type)
 		ro.PrincipalName = owner.Name
 		req.Owners = append(req.Owners, ro)
 	}

@@ -624,7 +624,7 @@ func (ls LeaveGroupResponses) Ok() bool {
 //
 // This function allows manually removing members using instance IDs from a
 // group, which allows for fast scale down / host replacement (see KIP-345 for
-// more detail). This returns an *AuthErr if the use is not authorized to
+// more detail). This returns an *AuthError if the user is not authorized to
 // remove members from groups.
 func (cl *Client) LeaveGroup(ctx context.Context, b *LeaveGroupBuilder) (LeaveGroupResponses, error) {
 	if b == nil || len(b.instanceIDs) == 0 {
@@ -750,7 +750,7 @@ func (os *OffsetResponses) Add(o OffsetResponse) {
 	ot[o.Partition] = o
 }
 
-// EachError calls fn for every offset that as a non-nil error.
+// EachError calls fn for every offset that has a non-nil error.
 func (os OffsetResponses) EachError(fn func(o OffsetResponse)) {
 	for _, ps := range os {
 		for _, o := range ps {
@@ -830,7 +830,10 @@ func (os OffsetResponses) Ok() bool {
 // failures are included in the responses.
 func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (OffsetResponses, error) {
 	// Resolve topic names to IDs via metadata for v10+ support.
-	t2id := cl.resolveTopicIDs(ctx, os)
+	t2id, terrs, err := cl.resolveTopicIDs(ctx, os)
+	if err != nil {
+		return nil, err
+	}
 
 	rs := make(OffsetResponses)
 
@@ -839,14 +842,19 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 	for t, ps := range os {
 		id, ok := t2id[t]
 		if !ok {
-			// Cannot resolve topic name to ID -- inject error
-			// for all partitions and skip in the request.
+			// Cannot resolve topic name to ID -- inject the
+			// metadata error for all partitions and skip in the
+			// request.
+			terr := terrs[t]
+			if terr == nil {
+				terr = kerr.UnknownTopicOrPartition // missing from the metadata response
+			}
 			rt := make(map[int32]OffsetResponse)
 			rs[t] = rt
 			for p, o := range ps {
 				rt[p] = OffsetResponse{
 					Offset: o,
-					Err:    kerr.UnknownTopicOrPartition,
+					Err:    terr,
 				}
 			}
 			continue
@@ -1042,7 +1050,7 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 // FetchAllGroupTopics is a kadm "internal" topic name that can be used in
 // [FetchOffsetsForTopics]. By default, [FetchOffsetsForTopics] only returns
 // topics that are explicitly requested. Other topics that may be committed to
-// in the group are not returned. Using FetchAllRequestedTopics switches the
+// in the group are not returned. Using FetchAllGroupTopics switches the
 // behavior to return the union of all committed topics and all requested
 // topics.
 const FetchAllGroupTopics = "|fetch-all-group-topics|"
@@ -1053,8 +1061,7 @@ const FetchAllGroupTopics = "|fetch-all-group-topics|"
 //
 // If any partition fetched or listed has an error, this function returns an
 // error. The returned offset responses are ready to be used or converted
-// directly to pure offsets with `Into`, and again into kgo offsets with
-// another `Into`.
+// directly to pure offsets with Offsets, or into kgo offsets with KOffsets.
 //
 // By default, this function returns offsets for only the requested topics. You
 // can use the special "topic" [FetchAllGroupTopics] to return all committed-to
@@ -1151,7 +1158,7 @@ func (r FetchOffsetsResponse) CommittedPartitions() TopicsSet {
 // FetchOffsetsResponses contains responses for many fetch offsets requests.
 type FetchOffsetsResponses map[string]FetchOffsetsResponse
 
-// EachError calls fn for every response that as a non-nil error.
+// EachError calls fn for every response that has a non-nil error.
 func (rs FetchOffsetsResponses) EachError(fn func(FetchOffsetsResponse)) {
 	for _, r := range rs {
 		if r.Err != nil {
@@ -1316,7 +1323,7 @@ func (ds DeleteOffsetsResponses) Lookup(t string, p int32) (error, bool) { //nol
 	return r, exists
 }
 
-// EachError calls fn for every partition that as a non-nil deletion error.
+// EachError calls fn for every partition that has a non-nil deletion error.
 func (ds DeleteOffsetsResponses) EachError(fn func(string, int32, error)) {
 	for t, ps := range ds {
 		for p, err := range ps {
@@ -1352,10 +1359,10 @@ func (ds DeleteOffsetsResponses) Error() error {
 // request to allow admins to manually delete offsets for no longer consumed
 // topics.
 //
-// This method requires talking to Kafka v2.4+. This returns an *AuthErr if the
-// user is not authorized to delete offsets in the group at all. This does not
-// return on per-topic authorization failures, instead, per-topic authorization
-// failures are included in the responses.
+// This method requires talking to Kafka v2.4+. This returns an *AuthError if
+// the user is not authorized to delete offsets in the group at all. This does
+// not return on per-topic authorization failures, instead, per-topic
+// authorization failures are included in the responses.
 func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) (DeleteOffsetsResponses, error) {
 	if len(s) == 0 {
 		return nil, nil
@@ -1399,9 +1406,10 @@ func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) 
 // GroupMemberLag is the lag between a group member's current offset commit and
 // the current end offset.
 //
-// If either the offset commits have load errors, or the listed end offsets
-// have load errors, the Lag field will be -1 and the Err field will be set (to
-// the first of either the commit error, or else the list error).
+// If the partition is missing from the listed end offsets, or the offset
+// commit or the listed end offset has a load error, the Lag field will be -1
+// and the Err field will be set (to the first of the missing end offset, the
+// commit error, or the end offset error).
 //
 // If the group is in the Empty state, lag is calculated for all partitions in
 // a topic, but the member is nil. The calculate function assumes that any
@@ -1409,7 +1417,8 @@ func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) 
 // topics could not be listed, some partitions may be missing.
 type GroupMemberLag struct {
 	// Member is a reference to the group member consuming this partition.
-	// If the group is in state Empty, the member will be nil.
+	// The member is nil if no member is assigned this partition, as for
+	// every partition of a group in state Empty.
 	Member    *DescribedGroupMember
 	Topic     string // Topic is the topic this lag is for.
 	Partition int32  // Partition is the partition this lag is for.
@@ -1417,12 +1426,13 @@ type GroupMemberLag struct {
 	Commit Offset       // Commit is this member's current offset commit.
 	Start  ListedOffset // Start is a reference to the start of this partition, if provided. Start offsets are optional; if not provided, Start.Err is a non-nil error saying this partition is missing from list offsets. This is always present if lag is calculated via Client.Lag.
 	End    ListedOffset // End is a reference to the end offset of this partition.
-	Lag    int64        // Lag is how far behind this member is, or -1 if there is a commit error or list offset error.
+	Lag    int64        // Lag is how far behind this member is, or -1 if Err is non-nil. A Start error is ignored: with no commit and a Start error, Lag is the end offset.
 
-	Err error // Err is either the commit error, or the list end offsets error, or nil.
+	Err error // Err is an error saying the end offset is missing from list offsets, or else the commit error, or else the end offset error, or nil.
 }
 
-// IsEmpty returns if the this lag is for a group in the Empty state.
+// IsEmpty returns if no member is consuming this partition, which is true
+// for every partition of a group in the Empty state.
 func (g *GroupMemberLag) IsEmpty() bool { return g.Member == nil }
 
 // GroupLag is the per-topic, per-partition lag of members in a group.
@@ -1463,14 +1473,19 @@ func (l GroupLag) Sorted() []GroupMemberLag {
 	return all
 }
 
-// IsEmpty returns if the group is empty.
+// IsEmpty returns if the lag has partitions and none of them has a member, as
+// for a group in the Empty state.
 func (l GroupLag) IsEmpty() bool {
+	var empty bool
 	for _, ps := range l {
-		for _, m := range ps { //nolint:gocritic // rangeValCopy: intentional single-iteration return
-			return m.IsEmpty()
+		for p := range ps {
+			if ps[p].Member != nil {
+				return false
+			}
+			empty = true
 		}
 	}
-	return false
+	return empty
 }
 
 // Total returns the total lag across all topics.
@@ -1598,6 +1613,11 @@ func (ls DescribedGroupLags) Ok() bool {
 // be fetched, an error is returned for the group. If any topic cannot have its
 // end offsets listed, the lag for the partition has a corresponding error. If
 // any request fails with an auth error, this returns *AuthError.
+//
+// If no groups are given, this returns the lag of every classic and consumer
+// group. A broker that fails to list its groups is skipped, and its groups are
+// left out without an error. Members of a KIP-848 consumer group are described
+// only on Kafka 4.0+; older brokers describe the group as Dead.
 func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags, error) {
 	set := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
@@ -1614,6 +1634,23 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	}
 	lags := make(DescribedGroupLags)
 
+	// DescribeGroups lists only classic groups when given none, so we list
+	// classic and consumer groups ourselves. If only some brokers fail, we
+	// continue with the groups the others listed, as DescribeGroups does,
+	// and drop the errors of the brokers that failed.
+	if len(set) == 0 {
+		listed, err := cl.ListGroupsByType(ctx, []string{"classic", "consumer"})
+		if se, ok := errors.AsType[*ShardErrors](err); err != nil && (!ok || se.AllFailed) {
+			return nil, err
+		}
+		for g := range listed {
+			set[g] = struct{}{}
+		}
+		if len(set) == 0 {
+			return lags, nil
+		}
+	}
+
 	described, err := cl.DescribeGroups(ctx, rem()...)
 	// For auth err: always return.
 	// For shard errors, if we had some partial success, then we continue
@@ -1626,7 +1663,6 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 		return nil, err
 	case isShardErr && !se.AllFailed:
 		for _, se := range se.Errs {
-			// can be ListGroupsRequest as well
 			req, ok := se.Req.(*kmsg.DescribeGroupsRequest)
 			if !ok {
 				continue
@@ -1643,6 +1679,65 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 	case err != nil:
 		return nil, err
 	}
+
+	// Kafka 4.0+ answers DescribeGroups with GROUP_ID_NOT_FOUND for a
+	// KIP-848 consumer group. For each group that DescribeGroups answered
+	// with GROUP_ID_NOT_FOUND, we call DescribeConsumerGroups and convert
+	// the consumer group into the DescribedGroup that
+	// CalculateGroupLagWithStartOffsets reads.
+	var consumerGroups []string
+	for _, g := range described {
+		if errors.Is(g.Err, kerr.GroupIDNotFound) {
+			consumerGroups = append(consumerGroups, g.Group)
+		}
+	}
+	if len(consumerGroups) > 0 {
+		cdescribed, err := cl.DescribeConsumerGroups(ctx, consumerGroups...)
+		se, isShardErr := errors.AsType[*ShardErrors](err)
+		switch {
+		case isShardErr:
+			for _, se := range se.Errs {
+				req, ok := se.Req.(*kmsg.ConsumerGroupDescribeRequest)
+				if !ok {
+					continue
+				}
+				for _, g := range req.Groups {
+					cdescribed[g] = DescribedConsumerGroup{Group: g, Coordinator: se.Broker, Err: se.Err}
+				}
+			}
+		case err != nil:
+			return nil, err
+		}
+		for _, cg := range cdescribed {
+			if errors.Is(cg.Err, kerr.GroupIDNotFound) {
+				continue // not a consumer group either: keep the DescribeGroups answer
+			}
+			g := DescribedGroup{
+				Group:        cg.Group,
+				Coordinator:  cg.Coordinator,
+				State:        cg.State,
+				ProtocolType: "consumer",
+				Protocol:     cg.AssignorName,
+				Err:          cg.Err,
+			}
+			for _, m := range cg.Members {
+				assigned := new(kmsg.ConsumerMemberAssignment)
+				m.Assignment.EachPartitions(func(t string, ps []int32) {
+					assigned.Topics = append(assigned.Topics, kmsg.ConsumerMemberAssignmentTopic{Topic: t, Partitions: ps})
+				})
+				g.Members = append(g.Members, DescribedGroupMember{
+					MemberID:   m.MemberID,
+					InstanceID: m.InstanceID,
+					ClientID:   m.ClientID,
+					ClientHost: m.ClientHost,
+					Join:       GroupMemberMetadata{&kmsg.ConsumerMemberMetadata{Topics: m.SubscribedTopics}},
+					Assigned:   GroupMemberAssignment{assigned},
+				})
+			}
+			described[g.Group] = g
+		}
+	}
+
 	for _, g := range described {
 		lags[g.Group] = DescribedGroupLag{
 			Group:        g.Group,
@@ -1655,13 +1750,7 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 		}
 		if g.Err != nil {
 			delete(set, g.Group)
-			continue
 		}
-
-		// If the input set of groups is empty, DescribeGroups returns all groups.
-		// We add to `set` here so that the Lag function itself can calculate
-		// lag for all groups.
-		set[g.Group] = struct{}{}
 	}
 	if len(set) == 0 {
 		return lags, nil
@@ -1708,7 +1797,7 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 			*list.dst = listed
 			// As above: return on auth error. If there are shard errors,
 			// the topics will be missing in the response and then
-			// CalculateGroupLag will return UnknownTopicOrPartition.
+			// their partitions' lag will have errListMissing.
 			_, isAuthErr = errors.AsType[*AuthError](err)
 			_, isShardErr = errors.AsType[*ShardErrors](err)
 			switch {
@@ -1760,11 +1849,11 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 //	groups := DescribeGroups(ctx, group)
 //	commits := FetchManyOffsets(ctx, group)
 //	var endOffsets ListedOffsets
-//	listPartitions := described.AssignedPartitions()
-//	listPartitions.MergeTopics(described.JoinTopics())
-//	listPartitions.Merge(commits.CommittedPartitions()
+//	listPartitions := groups.AssignedPartitions()
+//	listPartitions.MergeTopics(groups.JoinTopics())
+//	listPartitions.Merge(commits.CommittedPartitions())
 //	if topics := listPartitions.Topics(); len(topics) > 0 {
-//		endOffsets = ListEndOffsets(ctx, listPartitions.Topics())
+//		endOffsets = ListEndOffsets(ctx, topics...)
 //	}
 //	for _, group := range groups {
 //		lag := CalculateGroupLag(group, commits[group.Group].Fetched, endOffsets)
@@ -2540,44 +2629,50 @@ func (cl *Client) DescribeShareGroups(ctx context.Context, groups ...string) (De
 }
 
 // resolveTopicIDs issues a metadata request for the topics in the given
-// Offsets map and returns a name-to-TopicID mapping.
-func (cl *Client) resolveTopicIDs(ctx context.Context, os Offsets) map[string]TopicID {
-	topics := make([]string, 0, len(os))
+// Offsets map and returns each topic's ID, or the error the broker returned
+// for the topic. We do not use Metadata: it fails entirely if one topic is not
+// authorized, while Kafka commits the authorized topics of an offset commit.
+func (cl *Client) resolveTopicIDs(ctx context.Context, os Offsets) (map[string]TopicID, map[string]error, error) {
+	t2id := make(map[string]TopicID, len(os))
+	terrs := make(map[string]error)
+	if len(os) == 0 {
+		return t2id, terrs, nil
+	}
+	req := kmsg.NewPtrMetadataRequest()
 	for t := range os {
-		topics = append(topics, t)
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(t)
+		req.Topics = append(req.Topics, rt)
 	}
-	t2id := make(map[string]TopicID, len(topics))
-	if len(topics) == 0 {
-		return t2id
-	}
-	meta, err := cl.Metadata(ctx, topics...)
+	resp, err := cl.cl.RequestCachedMetadata(ctx, req, 0)
 	if err != nil {
-		return t2id
+		return nil, nil, err
 	}
-	for _, td := range meta.Topics {
-		if td.Err != nil {
+	for _, t := range resp.Topics {
+		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
+			terrs[unptrStr(t.Topic)] = err
 			continue
 		}
-		t2id[td.Topic] = td.ID
+		t2id[unptrStr(t.Topic)] = t.TopicID
 	}
-	return t2id
+	return t2id, terrs, nil
 }
 
 // resolveTopicNames issues a metadata request for all topics and returns
 // a TopicID-to-name mapping.
-func (cl *Client) resolveTopicNames(ctx context.Context) map[TopicID]string {
-	id2name := make(map[TopicID]string)
+func (cl *Client) resolveTopicNames(ctx context.Context) (map[TopicID]string, error) {
 	meta, err := cl.Metadata(ctx)
 	if err != nil {
-		return id2name
+		return nil, err
 	}
+	id2name := make(map[TopicID]string, len(meta.Topics))
 	for _, td := range meta.Topics {
 		if td.Err != nil {
 			continue
 		}
 		id2name[td.ID] = td.Topic
 	}
-	return id2name
+	return id2name, nil
 }
 
 // CommitOffsetsByID issues an offset commit request for the input offsets,
@@ -2589,7 +2684,10 @@ func (cl *Client) resolveTopicNames(ctx context.Context) map[TopicID]string {
 // failures are included in the responses.
 func (cl *Client) CommitOffsetsByID(ctx context.Context, group string, os OffsetsByID) (OffsetResponsesByID, error) {
 	// Resolve IDs to names for backward compat with v0-v9 brokers.
-	id2name := cl.resolveTopicNames(ctx)
+	id2name, err := cl.resolveTopicNames(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	req := kmsg.NewPtrOffsetCommitRequest()
 	req.Group = group
@@ -2687,7 +2785,7 @@ func (cl *Client) CommitAllOffsetsByID(ctx context.Context, group string, os Off
 // Use [RequireStable] to block until pending transactional offset commits are
 // resolved.
 //
-// This method requires talking to Kafka v0.11+.
+// This method requires talking to Kafka v2.8+, which has topic IDs.
 func (cl *Client) FetchOffsetsByID(ctx context.Context, group string) (OffsetResponsesByID, error) {
 	req := kmsg.NewPtrOffsetFetchRequest()
 	req.Group = group

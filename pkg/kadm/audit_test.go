@@ -67,6 +67,21 @@ func TestACLBuilderLastCallWins(t *testing.T) {
 	if !explicitPrincipal {
 		t.Error("no filter carries the explicitly allowed principal")
 	}
+
+	// MaybeOperations with nothing clears the operations, rather than
+	// keeping the earlier OpRead.
+	b = NewACLs().Topics("a").Operations(OpRead).MaybeOperations().Allow().AllowHosts()
+	if _, _, err := createDelDescACL(b); err == nil {
+		t.Error("expected an error filtering with no operations after MaybeOperations()")
+	}
+}
+
+// VersionGuess previously dereferenced the nil response of a broker whose
+// ApiVersions request failed.
+func TestVersionGuessFailedBroker(t *testing.T) {
+	if got := (&BrokerApiVersions{Err: errors.New("dial failed")}).VersionGuess(); got != "unknown custom version" {
+		t.Errorf("got %q, want unknown custom version", got)
+	}
 }
 
 func TestValidateCreateDefaults(t *testing.T) {

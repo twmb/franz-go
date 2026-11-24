@@ -139,11 +139,16 @@ func (a AlterReplicaLogDirsResponse) Less(other AlterReplicaLogDirsResponse) boo
 	return a.Partition < other.Partition
 }
 
-func newAlterLogDirsResp(node int32, req AlterReplicaLogDirsReq, resp *kmsg.AlterReplicaLogDirsResponse) AlterReplicaLogDirsResponses {
-	a := make(AlterReplicaLogDirsResponses)
+func newAlterLogDirsResp(a AlterReplicaLogDirsResponses, node int32, req AlterReplicaLogDirsReq, resp *kmsg.AlterReplicaLogDirsResponse) AlterReplicaLogDirsResponses {
+	if a == nil {
+		a = make(AlterReplicaLogDirsResponses)
+	}
 	for _, kt := range resp.Topics {
-		ps := make(map[int32]AlterReplicaLogDirsResponse)
-		a[kt.Topic] = ps
+		ps := a[kt.Topic]
+		if ps == nil {
+			ps = make(map[int32]AlterReplicaLogDirsResponse)
+			a[kt.Topic] = ps
+		}
 		for _, kp := range kt.Partitions {
 			ps[kp.Partition] = AlterReplicaLogDirsResponse{
 				Broker:    node,
@@ -171,7 +176,7 @@ func (cl *Client) AlterAllReplicaLogDirs(ctx context.Context, alter AlterReplica
 	resps := make(AlterAllReplicaLogDirsResponses)
 	return resps, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
 		resp := kr.(*kmsg.AlterReplicaLogDirsResponse)
-		resps[b.NodeID] = newAlterLogDirsResp(b.NodeID, alter, resp) // one node ID, no need to unique-check
+		resps[b.NodeID] = newAlterLogDirsResp(resps[b.NodeID], b.NodeID, alter, resp) // kgo reshards a retried shard to every replica, so a node can answer twice
 		return nil
 	})
 }
@@ -188,7 +193,7 @@ func (cl *Client) AlterBrokerReplicaLogDirs(ctx context.Context, broker int32, a
 		return nil, err
 	}
 	resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
-	return newAlterLogDirsResp(broker, alter, resp), nil
+	return newAlterLogDirsResp(nil, broker, alter, resp), nil
 }
 
 func describeLogDirsReq(s TopicsSet) *kmsg.DescribeLogDirsRequest {
@@ -250,21 +255,23 @@ func (ds DescribedLogDirs) Lookup(d, t string, p int32) (DescribedLogDirPartitio
 }
 
 // LookupPartition returns the described partition if it exists in any
-// directory. Brokers should only have one replica of a partition, so this
-// should always find at most one partition.
+// directory. While a partition moves between directories, a broker reports
+// both the current and the future replica, and this returns the current
+// replica.
 func (ds DescribedLogDirs) LookupPartition(t string, p int32) (DescribedLogDirPartition, bool) {
+	var future DescribedLogDirPartition
+	var hasFuture bool
 	for _, dir := range ds {
-		ps, exists := dir.Topics[t]
-		if !exists {
-			continue
+		dp, exists := dir.Topics.Lookup(t, p)
+		switch {
+		case !exists:
+		case !dp.IsFuture:
+			return dp, true
+		default:
+			future, hasFuture = dp, true
 		}
-		dp, exists := ps[p]
-		if !exists {
-			continue
-		}
-		return dp, true
 	}
-	return DescribedLogDirPartition{}, false
+	return future, hasFuture
 }
 
 // Size returns the total size of all directories.
@@ -528,22 +535,30 @@ func (p DescribedLogDirPartition) LessBySize(other DescribedLogDirPartition) boo
 	return p.Less(other)
 }
 
-func newDescribeLogDirsResp(node int32, resp *kmsg.DescribeLogDirsResponse) DescribedLogDirs {
-	ds := make(DescribedLogDirs)
+func newDescribeLogDirsResp(ds DescribedLogDirs, node int32, resp *kmsg.DescribeLogDirsResponse) DescribedLogDirs {
+	if ds == nil {
+		ds = make(DescribedLogDirs)
+	}
 	for _, rd := range resp.Dirs {
 		d := DescribedLogDir{
 			Broker: node,
 			Dir:    rd.Dir,
-			Topics: make(DescribedLogDirTopics),
+			Topics: ds[rd.Dir].Topics,
 			Err:    kerr.ErrorForCode(rd.ErrorCode),
 
 			TotalBytes:  rd.TotalBytes,
 			UsableBytes: rd.UsableBytes,
 			IsCordoned:  rd.IsCordoned,
 		}
+		if d.Topics == nil {
+			d.Topics = make(DescribedLogDirTopics)
+		}
 		for _, rt := range rd.Topics {
-			t := make(map[int32]DescribedLogDirPartition)
-			d.Topics[rt.Topic] = t
+			t := d.Topics[rt.Topic]
+			if t == nil {
+				t = make(map[int32]DescribedLogDirPartition)
+				d.Topics[rt.Topic] = t
+			}
 			for _, rp := range rt.Partitions {
 				t[rp.Partition] = DescribedLogDirPartition{
 					Broker:    node,
@@ -562,8 +577,8 @@ func newDescribeLogDirsResp(node int32, resp *kmsg.DescribeLogDirsResponse) Desc
 }
 
 // DescribeAllLogDirs describes the log directories for every input topic
-// partition on every broker. If the input set is nil, this describes all log
-// directories.
+// partition on every broker. If the input set is nil or empty, this describes
+// all log directories.
 //
 // This may return *ShardErrors.
 func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (DescribedAllLogDirs, error) {
@@ -578,14 +593,14 @@ func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (Describe
 		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 			return err
 		}
-		resps[b.NodeID] = newDescribeLogDirsResp(b.NodeID, resp) // one node ID, no need to unique-check
+		resps[b.NodeID] = newDescribeLogDirsResp(resps[b.NodeID], b.NodeID, resp) // kgo reshards a retried shard to every replica, so a node can answer twice
 		return nil
 	})
 }
 
 // DescribeBrokerLogDirs describes the log directories for the input topic
-// partitions on the given broker. If the input set is nil, this describes all
-// log directories.
+// partitions on the given broker. If the input set is nil or empty, this
+// describes all log directories.
 func (cl *Client) DescribeBrokerLogDirs(ctx context.Context, broker int32, s TopicsSet) (DescribedLogDirs, error) {
 	req := describeLogDirsReq(s)
 	b := cl.cl.Broker(int(broker))
@@ -600,5 +615,5 @@ func (cl *Client) DescribeBrokerLogDirs(ctx context.Context, broker int32, s Top
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		return nil, err
 	}
-	return newDescribeLogDirsResp(broker, resp), nil
+	return newDescribeLogDirsResp(nil, broker, resp), nil
 }

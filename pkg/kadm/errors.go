@@ -37,9 +37,9 @@ type ShardError struct {
 	Req kmsg.Request // Req is a piece of the original request.
 	Err error        // Err is the error that resulted in this request failing.
 
-	// Broker, if non-nil, is the broker this request was meant to be
-	// issued to. If the NodeID is -1, then this piece of the request
-	// failed before being mapped to a broker.
+	// Broker is the broker this request was meant to be issued to. If
+	// the NodeID is -1, then this piece of the request failed before
+	// being mapped to a broker.
 	Broker BrokerDetail
 }
 
@@ -97,7 +97,7 @@ func shardErrEachBroker(req kmsg.Request, shards []kgo.ResponseShard, fn func(Br
 			// with a nil error whenever one broker answered with,
 			// e.g., COORDINATOR_LOAD_IN_PROGRESS past kgo's retry
 			// budget -- and everything built on those lists
-			// (no-arg Describes, Lag) under-reported with no
+			// (the no-arg Describes) under-reported with no
 			// signal.
 			se.Errs = append(se.Errs, ShardError{
 				Req:    shard.Req,

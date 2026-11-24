@@ -116,7 +116,7 @@ func (ds DescribedProducersPartitions) Sorted() []DescribedProducersPartition {
 	return all
 }
 
-// SortedProducers returns all producers sorted first by partition, then by producer ID.
+// SortedProducers returns all producers sorted by topic, then partition, then producer ID.
 func (ds DescribedProducersPartitions) SortedProducers() []DescribedProducer {
 	var all []DescribedProducer
 	ds.EachProducer(func(d DescribedProducer) {
@@ -180,7 +180,7 @@ func (ds DescribedProducersTopics) SortedPartitions() []DescribedProducersPartit
 	return all
 }
 
-// SortedProducers returns all producers sorted first by partition, then by producer ID.
+// SortedProducers returns all producers sorted by topic, then partition, then producer ID.
 func (ds DescribedProducersTopics) SortedProducers() []DescribedProducer {
 	var all []DescribedProducer
 	ds.EachProducer(func(d DescribedProducer) {
@@ -307,7 +307,7 @@ type DescribedTransaction struct {
 	TimeoutMillis  int32  // TimeoutMillis is the timeout of this transaction in milliseconds.
 	StartTimestamp int64  // StartTimestamp is millisecond when this transaction started.
 	ProducerID     int64  // ProducerID is the ID in use by the transactional ID.
-	ProducerEpoch  int16  // ProducerEpoch is the epoch associated with the produce rID.
+	ProducerEpoch  int16  // ProducerEpoch is the epoch associated with the producer ID.
 
 	// Topics is the set of partitions in the transaction, if active. When
 	// preparing to commit or abort, this includes only partitions which do
@@ -492,9 +492,6 @@ func (ls ListedTransactions) TransactionalIDs() []string {
 // producer.
 //
 // This may return *ShardErrors or *AuthError.
-// Note that filterStates requires brokers to support ListTransactions v1+
-// (Kafka 3.0+): against older brokers the field is not on the wire and the
-// listing is silently UNFILTERED, over-returning transactions.
 func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, filterStates []string) (ListedTransactions, error) {
 	return cl.ListTransactionsByTxPattern(ctx, producerIDs, filterStates, "")
 }
@@ -503,14 +500,11 @@ func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, fil
 // Filter states can be used to return transactions only in the requested
 // states. By default, this returns all transactions you have DESCRIBE access
 // to. Producer IDs can be specified to filter for transactions from the given
-// producer. TxIDPatterns, a re2 regular expression, is used to further filter
-// by transactional ID. This requires Kafka 4.1+.
+// producer. txIDPattern, a re2 regular expression, is used to further filter
+// by transactional ID. The pattern is sent only to Kafka 4.1+ (KIP-1152);
+// older brokers return transactions with any transactional ID.
 //
 // This may return *ShardErrors or *AuthError.
-// The pattern requires ListTransactions v2+ (Kafka 4.1+, KIP-1152) and
-// filterStates requires v1+: against older brokers the fields are not on the
-// wire and the listing is silently UNFILTERED for that dimension,
-// over-returning transactions.
 func (cl *Client) ListTransactionsByTxPattern(ctx context.Context, producerIDs []int64, filterStates []string, txIDPattern string) (ListedTransactions, error) {
 	req := kmsg.NewPtrListTransactionsRequest()
 	req.ProducerIDFilters = producerIDs
@@ -614,7 +608,7 @@ func (ts TxnMarkersTopicResponses) Sorted() []TxnMarkersTopicResponse {
 	return all
 }
 
-// SortedPartitions returns all topics sorted by topic then partition.
+// SortedPartitions returns all partitions sorted by topic then partition.
 func (ts TxnMarkersTopicResponses) SortedPartitions() []TxnMarkersPartitionResponse {
 	var all []TxnMarkersPartitionResponse
 	ts.EachPartition(func(p TxnMarkersPartitionResponse) {
@@ -649,7 +643,7 @@ type TxnMarkersResponse struct {
 	Topics     TxnMarkersTopicResponses // Topics contains the topics that markers were written for, for this ProducerID.
 }
 
-// TxnMarkersResponses contains per-partition-ID responses to a WriteTxnMarkers
+// TxnMarkersResponses contains per-producer-ID responses to a WriteTxnMarkers
 // request.
 type TxnMarkersResponses map[int64]TxnMarkersResponse
 
