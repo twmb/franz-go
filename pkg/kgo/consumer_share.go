@@ -225,11 +225,11 @@ type (
 	}
 
 	// shareAckSlab holds the per-record shareAckState array for one
-	// ShareFetch batch. One slab per batch is attached to every
-	// record's Context under shareAckKey. Records within a batch
-	// are contiguous in memory (one []Record allocation), so
-	// pointer arithmetic from records0 gives the slab index for
-	// any *Record in the batch (see shareAckFromCtx).
+	// ShareFetch batch, or for one v0 or v1 record. One slab per batch
+	// is attached to every record's Context under shareAckKey. Records
+	// within a batch are contiguous in memory (one []Record
+	// allocation), so pointer arithmetic from records0 gives the slab
+	// index for any *Record in the batch (see shareAckFromCtx).
 	//
 	// ackSource, sessionGen are the source identity and session
 	// generation at decode time; the staleness filter compares these

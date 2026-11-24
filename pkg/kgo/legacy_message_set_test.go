@@ -53,6 +53,9 @@ func processLegacySet(t *testing.T, askOffset int64, set []byte) (FetchPartition
 		Offset:    askOffset,
 		Topic:     "t",
 		Partition: 0,
+		shareAckSlab: func(n int, r *Record) *shareAckSlab {
+			return &shareAckSlab{states: make([]shareAckState, n), records0: r}
+		},
 	}
 	return ProcessFetchPartition(opts, rp, DefaultDecompressor(), nil)
 }
@@ -164,6 +167,9 @@ func TestLegacyMessageSetInnerOffsets(t *testing.T) {
 			var got []int64
 			for _, r := range fp.Records {
 				got = append(got, r.Offset)
+				if shareAckFromCtx(r) == nil { // a share consumer acks every record it returns
+					t.Errorf("record at offset %d has no share ack state", r.Offset)
+				}
 			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("got offsets %v, want %v", got, tc.want)

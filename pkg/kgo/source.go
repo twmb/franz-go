@@ -1670,9 +1670,10 @@ type ProcessFetchPartitionOpts struct {
 	// Pools contain potential pools to use for memory pooling.
 	Pools []Pool
 
-	// shareAckSlab, if non-nil, is called once per decoded batch
-	// to allocate a slab for share group ack state tracking. The
-	// slab is injected into each record's context via shareAckKey.
+	// shareAckSlab, if non-nil, is called once per decoded batch, and
+	// once per v0 or v1 record, to allocate a slab for share group ack
+	// state tracking. The slab is injected into each record's context
+	// via shareAckKey.
 	shareAckSlab func(numRecords int, firstRecord *Record) *shareAckSlab
 
 	// lastEpoch, if non-nil, is set to the leader epoch of each decoded
@@ -2338,6 +2339,7 @@ func (o *ProcessFetchPartitionOpts) processV1Message(
 		return false
 	}
 	record := v1MessageToRecord(o.Topic, fp.Partition, message)
+	o.attachShareSlab(record)
 	o.maybeKeepRecord(fp, record, false)
 	return true
 }
@@ -2425,8 +2427,17 @@ func (o *ProcessFetchPartitionOpts) processV0Message(
 		return false
 	}
 	record := v0MessageToRecord(o.Topic, fp.Partition, message)
+	o.attachShareSlab(record)
 	o.maybeKeepRecord(fp, record, false)
 	return true
+}
+
+// A v0 or v1 record is allocated on its own rather than in a batch's
+// []Record, so a share consumer gives it a one-record slab to ack it with.
+func (o *ProcessFetchPartitionOpts) attachShareSlab(r *Record) {
+	if o.shareAckSlab != nil {
+		r.Context = context.WithValue(context.Background(), shareAckKey, o.shareAckSlab(1, r))
+	}
 }
 
 // maybeKeepRecord keeps a record if it is within our range of offsets to keep.
