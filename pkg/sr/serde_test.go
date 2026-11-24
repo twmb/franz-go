@@ -514,6 +514,7 @@ func TestIsRegistered(t *testing.T) {
 	serde.Register(3, struct{}{}, AppendEncodeFn(func(b []byte, _ any) ([]byte, error) { return b, nil }), GenerateFn(func() any { return new(struct{}) }))
 	serde.Register(5, struct{}{}, DecodeFn(json.Unmarshal), Index(0))
 	serde.Register(6, struct{}{}, DecodeFn(json.Unmarshal), Index(1))
+	serde.Register(7, struct{}{}, DecodeFn(json.Unmarshal), Index(1, 2))
 
 	for i, test := range []struct {
 		id  int
@@ -534,6 +535,12 @@ func TestIsRegistered(t *testing.T) {
 		{5, []any{DecodeFn}, true}, // default index
 		{5, []any{EncodeFn}, false},
 		{6, []any{DecodeFn}, false}, // only a non-default index
+		{6, []any{DecodeFn, Index(1)}, true},
+		{6, []any{Index(1)}, false}, // no functions to check
+		{2, []any{EncodeFn, Index(0)}, false},
+		{2, []any{EncodeFn, DecodeFn(json.Unmarshal)}, false}, // an option other than Index
+		{7, []any{DecodeFn, Index(1, 2)}, true},
+		{7, []any{DecodeFn, Index(1)}, false}, // a prefix of the registered index
 	} {
 		if got := serde.IsRegistered(test.id, test.fns...); got != test.exp {
 			t.Errorf("#%d: got IsRegistered(%d) = %v != exp %v", i, test.id, got, test.exp)

@@ -615,13 +615,36 @@ func formatGUID(g []byte) string {
 // IsRegistered returns whether the schema ID is registered for the given
 // encoding/decoding/generate option functions. IsRegistered also returns true
 // if the ID's default message index, Index(0), is registered for the
-// functions. If no encodingOptFns are provided, it returns false. For example:
+// functions. You can pass an Index to check only that message index. If no
+// encodingOptFns are provided, it returns false. For example:
 //
 //	serde.IsRegistered(5, sr.DecodeFn)                    // checks only DecodeFn
 //	serde.IsRegistered(5, sr.EncodeFn, sr.AppendEncodeFn) // checks both EncodeFn and AppendEncodeFn
+//	serde.IsRegistered(5, sr.DecodeFn, sr.Index(1, 2))    // checks DecodeFn at message index 1, 2
 func (s *Serde) IsRegistered(id int, encodingOptFns ...any) bool {
+	var index []int
+	fns := make([]any, 0, len(encodingOptFns))
+	for _, fn := range encodingOptFns {
+		opt, ok := fn.(EncodingOpt)
+		if !ok {
+			fns = append(fns, fn)
+			continue
+		}
+		var o tserde
+		opt.apply(&o)
+		if o.index == nil {
+			return false // Index is the only option IsRegistered takes
+		}
+		index = o.index
+	}
 	t := s.loadIDs()[id]
-	return t.has(encodingOptFns) || t.subindex[0].has(encodingOptFns)
+	if index == nil {
+		return t.has(fns) || t.subindex[0].has(fns)
+	}
+	for _, idx := range index {
+		t = t.subindex[idx]
+	}
+	return t.has(fns)
 }
 
 func (t tserde) has(encodingOptFns []any) bool {
