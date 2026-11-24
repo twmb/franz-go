@@ -248,6 +248,47 @@ func (b *broker) loadVersions() *brokerVersions {
 	return loaded.(*brokerVersions)
 }
 
+// byNameMax returns the highest version of req that identifies topics by
+// name, if req must use it. OffsetFetch and OffsetCommit v10, and
+// TxnOffsetCommit v6, identify topics only by ID, which we cannot send for a
+// topic with no ID (see #1312). An OffsetFetch for all of a group's topics
+// must also identify topics by name if we cannot name the IDs that the
+// response returns, which needs Metadata v10.
+func (b *broker) byNameMax(v *brokerVersions, req kmsg.Request) (int16, bool) {
+	switch req := req.(type) {
+	case *kmsg.OffsetFetchRequest:
+		metaMax := v.maxVersion(int16(kmsg.Metadata))
+		if mv := b.cl.cfg.maxVersions; mv != nil {
+			if userMax, _ := mv.LookupMaxKeyVersion(int16(kmsg.Metadata)); userMax < metaMax {
+				metaMax = userMax
+			}
+		}
+		for _, g := range req.Groups {
+			if g.Topics == nil && metaMax < 10 {
+				return 9, true
+			}
+			for _, t := range g.Topics {
+				if t.TopicID == noID {
+					return 9, true
+				}
+			}
+		}
+	case *kmsg.OffsetCommitRequest:
+		for _, t := range req.Topics {
+			if t.TopicID == noID {
+				return 9, true
+			}
+		}
+	case *kmsg.TxnOffsetCommitRequest:
+		for _, t := range req.Topics {
+			if t.TopicID == noID {
+				return 5, true
+			}
+		}
+	}
+	return 0, false
+}
+
 func (b *broker) storeVersions(v *brokerVersions) { b.versions.Store(v) }
 
 const unknownControllerID = -1
@@ -579,6 +620,9 @@ start:
 		if userMax < ourMax {
 			ourMax = userMax
 		}
+	}
+	if byName, ok := b.byNameMax(v, req); ok && byName < ourMax {
+		ourMax = byName
 	}
 	if b.cl.cfg.minVersions != nil {
 		userMin, _ := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())

@@ -3798,11 +3798,12 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 			}
 		}
 	}
+	ids := cl.supportsKeyVersion(int16(kmsg.Metadata), 10) // topic IDs need Metadata v10
 	if len(unresolvedIDs) > 0 {
 		cl.resolveTopicMetaByID(ctx, unresolvedIDs)
 	}
 	var nameMeta map[string]cachedMetaTopic
-	if len(unresolvedNames) > 0 {
+	if len(unresolvedNames) > 0 && ids {
 		nameMeta, _ = cl.resolveTopicMeta(ctx, unresolvedNames, true, 0)
 	}
 	if resolving {

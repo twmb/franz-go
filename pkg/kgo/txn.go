@@ -1415,35 +1415,6 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		ctx := ctx
 		if !tx890p2 {
 			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
-		} else {
-			// TxnOffsetCommit v6 switched Topic to TopicID (KIP-1319),
-			// like OffsetCommit v10. If any topic in the request has no
-			// TopicID, pin to v5 so the broker matches by name; a zero
-			// TopicID on a v6+ wire would commit to no topic. This is
-			// computed HERE, at send time, and not in
-			// prepareTxnOffsetCommit: the PreTxnCommitFnContext fn runs
-			// after the topic build and may add topics (with or without
-			// ids), and this commit is transactional -- an unnoticed
-			// id-less topic on a v6 wire is offset loss inside an
-			// otherwise-committed transaction. The pin is per-request
-			// and never recomputed lower mid-flight: both Topic and
-			// TopicID are always populated in the request, so whatever
-			// version an individual retry negotiates serializes
-			// correctly. Missing ids are near-unreachable against v6
-			// brokers (their metadata always supplies ids; see the
-			// OffsetCommit pinV9 precedent and #1312 for the class of
-			// broker that omits them, none of which serve v6), so this
-			// pin is expected to be dead safety.
-			var pinV5 bool
-			for i := range req.Topics {
-				if req.Topics[i].TopicID == noID {
-					pinV5 = true
-					break
-				}
-			}
-			if pinV5 {
-				ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 5})
-			}
 		}
 		resp, err := req.RequestWith(ctx, g.cl)
 		if err != nil {

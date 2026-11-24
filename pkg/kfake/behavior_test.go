@@ -6136,6 +6136,21 @@ func TestOffsetCommitTopicID(t *testing.T) {
 					t.Errorf("expected committed offset %d, got %d", at, o.At)
 				}
 			}
+
+			// A client without topic IDs (Metadata below v10) commits
+			// and fetches by name.
+			noIDs := kversion.Stable()
+			noIDs.SetMaxKeyVersion(int16(kmsg.Metadata), 9)
+			adm = kadm.NewClient(newClient848(t, c, kgo.MaxVersions(noIDs)))
+			offsets := kadm.Offsets{}
+			offsets.Add(kadm.Offset{Topic: topic, Partition: 0, At: 15, LeaderEpoch: -1})
+			if rs, err := adm.CommitOffsets(ctx, group, offsets); err != nil || rs.Error() != nil {
+				t.Errorf("without topic IDs, commit failed: %v, %v", err, rs.Error())
+			}
+			fetched, err := adm.FetchOffsets(ctx, group)
+			if o, _ := fetched.Lookup(topic, 0); err != nil || o.At != 15 {
+				t.Errorf("without topic IDs, fetched offset %d (err %v), want 15", o.At, err)
+			}
 		}},
 
 		{"kadm-by-id", func(t *testing.T, c *Cluster, producer *kgo.Client, topic, group string) {
