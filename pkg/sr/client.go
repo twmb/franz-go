@@ -80,6 +80,8 @@ type Client struct {
 	}
 	bearerToken string
 	preReq      func(req *http.Request) error
+
+	sem chan struct{} // a slot per request in flight, see maxConcurrentRequests
 }
 
 // NewClient returns a new schema registry client.
@@ -91,6 +93,7 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 		opts:     opts,
 		logFn:    func(int8, string, ...any) {},
 		logLvlFn: func() int8 { return LogLevelInfo },
+		sem:      make(chan struct{}, maxConcurrentRequests),
 	}
 
 	for _, opt := range opts {
@@ -301,6 +304,14 @@ func (cl *Client) do(ctx context.Context, method, path string, v, into any) erro
 	// escape, which would send the request to the registry's root.
 	if _, err := url.PathUnescape(path); err != nil {
 		return fmt.Errorf("invalid path %q: %w", path, err)
+	}
+
+	// At most maxConcurrentRequests requests are in flight per client.
+	select {
+	case cl.sem <- struct{}{}:
+		defer func() { <-cl.sem }()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	urls := cl.urls

@@ -367,6 +367,13 @@ func (cl *Client) AllSchemas(ctx context.Context) ([]SubjectSchema, error) {
 	return ss, err
 }
 
+// maxConcurrentRequests is how many requests a client has in flight at the
+// same time: do waits for a free slot, whichever method or caller goroutine
+// the request comes from. Schemas, SchemaUsagesByID, and SchemaReferences
+// also start at most this many goroutines per call, since each issues one
+// request per entry of a list the registry returns, which can be long.
+const maxConcurrentRequests = 16
+
 // Schemas returns all schemas for the given subject.
 //
 // This supports param [ShowDeleted].
@@ -387,12 +394,14 @@ func (cl *Client) Schemas(ctx context.Context, subject string) ([]SubjectSchema,
 		cctx, cancel = context.WithCancel(ctx)
 	)
 	defer cancel()
+	sem := make(chan struct{}, maxConcurrentRequests)
 	for i := range versions {
 		version := versions[i]
 		slot := i
 		wg.Add(1)
+		sem <- struct{}{}
 		go func() {
-			defer wg.Done()
+			defer func() { <-sem; wg.Done() }()
 			s, err := cl.SchemaByVersion(cctx, subject, version)
 			schemas[slot] = s
 			if err != nil && atomic.SwapUint32(&errOnce, 1) == 0 {
@@ -554,11 +563,17 @@ func (cl *Client) SchemaReferences(ctx context.Context, subject string, version 
 		cctx, cancel = context.WithCancel(ctx)
 	)
 	defer cancel()
+	// Each SchemaUsagesByID call has its own semaphore. If SchemaReferences
+	// shared its semaphore with the SchemaUsagesByID calls, every slot
+	// could be taken by a call that waits for a slot, and the calls would
+	// deadlock.
+	sem := make(chan struct{}, maxConcurrentRequests)
 	for i := range ids {
 		id := ids[i]
 		wg.Add(1)
+		sem <- struct{}{}
 		go func() {
-			defer wg.Done()
+			defer func() { <-sem; wg.Done() }()
 			idSchemas, err := cl.SchemaUsagesByID(cctx, id)
 			mu.Lock()
 			defer mu.Unlock()
@@ -600,12 +615,14 @@ func (cl *Client) SchemaUsagesByID(ctx context.Context, id int) ([]SubjectSchema
 		cctx, cancel = context.WithCancel(ctx)
 	)
 	defer cancel()
+	sem := make(chan struct{}, maxConcurrentRequests)
 	for i := range subjectVersions {
 		sv := subjectVersions[i]
 		slot := i
 		wg.Add(1)
+		sem <- struct{}{}
 		go func() {
-			defer wg.Done()
+			defer func() { <-sem; wg.Done() }()
 			s, err := cl.SchemaByVersion(cctx, sv.Subject, sv.Version)
 			schemas[slot] = s
 			if err != nil && atomic.SwapUint32(&errOnce, 1) == 0 {

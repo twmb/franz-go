@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -691,5 +694,58 @@ func TestCommSubjectSchemasDuplicates(t *testing.T) {
 		if !reflect.DeepEqual(tt.got, tt.exp) {
 			t.Errorf("%s: got %v != exp %v", tt.name, tt.got, tt.exp)
 		}
+	}
+}
+
+// TestRequestsInFlight verifies that a client has at most
+// maxConcurrentRequests requests in flight. Mode issues one request per
+// subject. TestSchemaRegistryAPI runs one call per row, so it cannot observe
+// requests in flight together.
+func TestRequestsInFlight(t *testing.T) {
+	t.Parallel()
+	var (
+		inFlight, peak atomic.Int32
+		full           = make(chan struct{})
+		closeFull      sync.Once
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for p := peak.Load(); n > p; p = peak.Load() {
+			if peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		// The first requests wait until maxConcurrentRequests are in
+		// flight, so the peak does not depend on timing. If the client
+		// allows fewer, the wait times out and the peak check fails.
+		if n >= maxConcurrentRequests {
+			closeFull.Do(func() { close(full) })
+		}
+		select {
+		case <-full:
+		case <-time.After(5 * time.Second):
+		}
+		// The sleep keeps requests in flight together, so that a
+		// client with no limit shows a higher peak.
+		time.Sleep(20 * time.Millisecond)
+		w.Write([]byte(`{"mode":"READONLY"}`))
+	}))
+	defer ts.Close()
+	cl, err := NewClient(URLs(ts.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjects := make([]string, 4*maxConcurrentRequests)
+	for i := range subjects {
+		subjects[i] = "s" + strconv.Itoa(i)
+	}
+	for _, r := range cl.Mode(context.Background(), subjects...) {
+		if r.Err != nil {
+			t.Fatal(r.Err)
+		}
+	}
+	if p := peak.Load(); p != maxConcurrentRequests {
+		t.Errorf("peak requests in flight: got %d, want %d", p, maxConcurrentRequests)
 	}
 }
