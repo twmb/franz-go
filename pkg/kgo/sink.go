@@ -2914,6 +2914,10 @@ func (p *produceRequest) MaxVersion() int16  { return p.produceMax }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }
+
+// We call kbin directly, and kbin appends nothing for a field that is too
+// long. No field here can be: config bounds the transactional ID, and produce
+// bounds a record's topic and bytes.
 func (p *produceRequest) AppendTo(dst []byte) []byte {
 	flexible := p.IsFlexible()
 

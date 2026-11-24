@@ -19,6 +19,9 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
+// Kafka refuses a topic name longer than 249 bytes.
+const maxTopicLen = 249
+
 //////////////////////////////////////////////////////////////////////////
 // NOTE:                                                                //
 // NOTE: Make sure new configs are added to OptValues.                  //
@@ -283,6 +286,8 @@ func (cfg *cfg) validate() error {
 
 		{name: "rack", s: cfg.rack, allowed: 512},
 		{name: "share group", s: cfg.shareGroup, allowed: 16382},
+		{name: "group", s: cfg.group, allowed: 16382},
+		{name: "instance id", sp: &cfg.instanceID, allowed: 16382},
 	} {
 		s := limit.s
 		if limit.sp != nil && *limit.sp != nil {
@@ -489,11 +494,17 @@ func (cfg *cfg) validate() error {
 			if topic == "" {
 				return errors.New("invalid empty topic name in ConsumeTopics")
 			}
+			if len(topic) > maxTopicLen {
+				return fmt.Errorf("invalid long topic name of (len %d) greater than max allowed %d in ConsumeTopics", len(topic), maxTopicLen)
+			}
 		}
 	}
 	for topic, partitions := range cfg.partitions {
 		if topic == "" {
 			return errors.New("invalid empty topic name in ConsumePartitions")
+		}
+		if len(topic) > maxTopicLen {
+			return fmt.Errorf("invalid long topic name of (len %d) greater than max allowed %d in ConsumePartitions", len(topic), maxTopicLen)
 		}
 		for p, o := range partitions {
 			if p < 0 {
@@ -974,10 +985,6 @@ func AllowAutoTopicCreation() Opt {
 //
 // This number corresponds to the broker's socket.request.max.bytes, which
 // defaults to 100MiB.
-//
-// The only Kafka request that could come reasonable close to hitting this
-// limit should be produce requests, and thus this limit is only enforced for
-// produce requests.
 func BrokerMaxWriteBytes(v int32) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxBrokerWriteBytes = v }}
 }

@@ -198,11 +198,11 @@ type Record struct {
 }
 
 func (r *Record) userSize() int64 {
-	s := len(r.Key) + len(r.Value)
+	s := int64(len(r.Key)) + int64(len(r.Value)) // int64: an int sum can wrap on 32-bit
 	for _, h := range r.Headers {
-		s += len(h.Key) + len(h.Value)
+		s += int64(len(h.Key)) + int64(len(h.Value))
 	}
-	return int64(s)
+	return s
 }
 
 // When buffering records, we calculate the length and tsDelta ahead of time

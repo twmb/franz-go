@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"hash/crc32"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -6084,5 +6085,72 @@ func TestKadmLogDirsRetriedShard(t *testing.T) {
 		if n, err := test.run(); err != nil || n != 4 {
 			t.Errorf("%s with a retried shard: %d replicas, err %v; want 4", test.key.Name(), n, err)
 		}
+	}
+}
+
+// TestRequestRefusedBeforeWrite verifies that the client refuses a request
+// larger than BrokerMaxWriteBytes, or with a field too long to encode,
+// instead of writing it. No other test covers the client's write limit, and
+// kgo's own tests have no broker to reach these checks.
+func TestRequestRefusedBeforeWrite(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(200, "many"))
+	cl := newPlainClient(t, c, kgo.ProducerBatchMaxBytes(512), kgo.BrokerMaxWriteBytes(1<<10))
+
+	req := kmsg.NewPtrMetadataRequest()
+	for i := range 100 { // over 1KiB of topic names
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr("topic-" + strconv.Itoa(i))
+		req.Topics = append(req.Topics, rt)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := req.RequestWith(ctx, cl); err == nil || !strings.Contains(err.Error(), "exceeds BrokerMaxWriteBytes") {
+		t.Fatalf("got error %v, want one saying the request exceeds BrokerMaxWriteBytes", err)
+	}
+
+	// A string too long for its length prefix is refused on every path to a
+	// broker, at a flexible version and at a classic one: through the
+	// client, through a chosen broker, and for a request the client pins
+	// to an old version.
+	long := strings.Repeat("a", math.MaxInt16+1)
+	big := newPlainClient(t, c) // the default BrokerMaxWriteBytes, so only the string's length refuses
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(int16(kmsg.IncrementalAlterConfigs), 0)
+	pinned := newPlainClient(t, c, kgo.MaxVersions(v))
+	offsetDelete := kmsg.NewPtrOffsetDeleteRequest() // never flexible
+	offsetDelete.Group = "g"
+	odt := kmsg.NewOffsetDeleteRequestTopic()
+	odt.Topic = long
+	offsetDelete.Topics = append(offsetDelete.Topics, odt)
+	alter := kmsg.NewPtrIncrementalAlterConfigsRequest() // classic only at v0
+	ar := kmsg.NewIncrementalAlterConfigsRequestResource()
+	ar.ResourceType, ar.ResourceName = kmsg.ConfigResourceTypeTopic, "many"
+	ac := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+	ac.Name, ac.Value = "retention.ms", &long
+	ar.Configs = append(ar.Configs, ac)
+	alter.Resources = append(alter.Resources, ar)
+	for name, fn := range map[string]func() error{
+		"Client.Request": func() error { _, err := big.Request(ctx, offsetDelete); return err },
+		"Broker.Request": func() error { _, err := discoverBroker(t, big).Request(ctx, offsetDelete); return err },
+		"flexible":       func() error { _, err := big.Request(ctx, alter); return err },
+		"pinned classic": func() error { _, err := pinned.Request(ctx, alter); return err },
+	} {
+		if err := fn(); err == nil || !strings.Contains(err.Error(), "too long to encode") {
+			t.Errorf("%s: got error %v, want one saying a field is too long to encode", name, err)
+		}
+	}
+
+	// A fetch of 200 partitions is over 1KiB as well. The poller gets the
+	// error, rather than a consumer that stalls. The first fetch can go
+	// out before every partition is assigned and fit in 1KiB, so a short
+	// FetchMaxWait ends that fetch well before our context ends.
+	offsets := make(map[int32]kgo.Offset)
+	for p := range int32(200) {
+		offsets[p] = kgo.NewOffset().At(0)
+	}
+	consumer := newPlainClient(t, c, kgo.ProducerBatchMaxBytes(512), kgo.BrokerMaxWriteBytes(1<<10), kgo.FetchMaxWait(250*time.Millisecond), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"many": offsets}))
+	if err := consumer.PollFetches(ctx).Err0(); err == nil || !strings.Contains(err.Error(), "exceeds BrokerMaxWriteBytes") {
+		t.Errorf("poll got error %v, want one saying the request exceeds BrokerMaxWriteBytes", err)
 	}
 }

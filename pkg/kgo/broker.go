@@ -766,7 +766,11 @@ start:
 
 	// Everything we read from req, before abandonOnCancel: once a cancel
 	// fails the request, the caller may reuse req.
-	a := cxn.appendReq(req)
+	a, err := cxn.appendReq(req)
+	if err != nil {
+		pr.promise(nil, err)
+		return
+	}
 	var resp kmsg.Response
 	if !isNoResp {
 		resp = req.ResponseKind()
@@ -1275,7 +1279,10 @@ start:
 		}
 	}
 	cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing api versions request", "broker", logID(cxn.b.meta.NodeID), "version", maxVersion)
-	a := cxn.appendReq(req)
+	a, err := cxn.appendReq(req)
+	if err != nil {
+		return err
+	}
 	corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(nil, time.Now(), a)
 	if writeErr != nil {
 		cxn.hookWriteE2E(a.key, bytesWritten, writeWait, timeToWrite, writeErr)
@@ -1402,7 +1409,10 @@ func (cxn *brokerCxn) sasl() error {
 			return fmt.Errorf("%s: %w", kmsg.NameForKey(req.Key()), err)
 		}
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLHandshakeRequest", "broker", logID(cxn.b.meta.NodeID))
-		a := cxn.appendReq(req)
+		a, err := cxn.appendReq(req)
+		if err != nil {
+			return err
+		}
 		corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(nil, time.Now(), a)
 		if writeErr != nil {
 			cxn.hookWriteE2E(a.key, bytesWritten, writeWait, timeToWrite, writeErr)
@@ -1467,6 +1477,9 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		var challenge []byte
 
 		if !authenticate {
+			if len(clientWrite) > int(cxn.cl.cfg.maxBrokerWriteBytes) {
+				return fmt.Errorf("%w: SASL payload of %d bytes", errRequestTooLarge, len(clientWrite))
+			}
 			buf := cxn.cl.bufPool.get()
 
 			buf = append(buf[:0], 0, 0, 0, 0)
@@ -1497,7 +1510,10 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			// Lifetime: we take the timestamp before we write our
 			// request; see usage below for why.
 			prereq = time.Now()
-			a := cxn.appendReq(req)
+			a, err := cxn.appendReq(req)
+			if err != nil {
+				return err
+			}
 			corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(nil, time.Now(), a)
 			if writeErr != nil {
 				cxn.hookWriteE2E(a.key, bytesWritten, writeWait, timeToWrite, writeErr)
@@ -1618,18 +1634,31 @@ type appendedReq struct {
 }
 
 // appendReq appends req for writeRequest, which returns the buffer to the
-// pool.
-func (cxn *brokerCxn) appendReq(req kmsg.Request) appendedReq {
+// pool. Every request we write is encoded here, so the two checks cover
+// every request: we return an error, and write nothing, if kmsg refuses a
+// field that is too long or if the request is larger than
+// BrokerMaxWriteBytes.
+func (cxn *brokerCxn) appendReq(req kmsg.Request) (appendedReq, error) {
 	key := req.Key()
+	pooled := cxn.cl.bufPool.get()
+	buf := cxn.cl.reqFormatter.AppendRequest(pooled[:0], req, cxn.corrID)
+	if buf == nil {
+		cxn.cl.bufPool.put(pooled)
+		return appendedReq{}, fmt.Errorf("%s: %w", kmsg.NameForKey(key), errRequestFieldTooLong)
+	}
+	if n := len(buf) - 4; n > int(cxn.cl.cfg.maxBrokerWriteBytes) {
+		cxn.cl.bufPool.put(buf)
+		return appendedReq{}, fmt.Errorf("%w: %s of %d bytes", errRequestTooLarge, kmsg.NameForKey(key), n)
+	}
 	rt, wt := cxn.cl.connTimeouter.timeouts(req)
 	return appendedReq{
 		key:            key,
 		version:        req.GetVersion(),
-		buf:            cxn.cl.reqFormatter.AppendRequest(cxn.cl.bufPool.get()[:0], req, cxn.corrID),
+		buf:            buf,
 		rt:             rt,
 		wt:             wt,
 		flexibleHeader: req.IsFlexible() && key != 18, // response header not flexible if ApiVersions; see promisedResp doc
-	}
+	}, nil
 }
 
 // writeRequest writes a message request to the broker connection, bumping the

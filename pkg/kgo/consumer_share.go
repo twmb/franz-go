@@ -2496,6 +2496,11 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	}()
 
 	if err != nil {
+		// As in fetch, a request or response over its size limit will
+		// likely be too large again, so we surface the error.
+		if errors.Is(err, errRequestTooLarge) || errors.Is(err, errResponseTooLarge) {
+			sc.c.addFakeReadyForDraining("", -1, err, "share fetch request or response is over its size limit")
+		}
 		s.resetShareSession()
 		backoff(err)
 		sc.enqueueAckErrors(piggybackAcks, err, nAcks)

@@ -757,8 +757,8 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 		}
 
 		// This 249 limit is in Kafka itself, we copy it here to rely on it while producing.
-		if len(topic) > 249 {
-			mt.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed 249", len(topic))
+		if len(topic) > maxTopicLen {
+			mt.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed %d", len(topic), maxTopicLen)
 			continue
 		}
 
