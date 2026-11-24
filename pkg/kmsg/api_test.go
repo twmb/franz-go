@@ -143,4 +143,10 @@ func TestAppendRequest(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
+
+	// A request appended to a slice that has bytes keeps those bytes, and
+	// the request's size counts only the request.
+	if got := NewRequestFormatter().AppendRequest([]byte{9, 9}, r, 1); !bytes.Equal(got, append([]byte{9, 9}, want...)) {
+		t.Errorf("appended to a non-empty slice: got %v, want 9 9 followed by %v", got, want)
+	}
 }

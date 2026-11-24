@@ -240,6 +240,7 @@ func (f *RequestFormatter) AppendRequest(
 	r Request,
 	correlationID int32,
 ) []byte {
+	start := len(dst)
 	dst = append(dst, 0, 0, 0, 0) // reserve length
 	k := r.Key()
 	v := r.GetVersion()
@@ -267,11 +268,11 @@ func (f *RequestFormatter) AppendRequest(
 
 	// Now the request body.
 	dst = r.AppendTo(dst)
-	if dst == nil || over || len(dst)-4 > math.MaxInt32 {
+	if dst == nil || over || len(dst)-start-4 > math.MaxInt32 {
 		return nil
 	}
 
-	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
+	kbin.AppendInt32(dst[start:start], int32(len(dst[start+4:])))
 	return dst
 }
 
