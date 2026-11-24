@@ -3,6 +3,7 @@ package sr
 import (
 	"crypto/tls"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -42,14 +43,17 @@ func UserAgent(ua string) ClientOpt {
 // missing an http:// or https:// prefix with http://.
 func URLs(urls ...string) ClientOpt {
 	return clientOpt{func(cl *Client) {
-		for i, u := range urls {
+		// We prefix a copy: the option can be applied to many clients,
+		// from many goroutines, and your slice stays as you passed it.
+		own := slices.Clone(urls)
+		for i, u := range own {
 			if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 				continue
 			}
 
-			urls[i] = "http://" + u
+			own[i] = "http://" + u
 		}
-		cl.urls = urls
+		cl.urls = own
 	}}
 }
 

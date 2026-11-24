@@ -447,9 +447,10 @@ func TestOptValue(t *testing.T) {
 	httpcl := &http.Client{}
 	tlscfg := &tls.Config{}
 
+	urls := []string{"localhost:8081", "localhost2:8082"}
 	c, err := NewClient(
 		HTTPClient(httpcl),
-		URLs("localhost:8081", "localhost2:8082"),
+		URLs(urls...),
 		UserAgent("some-ua"),
 		DialTLSConfig(tlscfg),
 		BasicAuth("some-user", "some-pass"),
@@ -462,6 +463,9 @@ func TestOptValue(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("unable to create client: %s", err)
+	}
+	if urls[0] != "localhost:8081" {
+		t.Errorf("URLs wrote %q into the slice passed to it", urls[0])
 	}
 
 	cd, err := NewClient()
