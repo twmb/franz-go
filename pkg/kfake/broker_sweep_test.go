@@ -718,7 +718,23 @@ func TestSaslFallbackMechanismRedials(t *testing.T) {
 		},
 	})
 
-	cl := newPlainClient(t, c, kgo.SASL(
+	// 2.1 has SASLAuthenticate v0 only, and MaxVersions applies to it.
+	var authV0, authOther atomic.Int32
+	c.Fault(Fault{
+		Keys:    []kmsg.Key{kmsg.SASLAuthenticate},
+		Observe: true,
+		Count:   -1,
+		When: func(kreq kmsg.Request) bool {
+			if kreq.GetVersion() == 0 {
+				authV0.Add(1)
+			} else {
+				authOther.Add(1)
+			}
+			return false
+		},
+	})
+
+	cl := newPlainClient(t, c, kgo.MaxVersions(kversion.V2_1_0()), kgo.SASL(
 		oauth.Auth{Token: "unused"}.AsMechanism(),
 		plain.Auth{User: "admin", Pass: "admin"}.AsMechanism(),
 	))
@@ -737,6 +753,9 @@ func TestSaslFallbackMechanismRedials(t *testing.T) {
 	// connection; its second connection starts with PLAIN.
 	if n := rejected.Hits(); n != 2 {
 		t.Errorf("got %d OAUTHBEARER handshakes, want 2", n)
+	}
+	if v0, other := authV0.Load(), authOther.Load(); v0 == 0 || other != 0 {
+		t.Errorf("got %d SASLAuthenticate requests at v0 and %d above, want all at v0", v0, other)
 	}
 }
 

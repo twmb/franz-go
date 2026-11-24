@@ -289,6 +289,88 @@ func (b *broker) byNameMax(v *brokerVersions, req kmsg.Request) (int16, bool) {
 	return 0, false
 }
 
+// Returns the version to send req at: the highest version that we, the
+// broker, and the user's MaxVersions all have, capped by a version pinned in
+// ctx and by byNameMax. We return an error if no version of req can be sent.
+func (b *broker) reqVersion(ctx context.Context, req kmsg.Request) (int16, error) {
+	v := b.loadVersions()
+
+	if b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
+		return 0, errUnknownRequestKey
+	}
+
+	// If v.maxVersion(0) is non-negative, then we loaded API
+	// versions. If the version for this request is negative, we
+	// know the broker cannot handle this request.
+	if v.maxVersion(0) >= 0 && v.maxVersion(req.Key()) < 0 {
+		return 0, errBrokerTooOld
+	}
+
+	ourMax := req.MaxVersion()
+	ourMin := int16(-1)
+	if pr, ok := ctx.Value(ctxPinReq).(*pinReq); ok {
+		if pr.pinMax && pr.max < ourMax {
+			ourMax = pr.max
+		}
+		if pr.pinMin {
+			ourMin = pr.min
+		}
+	}
+
+	// If we have no broker versions, we are pinned pre 0.10.0 and did not
+	// issue ApiVersions.
+	if brokerMax := v.maxVersion(req.Key()); brokerMax >= 0 && brokerMax < ourMax {
+		ourMax = brokerMax
+	}
+	if brokerMin := v.minVersion(req.Key()); brokerMin >= 0 && brokerMin > ourMin {
+		ourMin = brokerMin
+	}
+
+	if b.cl.cfg.maxVersions != nil {
+		userMax, _ := b.cl.cfg.maxVersions.LookupMaxKeyVersion(req.Key()) // we validated HasKey above
+		if userMax < ourMax {
+			ourMax = userMax
+		}
+	}
+	if byName, ok := b.byNameMax(v, req); ok && byName < ourMax {
+		ourMax = byName
+	}
+	if b.cl.cfg.minVersions != nil {
+		userMin, _ := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
+		if userMin > ourMax {
+			return 0, fmt.Errorf("request key %d version returned has max version %d below the user defined min of %d", req.Key(), ourMax, userMin)
+		}
+		if userMin > ourMin {
+			ourMin = userMin
+		}
+	}
+
+	// * If we pinned the min high, higher than the broker's max version or
+	//   the user max version, we fail early with errBrokerTooOld. Resharding
+	//   relies on this error.
+	//
+	// * If the user set min too high, we already handle that and return a
+	//   targeted non-retryable error just above. We only pin max if we
+	//   cannot reissue with a higher version, so no matter what, if the
+	//   user min is higher than pinned max or broker max, we cannot retry.
+	//
+	// * Pinned max is lower than broker's min: We should not get here from
+	//   sharded requests because those *start* high and then downgrade,
+	//   except for AddPartitionsToTxn which outright should not be issued on
+	//   newer brokers (and newer brokers support older requests). Worst
+	//   case, after three spins, the request will stop retrying and fail.
+	//
+	// * If the user pinned max lower than the broker min AND there is no
+	//   pinning, this error should be "errBrokerTooNew". This is quite
+	//   unlikely and requires more logic above to differentiate pinned maxes
+	//   vs broker maxes. Technically the broker isn't too old, but we keep
+	//   it simple here.
+	if ourMin > -1 && ourMin > ourMax {
+		return 0, errBrokerTooOld // this error is relied on for sharding
+	}
+	return ourMax, nil
+}
+
 func (b *broker) storeVersions(v *brokerVersions) { b.versions.Store(v) }
 
 const unknownControllerID = -1
@@ -580,86 +662,12 @@ start:
 		claimed = true
 	}
 
-	v := b.loadVersions()
-
-	if b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
-		pr.promise(nil, errUnknownRequestKey)
+	version, err := b.reqVersion(pr.ctx, req)
+	if err != nil {
+		pr.promise(nil, err)
 		return
 	}
-
-	// If v.maxVersion(0) is non-negative, then we loaded API
-	// versions. If the version for this request is negative, we
-	// know the broker cannot handle this request.
-	if v.maxVersion(0) >= 0 && v.maxVersion(req.Key()) < 0 {
-		pr.promise(nil, errBrokerTooOld)
-		return
-	}
-
-	ourMax := req.MaxVersion()
-	ourMin := int16(-1)
-	if pr, ok := pr.ctx.Value(ctxPinReq).(*pinReq); ok {
-		if pr.pinMax && pr.max < ourMax {
-			ourMax = pr.max
-		}
-		if pr.pinMin {
-			ourMin = pr.min
-		}
-	}
-
-	// If we have no broker versions, we are pinned pre 0.10.0 and did not
-	// issue ApiVersions.
-	if brokerMax := v.maxVersion(req.Key()); brokerMax >= 0 && brokerMax < ourMax {
-		ourMax = brokerMax
-	}
-	if brokerMin := v.minVersion(req.Key()); brokerMin >= 0 && brokerMin > ourMin {
-		ourMin = brokerMin
-	}
-
-	if b.cl.cfg.maxVersions != nil {
-		userMax, _ := b.cl.cfg.maxVersions.LookupMaxKeyVersion(req.Key()) // we validated HasKey above
-		if userMax < ourMax {
-			ourMax = userMax
-		}
-	}
-	if byName, ok := b.byNameMax(v, req); ok && byName < ourMax {
-		ourMax = byName
-	}
-	if b.cl.cfg.minVersions != nil {
-		userMin, _ := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
-		if userMin > ourMax {
-			pr.promise(nil, fmt.Errorf("request key %d version returned has max version %d below the user defined min of %d", req.Key(), ourMax, userMin))
-			return
-		}
-		if userMin > ourMin {
-			ourMin = userMin
-		}
-	}
-
-	// * If we pinned the min high, higher than the broker's max version or
-	//   the user max version, we fail early with errBrokerTooOld. Resharding
-	//   relies on this error.
-	//
-	// * If the user set min too high, we already handle that and return a
-	//   targeted non-retryable error just above. We only pin max if we
-	//   cannot reissue with a higher version, so no matter what, if the
-	//   user min is higher than pinned max or broker max, we cannot retry.
-	//
-	// * Pinned max is lower than broker's min: We should not get here from
-	//   sharded requests because those *start* high and then downgrade,
-	//   except for AddPartitionsToTxn which outright should not be issued on
-	//   newer brokers (and newer brokers support older requests). Worst
-	//   case, after three spins, the request will stop retrying and fail.
-	//
-	// * If the user pinned max lower than the broker min AND there is no
-	//   pinning, this error should be "errBrokerTooNew". This is quite
-	//   unlikely and requires more logic above to differentiate pinned maxes
-	//   vs broker maxes. Technically the broker isn't too old, but we keep
-	//   it simple here.
-	if ourMin > -1 && ourMin > ourMax {
-		pr.promise(nil, errBrokerTooOld) // this error is relied on for sharding
-		return
-	}
-	req.SetVersion(ourMax)
+	req.SetVersion(version)
 
 	// Wait out a throttle (KIP-219) before writing. Nothing is written if
 	// ctx ends or the client closes while we wait, so we fail only this
@@ -1378,7 +1386,6 @@ func (cxn *brokerCxn) sasl() error {
 	mechanism := sasls[idx]
 	authenticate := false
 
-	v := cxn.b.loadVersions()
 	req := kmsg.NewPtrSASLHandshakeRequest()
 
 	// KIP-152 establishes the modern SASL flow: ApiVersions, then
@@ -1388,9 +1395,12 @@ func (cxn *brokerCxn) sasl() error {
 	// on the connection. Since we send ApiVersions first, we must send
 	// SaslHandshake for all mechanisms including GSSAPI. KIP-896 removed
 	// support for the legacy raw GSSAPI protocol entirely in Kafka 4.0.
-	if v.maxVersion(req.Key()) >= 0 {
+	if cxn.b.loadVersions().maxVersion(req.Key()) >= 0 {
 		req.Mechanism = mechanism.Name()
-		req.Version = v.maxVersion(req.Key())
+		var err error
+		if req.Version, err = cxn.b.reqVersion(context.Background(), req); err != nil {
+			return fmt.Errorf("%s: %w", kmsg.NameForKey(req.Key()), err)
+		}
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLHandshakeRequest", "broker", logID(cxn.b.meta.NodeID))
 		a := cxn.appendReq(req)
 		corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr := cxn.writeRequest(nil, time.Now(), a)
@@ -1479,7 +1489,9 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		} else {
 			req := kmsg.NewPtrSASLAuthenticateRequest()
 			req.SASLAuthBytes = clientWrite
-			req.Version = cxn.b.loadVersions().maxVersion(req.Key())
+			if req.Version, err = cxn.b.reqVersion(context.Background(), req); err != nil {
+				return fmt.Errorf("%s: %w", kmsg.NameForKey(req.Key()), err)
+			}
 			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLAuthenticate", "broker", logID(cxn.b.meta.NodeID), "version", req.Version, "step", step)
 
 			// Lifetime: we take the timestamp before we write our
