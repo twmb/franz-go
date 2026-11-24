@@ -2676,7 +2676,8 @@ func (c *Cluster) saveSessionState() error {
 				ID:    fs.id,
 				Epoch: fs.epoch,
 			}
-			for k, p := range fs.partitions {
+			for _, k := range fs.order { // in order, so a restored session answers in the same order
+				p := fs.partitions[k]
 				sf.Partitions = append(sf.Partitions, sessionFetchSessionPart{
 					TopicID:            p.topicID,
 					Topic:              k.t,
@@ -2880,7 +2881,11 @@ func (c *Cluster) loadSessionState() error {
 				lastUsed:   time.Now(),
 			}
 			for _, p := range sf.Partitions {
-				fs.partitions[tp{p.Topic, p.Partition}] = fetchSessionPartition{
+				key := tp{p.Topic, p.Partition}
+				if _, ok := fs.partitions[key]; !ok {
+					fs.order = append(fs.order, key)
+				}
+				fs.partitions[key] = fetchSessionPartition{
 					topicID:            p.TopicID,
 					fetchOffset:        p.FetchOffset,
 					maxBytes:           p.MaxBytes,

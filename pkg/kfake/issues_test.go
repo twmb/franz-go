@@ -6154,3 +6154,86 @@ func TestRequestRefusedBeforeWrite(t *testing.T) {
 		t.Errorf("poll got error %v, want one saying the request exceeds BrokerMaxWriteBytes", err)
 	}
 }
+
+// TestPausedTopicSplitAcrossFetchEntries verifies that pausing a topic whose
+// partitions a fetch response carries in two entries keeps the cursors of the
+// later entry (#1592). Like Kafka, we answer an incremental fetch in session
+// order and move a partition that returned records to the end. Once b/0 and
+// then a/1 return records, the order is a/0, b/0, a/1, so a fetch of all
+// three splits topic "a". A fetch of only a/0 and a/1 does not: we drop the
+// unchanged b/0 before we group partitions into entries.
+func TestPausedTopicSplitAcrossFetchEntries(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, "a"), SeedTopics(1, "b"))
+	cl := newPlainClient(t, c, kgo.ConsumeTopics("a", "b"))
+	producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// toEnd moves each partition, in turn, to the end of the session order.
+	toEnd := func(tps ...tp) {
+		for _, tp := range tps {
+			produceSync(t, producer, &kgo.Record{Topic: tp.t, Partition: tp.p})
+			consumeN(t, cl, 1, 5*time.Second)
+		}
+	}
+	// produce sends one request, so that one fetch response has every
+	// partition, and waits for the client to buffer that response.
+	produce := func(tps ...tp) {
+		t.Helper()
+		req := kmsg.NewProduceRequest()
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		for _, tp := range tps {
+			rt := kmsg.NewProduceRequestTopic()
+			rt.Topic, rt.TopicID = tp.t, c.TopicInfo(tp.t).TopicID
+			rp := kmsg.NewProduceRequestTopicPartition()
+			rp.Partition = tp.p
+			rp.Records = rawBatch(0, -1, -1, -1, kvRecord())
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+		}
+		resp, err := req.RequestWith(ctx, producer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rt := range resp.Topics {
+			for _, rp := range rt.Partitions {
+				if err := kerr.ErrorForCode(rp.ErrorCode); err != nil {
+					t.Fatalf("produce to %s/%d: %v", rt.Topic, rp.Partition, err)
+				}
+			}
+		}
+		for cl.BufferedFetchRecords() < int64(len(tps)) {
+			if ctx.Err() != nil {
+				t.Fatalf("buffered %d records, want %d", cl.BufferedFetchRecords(), len(tps))
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	toEnd(tp{"a", 0}, tp{"b", 0}, tp{"a", 1})
+	produce(tp{"a", 0}, tp{"a", 1})
+	var entries int
+	for _, f := range cl.PollFetches(ctx) {
+		entries += len(f.Topics)
+	}
+	if entries != 1 {
+		t.Errorf("a fetch of a/0 and a/1 has %d topic entries, want 1", entries)
+	}
+
+	// The fetch above moved a/0 and a/1 to the end: b/0, a/0, a/1.
+	toEnd(tp{"b", 0}, tp{"a", 1})
+	produce(tp{"a", 0}, tp{"a", 1}, tp{"b", 0})
+
+	// With "a" paused, the poll strips a/0 and takes b/0's record,
+	// leaving a/1's entry buffered.
+	cl.PauseFetchTopics("a")
+	if fs := cl.PollRecords(ctx, 1); fs.NumRecords() != 1 || fs.Records()[0].Topic != "b" {
+		t.Fatalf("first poll got %v, want one record from b", fs.Records())
+	}
+	cl.ResumeFetchTopics("a")
+	if fs := cl.PollRecords(ctx, 10); fs.NumRecords() != 1 || fs.Records()[0].Partition != 1 {
+		t.Errorf("second poll got %v, want one record from a/1", fs.Records())
+	}
+}
