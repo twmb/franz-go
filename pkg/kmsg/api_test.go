@@ -1,6 +1,7 @@
 package kmsg
 
 import (
+	"bytes"
 	"runtime"
 	"testing"
 
@@ -52,5 +53,19 @@ func TestReadCountPastInput(t *testing.T) {
 		if n := after.TotalAlloc - before.TotalAlloc; n > 1<<20 {
 			t.Errorf("%s: allocated %d bytes", tc.name, n)
 		}
+	}
+}
+
+// ControlledShutdown v0 has no client ID in its header. The request still
+// has its size and its body.
+func TestAppendRequest(t *testing.T) {
+	r := NewPtrControlledShutdownRequest()
+	r.Version = 0
+	r.BrokerID = 5
+	got := NewRequestFormatter(FormatterClientID("id")).AppendRequest(nil, r, 1)
+	// size, key 7, version 0, correlation ID 1, broker ID 5
+	want := []byte{0, 0, 0, 12, 0, 7, 0, 0, 0, 0, 0, 1, 0, 0, 0, 5}
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

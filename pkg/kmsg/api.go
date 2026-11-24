@@ -236,15 +236,14 @@ func (f *RequestFormatter) AppendRequest(
 	dst = kbin.AppendInt16(dst, k)
 	dst = kbin.AppendInt16(dst, v)
 	dst = kbin.AppendInt32(dst, correlationID)
-	if k == 7 && v == 0 {
-		return dst
-	}
 
 	// Even with flexible versions, we do not use a compact client id.
 	// Clients issue ApiVersions immediately before knowing the broker
 	// version, and old brokers will not be able to understand a compact
-	// client id.
-	dst = kbin.AppendNullableString(dst, f.clientID)
+	// client id. ControlledShutdown v0 has no client id.
+	if k != 7 || v != 0 {
+		dst = kbin.AppendNullableString(dst, f.clientID)
+	}
 
 	// The flexible tags end the request header, and then begins the
 	// request body.
