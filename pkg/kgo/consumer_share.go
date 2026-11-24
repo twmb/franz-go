@@ -791,7 +791,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 	// killSessionOnClose). We want to find the broker without
 	// getting stuck waiting on a broker-lookup ctx; the actual
 	// request below uses the caller-supplied ctx for its timeout.
-	br, err := s.cl.brokerOrErr(nil, s.nodeID, errUnknownBroker)
+	br, err := s.shareBroker(nil)
 	if err != nil {
 		sc.cfg.logger.Log(LogLevelDebug, "share session close: unable to find broker",
 			"broker", logID(s.nodeID),
@@ -1482,6 +1482,9 @@ func (s *source) loopShareFetch() {
 			select {
 			case <-sc.fm.ctx.Done():
 				return
+			case <-s.share.dead:
+				s.fetchState.hardFinish()
+				return
 			case <-s.share.ackCh:
 				startAckTimer()
 			case <-s.share.ackFlushCh:
@@ -1502,6 +1505,9 @@ func (s *source) loopShareFetch() {
 			select {
 			case <-sc.fm.ctx.Done():
 				return
+			case <-s.share.dead:
+				s.fetchState.hardFinish()
+				return
 			case <-s.share.ackCh:
 				startAckTimer()
 			case <-s.share.ackFlushCh:
@@ -1518,6 +1524,10 @@ func (s *source) loopShareFetch() {
 			select {
 			case <-sc.fm.ctx.Done():
 				sc.fm.cancelFetchCh <- canFetch
+				return
+			case <-s.share.dead:
+				sc.fm.cancelFetchCh <- canFetch
+				s.fetchState.hardFinish()
 				return
 			case <-s.share.ackCh:
 				startAckTimer()
@@ -1792,7 +1802,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	// But, if the request did not leave the client, we benefit, and
 	// failing early if the req didn't is worse.
 	kresp, err := s.cl.retryableBrokerFn(func() (*broker, error) {
-		return s.cl.brokerOrErr(sc.cl.ctx, s.nodeID, errUnknownBroker)
+		return s.shareBroker(sc.cl.ctx)
 	}).Request(sc.cl.ctx, req)
 	if err != nil {
 		sc.cfg.logger.Log(LogLevelDebug, "share ack request failed",
@@ -2443,7 +2453,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 	// into the requeue path below, where closeShareSession re-sends
 	// the acks on the userCtx-bounded FINAL_EPOCH ShareAcknowledge.
 	var kresp kmsg.Response
-	br, err := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
+	br, err := s.shareBroker(ctx)
 	if err == nil {
 		kresp, err = br.waitResp(ctx, req)
 	}
@@ -2476,6 +2486,7 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 		select {
 		case <-after.C:
 		case <-sc.fm.ctx.Done(): // not ctx, whose MaxWait+5s deadline can cut the backoff short
+		case <-s.share.dead:
 		}
 	}
 	defer func() {
@@ -2542,8 +2553,85 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 		s.sem = make(chan struct{})
 		s.hookBuffered(&res.fetch)
 		sc.c.addSourceReadyForDraining(s)
+		if s.share.isDead() {
+			s.discardShareBuffered() // kill ran while our request was in flight
+		}
 	}
 	return fetched, false
+}
+
+// Stops a share source that the client is forgetting: the source's broker
+// left the cluster, and if the broker returns, the client creates a new
+// source for it. Kafka knows a share session by our group and member ID
+// alone, so a request from the old source would change the new source's
+// session.
+//
+// Closing dead ends the source's loop wherever the loop waits, and from then
+// on createShareReq builds nothing and shareBroker finds no broker. We then
+// drop the buffered fetch: its records can no longer be acked through this
+// source.
+//
+// The loop can also be waiting on a response while we run. If the loop
+// buffers that fetch after we look, the loop sees dead and drops the fetch
+// itself: we close dead before we look, and the loop buffers before it
+// checks.
+func (s *source) kill() {
+	if s.share.sc == nil {
+		return
+	}
+	close(s.share.dead)
+	s.discardShareBuffered()
+}
+
+func (s *sourceShare) isDead() bool {
+	select {
+	case <-s.dead:
+		return true
+	default:
+		return false
+	}
+}
+
+// Returns the broker to send a share request to. After kill, a broker with
+// our node ID is one that returned to the cluster, and it belongs to that
+// broker's new source, so we return no broker. We check after the lookup:
+// the lookup can load metadata, and kill can run while it does.
+func (s *source) shareBroker(ctx context.Context) (*broker, error) {
+	br, err := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
+	if err == nil && s.share.isDead() {
+		return nil, errUnknownBroker
+	}
+	return br, err
+}
+
+// Drops a dead source's buffered fetch, if the source has one. We release
+// nothing: the records were acquired on a broker that left, and the cursors'
+// new leader delivers them again.
+//
+// The unbuffered hooks for the dropped records run now, so that what a hook
+// counts is not wrong until the next poll. They run async: kill runs with
+// sinksAndSourcesMu locked, and hook code can call back into the client. We
+// run only the calls our own take queued: a poll runs its own calls before
+// it returns.
+func (s *source) discardShareBuffered() {
+	c := s.share.sc.c
+	var hooks []func()
+	c.sourcesReadyMu.Lock()
+	if i := slices.Index(c.sourcesReadyForDraining, s); i >= 0 {
+		c.sourcesReadyForDraining = slices.Delete(c.sourcesReadyForDraining, i, i+1)
+		queued := len(c.deferredFetchHooks)
+		s.share.takeBufferedFn(false)
+		hooks = slices.Clone(c.deferredFetchHooks[queued:])
+		c.deferredFetchHooks = c.deferredFetchHooks[:queued]
+	}
+	c.sourcesReadyMu.Unlock()
+	if len(hooks) > 0 {
+		go func() {
+			for _, fn := range hooks {
+				fn()
+			}
+		}()
+	}
 }
 
 // handleShareReqResp decodes partitions, bumps the session epoch,
@@ -3028,6 +3116,10 @@ func (s *source) createShareReq(skipAckDrain bool) (
 
 	s.share.mu.Lock()
 	defer s.share.mu.Unlock()
+
+	if s.share.isDead() {
+		return // see kill
+	}
 
 	retryWait := s.retryWait()
 	var backedOff []*shareCursor

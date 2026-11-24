@@ -398,8 +398,8 @@ type HookFetchRecordUnbuffered interface {
 	//
 	// For polled records, this fires on the polling goroutine before the
 	// poll returns. For records discarded internally (an assignment
-	// invalidation dropping a buffered fetch), this fires asynchronously
-	// on a separate goroutine.
+	// invalidation or a departed broker dropping a buffered fetch), this
+	// fires asynchronously on a separate goroutine.
 	OnFetchRecordUnbuffered(r *Record, polled bool)
 }
 

@@ -63,11 +63,12 @@ type sourceShare struct {
 	cursorsStart int
 	sessionEpoch int32              // 0=new, incremented on success, -1=close
 	sessionGen   uint32             // incremented on every session reset; stamps acks so we drop those from an earlier session
-	sessionParts map[tidp]struct{}  // broker-confirmed session partitions; createShareFetchReq diffs WANT against this to compute add/forget
+	sessionParts map[tidp]struct{}  // broker-confirmed session partitions; createShareReq diffs WANT against this to compute add/forget
 	ackCh        chan struct{}      // acks pending, batch on timer
 	ackFlushCh   chan struct{}      // flush acks immediately
 	buffered     shareBufferedFetch // decoded share fetch waiting for poll
 	purgedAcks   []cursorAckDrain   // acks drained from purged cursors, sent with the next request
+	dead         chan struct{}      // closed by kill: the loop exits, and the source builds, buffers, and sends nothing more
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -84,6 +85,7 @@ func (cl *Client) newSource(nodeID int32) *source {
 	s.share.ackCh = make(chan struct{}, 1)
 	s.share.ackFlushCh = make(chan struct{}, 1)
 	s.share.sessionParts = make(map[tidp]struct{})
+	s.share.dead = make(chan struct{})
 	close(s.sem)
 	return s
 }
@@ -120,6 +122,20 @@ func (s *source) removeCursor(rm *cursor) {
 	if s.cursorsStart == len(s.cursors) {
 		s.cursorsStart = 0
 	}
+}
+
+// Returns whether the source has no partitions and no purged share acks
+// left to send, which pruneSinksAndSources requires before forgetting the
+// source: leaving and FlushAcks reach a source's acks only through
+// sinksAndSources.
+func (s *source) empty() bool {
+	s.cursorsMu.Lock()
+	n := len(s.cursors)
+	s.cursorsMu.Unlock()
+	s.share.mu.Lock()
+	n += len(s.share.cursors) + len(s.share.purgedAcks)
+	s.share.mu.Unlock()
+	return n == 0
 }
 
 // cursor is where we are consuming from for an individual partition.
@@ -186,11 +202,11 @@ type cursor struct {
 	// CurrentLeader hint, preventing a spin loop.
 	moving atomic.Bool
 
-	// fetchFails counts the partition's errored fetches in a row. While
-	// it is non-zero, fetch requests skip the cursor until the source's
-	// retryAt. Kafka answers a fetch immediately when reading any
-	// partition errors, so refetching the partition without a wait would
-	// spin loop.
+	// fetchFails counts, in a row, the partition's errored fetches and
+	// its fetches that named a preferred replica that metadata does not
+	// list. While it is non-zero, fetch requests skip the cursor until
+	// the source's retryAt. Kafka answers a fetch immediately in both
+	// cases, so refetching the partition without a wait would spin loop.
 	fetchFails atomic.Int32
 
 	topicPartitionData // updated in metadata when session is stopped
@@ -342,33 +358,61 @@ func (p *cursorOffsetPreferred) move() {
 
 	// Before we migrate the cursor, we check if the destination source
 	// exists. If not, we do not migrate and instead force a metadata.
+	//
+	// A metadata update can run pruneSinksAndSources at the same time as
+	// us. Until addCursor below, the replica's source has no cursors, and
+	// pruneSinksAndSources can delete the replica's entry if the broker
+	// left metadata. Our cursor would then be on a source that allSources
+	// does not reach, so we keep sinksAndSourcesMu locked from our lookup
+	// through addCursor.
+	cl := c.source.cl
+	cl.sinksAndSourcesMu.Lock()
+	sns, exists := cl.sinksAndSources[p.preferredReplica]
 
-	c.source.cl.sinksAndSourcesMu.Lock()
-	sns, exists := c.source.cl.sinksAndSources[p.preferredReplica]
-	c.source.cl.sinksAndSourcesMu.Unlock()
+	// pruneSinksAndSources deletes our leader's entry if the leader left
+	// metadata while we fetched from a follower and nothing else used the
+	// leader. We recreate the entry, as a metadata update does for a
+	// partition's leader, and move back: a fetch to the leader fails and
+	// backs off until metadata names a new leader. If we instead kept the
+	// cursor on the follower, createReq would recheck it immediately, in a
+	// spin loop.
+	if !exists && p.preferredReplica == c.leader {
+		sns = sinkAndSource{sink: cl.newSink(c.leader), source: cl.newSource(c.leader)}
+		cl.sinksAndSources[c.leader] = sns
+		exists = true
+	}
 
 	if !exists {
+		cl.sinksAndSourcesMu.Unlock()
+
 		// The preferred replica is a broker we have not yet learned from
 		// metadata - e.g. a freshly added replica that the broker we
 		// fetched from already knows about, before our periodic refresh
 		// caught up. We force a metadata update so the source comes to
 		// exist for a future move, but we must also re-enable the cursor
-		// on its current (leader) source. The caller (source.fetch) deletes
+		// on its current (leader) source. After a fetch, our caller deletes
 		// this cursor from the request's used offsets right after we return,
 		// so neither the fetch's used-offset finishing nor a later buffered
 		// poll will re-enable it: leaving it unusable here would strand the
-		// partition. The leader is unchanged, so no cursor
-		// migration re-enables it, and a metadata refresh that merely
-		// learns the new broker never touches cursor usability - the
-		// partition would silently never be consumed again until an
-		// unrelated session restart (rebalance, assign, leader change).
+		// partition. The leader is unchanged, so no cursor migration
+		// re-enables it, and a metadata refresh that merely learns the new
+		// broker never touches cursor usability - the partition would
+		// silently never be consumed again until an unrelated session
+		// restart (rebalance, assign, leader change).
 		//
 		// Re-enabling on the current source keeps us consuming from the
 		// leader until a later fetch's preferred replica can be honored.
-		c.source.cl.triggerUpdateMetadataNow("cursor moving to a different broker that is not yet known")
+		//
+		// The leader answers a fetch that names a preferred replica
+		// immediately, so we wait a backoff before fetching the
+		// partition again, rather than fetching in a loop until
+		// metadata knows the replica.
+		cl.triggerUpdateMetadataNow("cursor moving to a different broker that is not yet known")
+		c.source.setRetryAt(cl.cfg.retryBackoff(int(c.fetchFails.Add(1))))
 		c.allowUsable()
 		return
 	}
+	defer cl.sinksAndSourcesMu.Unlock()
 
 	c.source.removeCursor(c)
 	c.source = sns.source

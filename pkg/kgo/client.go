@@ -52,12 +52,13 @@ type Client struct {
 	anySeedIdx   int32
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
-	// A sink and a source is created once per node ID and persists
-	// forever. We expect the list to be small.
+	// A sink and a source is created once per node ID and stays until
+	// pruneSinksAndSources deletes it. We expect the list to be small.
 	//
-	// The mutex only exists to allow consumer session stopping to read
-	// sources to notify when starting a session; all writes happen in the
-	// metadata loop.
+	// Consumer session stopping reads sources under the mutex, to notify
+	// when starting a session. Writes happen in the metadata loop, except
+	// that a cursor's move can recreate its leader's entry; a move also
+	// keeps the mutex locked to keep pruneSinksAndSources out.
 	sinksAndSourcesMu xsync.Mutex
 	sinksAndSources   map[int32]sinkAndSource
 

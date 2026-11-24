@@ -1514,6 +1514,12 @@ func (s *sink) addRecBuf(add *recBuf) {
 	add.clearFailing()
 }
 
+func (s *sink) empty() bool {
+	s.recBufsMu.Lock()
+	defer s.recBufsMu.Unlock()
+	return len(s.recBufs) == 0
+}
+
 // removeRecBuf removes a record buffer from a sink. Removing a buffer that
 // is not in the sink is a no-op: a recreated topic's buffers are removed
 // when the recreation is detected and again when the topic is purged.
