@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -605,4 +606,32 @@ func TestCreateSchemaWithContext(t *testing.T) {
 			t.Errorf("expected ID 1, got %d", ss.ID)
 		}
 	})
+}
+
+func TestCommSubjectSchemasDuplicates(t *testing.T) {
+	a := SubjectSchema{Subject: "a", Version: 1, ID: 1}
+	b := SubjectSchema{Subject: "b", Version: 1, ID: 2}
+	c := SubjectSchema{Subject: "c", Version: 1, ID: 3}
+	c2 := SubjectSchema{Subject: "c", Version: 1, ID: 4}
+
+	// a is only in l, b is in both, c and c2 are only in r; every schema is
+	// repeated on the side it is in. c2 has the same subject and version as
+	// c and comes first in r, so the sort must compare IDs to put c first.
+	luniq, runiq, common := CommSubjectSchemas(
+		[]SubjectSchema{a, a, b, b},
+		[]SubjectSchema{b, b, c2, c2, c, c},
+	)
+	for _, tt := range []struct {
+		name string
+		got  []SubjectSchema
+		exp  []SubjectSchema
+	}{
+		{"luniq", luniq, []SubjectSchema{a}},
+		{"runiq", runiq, []SubjectSchema{c, c2}},
+		{"common", common, []SubjectSchema{b}},
+	} {
+		if !reflect.DeepEqual(tt.got, tt.exp) {
+			t.Errorf("%s: got %v != exp %v", tt.name, tt.got, tt.exp)
+		}
+	}
 }

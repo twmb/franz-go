@@ -118,7 +118,7 @@ func (cl *Client) SupportedTypes(ctx context.Context) ([]SchemaType, error) {
 }
 
 // CommSubjectSchemas splits l and r into three sets: what is unique in l, what
-// is unique in r, and what is common in both. Duplicates in either map are
+// is unique in r, and what is common in both. Duplicates in either slice are
 // eliminated.
 func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSchema) {
 	type svid struct {
@@ -137,6 +137,10 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 			sl.GUID,
 		}] = sl
 	}
+	// Matching a schema in r deletes it from m, so without tracking what
+	// we have seen, a repeat in r of a common schema would no longer be
+	// found in m and would be returned as unique to r.
+	rseen := make(map[svid]struct{})
 	for _, sr := range r {
 		k := svid{
 			sr.Subject,
@@ -144,6 +148,10 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 			sr.ID,
 			sr.GUID,
 		}
+		if _, dup := rseen[k]; dup {
+			continue
+		}
+		rseen[k] = struct{}{}
 		switch _, exists := m[k]; exists {
 		case false:
 			runiq = append(runiq, sr)
@@ -164,7 +172,9 @@ func CommSubjectSchemas(l, r []SubjectSchema) (luniq, runiq, common []SubjectSch
 		sort.Slice(s, func(i, j int) bool {
 			l, r := s[i], s[j]
 			return l.Subject < r.Subject ||
-				l.Subject == r.Subject && l.Version > r.Version
+				l.Subject == r.Subject && l.Version > r.Version ||
+				l.Subject == r.Subject && l.Version == r.Version && l.ID < r.ID ||
+				l.Subject == r.Subject && l.Version == r.Version && l.ID == r.ID && l.GUID < r.GUID
 		})
 	}
 
