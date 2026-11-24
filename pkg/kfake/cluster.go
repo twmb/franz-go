@@ -65,6 +65,7 @@ type (
 		sasls              sasls
 		acls               clusterACLs
 		bcfgs              map[string]*string
+		maxRequestBytes    int32 // socket.request.max.bytes, set once before any listener starts; the connection read loops run outside run() and cannot read bcfgs
 		quotas             map[string]quotaEntry
 		telem              map[[16]byte]telemClient // client instance ID -> the client, see telemClientFor
 		telemVersion       int                      // bumped when a client metrics subscription changes, see telemClientFor
@@ -349,6 +350,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 
 	c.refreshCompactTicker() // before run, for seeded and loaded topics
+	// Static, and set before the deferred listens above accept anything.
+	c.maxRequestBytes = c.brokerConfigInt(maxRequestBytesKey, defMaxRequestBytes)
 	go c.run()
 
 	return c, nil

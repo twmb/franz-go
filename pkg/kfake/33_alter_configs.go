@@ -104,7 +104,7 @@ outer:
 			var invalid bool
 			for i := range rr.Configs {
 				rc := &rr.Configs[i]
-				if !validateBrokerConfig(rc.Name, rc.Value) {
+				if !validateBrokerConfig(rc.Name, rc.Value) || rc.Name == maxRequestBytesKey {
 					invalid = true
 				}
 				newBcfgs[rc.Name] = rc.Value
@@ -116,6 +116,9 @@ outer:
 			doner(rr.ResourceName, rr.ResourceType, 0)
 			if req.ValidateOnly {
 				continue
+			}
+			if v, ok := c.bcfgs[maxRequestBytesKey]; ok {
+				newBcfgs[maxRequestBytesKey] = v // static, so replacing every config keeps it
 			}
 			c.bcfgs = newBcfgs
 			c.persistBrokerConfigsState()

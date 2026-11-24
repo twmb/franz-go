@@ -1778,9 +1778,9 @@ func TestProduceBatch(t *testing.T) {
 }
 
 // TestConnectionClose verifies that we close a connection as Kafka does: on
-// a request key we do not know, and on an acks=0 produce with a partition
-// error. An acks=0 client reads no response, so the close is how it learns
-// to refresh its metadata.
+// a request key we do not know, on a request over socket.request.max.bytes,
+// and on an acks=0 produce with a partition error. An acks=0 client reads no
+// response, so the close is how it learns to refresh its metadata.
 func TestConnectionClose(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
@@ -1803,6 +1803,7 @@ func TestConnectionClose(t *testing.T) {
 	}{
 		// size, key 9999, version 0, correlation ID 1, null client ID
 		{"unknown key", []byte{0, 0, 0, 10, 0x27, 0x0f, 0, 0, 0, 0, 0, 1, 0xff, 0xff}, true},
+		{"size over socket.request.max.bytes", []byte{0xff, 0xff, 0xff, 0xff}, true},
 		{"acks=0 to a missing topic", produce("missing", 0), true},
 		{"acks=0 transactional without a transactional ID", produce("t", 0x0010), true},
 		{"acks=0", produce("t", 0), false},

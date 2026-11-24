@@ -131,7 +131,12 @@ func (cc *clientConn) read() {
 		if _, err := io.ReadFull(cc.br, size); err != nil {
 			return
 		}
-		body := make([]byte, binary.BigEndian.Uint32(size))
+		n := binary.BigEndian.Uint32(size)
+		if max := uint32(cc.c.maxRequestBytes); n > max {
+			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s sent a %d byte request, over the limit of %d", who, n, max)
+			return
+		}
+		body := make([]byte, n)
 		if _, err := io.ReadFull(cc.br, body); err != nil {
 			return
 		}

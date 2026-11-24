@@ -876,7 +876,7 @@ func validateBrokerConfig(k string, v *string) bool {
 	case "log.cleaner.backoff.ms": // Kafka: at least 0
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n >= 0
-	case "controller.max.records.per.batch", "offsets.retention.minutes", "offsets.retention.check.interval.ms", "producer.id.expiration.ms": // Kafka: at least 1
+	case "controller.max.records.per.batch", "offsets.retention.minutes", "offsets.retention.check.interval.ms", "producer.id.expiration.ms", "socket.request.max.bytes": // Kafka: at least 1
 		n, _ := strconv.ParseInt(*v, 10, 64)
 		return n >= 1
 	}
@@ -992,6 +992,7 @@ var validBrokerConfigs = map[string]string{
 	"offset.retention.ms":                       "",
 	"offsets.retention.check.interval.ms":       "",
 	"sasl.enabled.mechanisms":                   "",
+	"socket.request.max.bytes":                  "",
 	"group.share.heartbeat.interval.ms":         "",
 	"group.share.session.timeout.ms":            "",
 	"group.share.delivery.count.limit":          "",
@@ -1092,6 +1093,7 @@ func validateClientMetricsConfig(k string, v *string) *kerr.Error {
 const (
 	defLogDir          = "/mem/kfake"
 	defMaxMessageBytes = 1048588
+	defMaxRequestBytes = 100 << 20 // Kafka's socket.request.max.bytes default
 )
 
 // defHeartbeatInterval is the default group.consumer.heartbeat.interval.ms.
@@ -1143,6 +1145,7 @@ var configDefaults = map[string]string{
 	"message.max.bytes":                         strconv.Itoa(defMaxMessageBytes),
 	"offsets.retention.minutes":                 "10080",
 	"offsets.retention.check.interval.ms":       "600000",
+	"socket.request.max.bytes":                  strconv.Itoa(defMaxRequestBytes),
 	"group.share.heartbeat.interval.ms":         strconv.Itoa(defHeartbeatInterval),
 	"group.share.session.timeout.ms":            "45000",
 	"group.share.delivery.count.limit":          "5",
@@ -1203,6 +1206,7 @@ var configTypes = map[string]kmsg.ConfigType{
 	"segment.bytes":                             kmsg.ConfigTypeInt,
 	"segment.ms":                                kmsg.ConfigTypeLong,
 	"sasl.enabled.mechanisms":                   kmsg.ConfigTypeList,
+	"socket.request.max.bytes":                  kmsg.ConfigTypeInt,
 	"group.share.heartbeat.interval.ms":         kmsg.ConfigTypeInt,
 	"group.share.session.timeout.ms":            kmsg.ConfigTypeInt,
 	"group.share.delivery.count.limit":          kmsg.ConfigTypeInt,
@@ -1239,6 +1243,13 @@ func (c *Cluster) connectionsMaxReauthMs() int64 {
 	}
 	return 0
 }
+
+// maxRequestBytesKey is a static config: Kafka reads it only at startup and
+// refuses a runtime change, and so do we. A client could otherwise set a
+// limit below the size of any request and close every connection, including
+// the connection that would undo the change. We accept runtime changes to
+// every other broker config.
+const maxRequestBytesKey = "socket.request.max.bytes"
 
 // segmentBytes returns the max segment size for a topic.
 func (c *Cluster) segmentBytes(topic string) int64 {

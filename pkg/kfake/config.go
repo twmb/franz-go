@@ -264,6 +264,8 @@ type ACL struct {
 //   - share.record.lock.sweep.interval.ms - sweep interval for expired locks (default 5000)
 //   - group.share.delivery.count.limit - max deliveries before archival (default 5)
 //   - message.max.bytes - max produce batch size (default 1048588)
+//   - socket.request.max.bytes - max request size; a larger request closes
+//     the connection (default 104857600)
 //   - transaction.max.timeout.ms - max transaction timeout (default 900000)
 //   - max.incremental.fetch.session.cache.slots - max fetch sessions per broker (default 1000)
 //   - log.dirs - comma separated log dirs every broker has, which
