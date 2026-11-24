@@ -2038,7 +2038,7 @@ func CalculateGroupLagWithStartOffsets(
 			if tstart != nil {
 				if pstartActual, ok := tstart[p]; ok {
 					pstart = pstartActual
-					if pstart.Err == nil {
+					if perr == nil && pstart.Err == nil {
 						lag = pend.Offset - pstart.Offset
 						if lag < 0 {
 							lag = 0

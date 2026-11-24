@@ -186,3 +186,41 @@ func TestTopicResponsesSortedByID(t *testing.T) {
 		}
 	}
 }
+
+// A partition that is neither assigned nor committed to previously had its
+// lag calculated from the start offset even if listing its end offset failed:
+// the errored end offset of -1 minus the start offset rounded up to a lag of
+// 0, rather than the -1 that every other errored partition has.
+func TestCalculateGroupLagEndOffsetErr(t *testing.T) {
+	commit := OffsetResponses{"t": {
+		0: {Offset: Offset{Topic: "t", Partition: 0, At: 15}},
+	}}
+	start := ListedOffsets{"t": {
+		1: {Topic: "t", Partition: 1, Offset: 10},
+		2: {Topic: "t", Partition: 2, Offset: 10},
+	}}
+	end := ListedOffsets{"t": {
+		1: {Topic: "t", Partition: 1, Offset: 20},
+		2: {Topic: "t", Partition: 2, Offset: -1, Err: kerr.LeaderNotAvailable},
+	}}
+
+	lag := CalculateGroupLagWithStartOffsets(DescribedGroup{}, commit, start, end)
+
+	for _, test := range []struct {
+		p   int32
+		lag int64
+		err error
+	}{
+		{1, 10, nil}, // not committed: end - start
+		{2, -1, kerr.LeaderNotAvailable},
+	} {
+		got, ok := lag.Lookup("t", test.p)
+		if !ok {
+			t.Errorf("partition %d: missing from lag", test.p)
+			continue
+		}
+		if got.Lag != test.lag || got.Err != test.err {
+			t.Errorf("partition %d: got lag %d err %v, want lag %d err %v", test.p, got.Lag, got.Err, test.lag, test.err)
+		}
+	}
+}
