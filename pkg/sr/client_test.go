@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -167,10 +168,18 @@ func TestSchemaRegistryAPI(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
+	// notSent reports whether err is an error from the client itself: the
+	// test server answers a path it does not know with a ResponseError.
+	notSent := func(err error) bool {
+		_, isResp := errors.AsType[*ResponseError](err)
+		return err != nil && !isResp
+	}
+
 	tests := []struct {
 		name     string
 		fn       func() (any, error)
 		expected string
+		err      bool
 	}{
 		{
 			name:     "get supported types",
@@ -361,10 +370,39 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			fn:       func() (any, error) { return c.SchemaVersionsByID(InContext(ctx, ".mycontext"), 1) },
 			expected: `[{"subject":"foo","version":1}]`,
 		},
+		{
+			name: "reject subject named dot", // would be PUT /mode, the global mode
+			fn:   func() (any, error) { return nil, c.SetMode(ctx, ModeReadOnly, ".")[0].Err },
+			err:  true,
+		},
+		{
+			name: "reject empty subject before sending", // would be GET /subjects/versions
+			fn: func() (any, error) {
+				_, err := c.SubjectVersions(ctx, "")
+				return notSent(err), nil
+			},
+			expected: `true`,
+		},
+		{
+			name:     "context dot is the default context",
+			fn:       func() (any, error) { return c.SubjectVersions(InContext(ctx, "."), dummySchema.Subject) },
+			expected: `[1]`,
+		},
+		{
+			name: "reject context named dot dot", // would be GET /subjects
+			fn:   func() (any, error) { return c.Subjects(InContext(ctx, "..")) },
+			err:  true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := test.fn()
+			if test.err {
+				if err == nil {
+					t.Errorf("expected an error, got %v", result)
+				}
+				return
+			}
 			if err != nil {
 				t.Errorf("failed to call test function: %s", err)
 				return

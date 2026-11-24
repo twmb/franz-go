@@ -261,24 +261,39 @@ func (cl *Client) Do(ctx context.Context, method, path string, v, into any) erro
 }
 
 func (cl *Client) get(ctx context.Context, path string, into any) error {
-	return cl.do(ctx, http.MethodGet, path, nil, into)
+	return cl.doOwn(ctx, http.MethodGet, path, nil, into)
 }
 
 func (cl *Client) post(ctx context.Context, path string, v, into any) error {
-	return cl.do(ctx, http.MethodPost, path, v, into)
+	return cl.doOwn(ctx, http.MethodPost, path, v, into)
 }
 
 func (cl *Client) put(ctx context.Context, path string, v, into any) error {
-	return cl.do(ctx, http.MethodPut, path, v, into)
+	return cl.doOwn(ctx, http.MethodPut, path, v, into)
 }
 
 func (cl *Client) delete(ctx context.Context, path string, into any) error {
-	return cl.do(ctx, http.MethodDelete, path, nil, into)
+	return cl.doOwn(ctx, http.MethodDelete, path, nil, into)
+}
+
+// JoinPath removes empty, "." and ".." segments, and PathEscape keeps them,
+// so a subject, GUID, or context that is empty or named either would change
+// the endpoint. doOwn checks a path our helpers built from such a name; a
+// path given to Do is the caller's.
+func (cl *Client) doOwn(ctx context.Context, method, path string, v, into any) error {
+	if p := path + "/"; strings.Contains(p, "//") || strings.Contains(p, "/./") || strings.Contains(p, "/../") {
+		return fmt.Errorf("invalid path %q: a subject, GUID, or context cannot be empty, %q, or %q", path, ".", "..")
+	}
+	return cl.do(ctx, method, path, v, into)
 }
 
 func (cl *Client) do(ctx context.Context, method, path string, v, into any) error {
+	// "." is the registry's default context, which has no path prefix.
 	ctxName := cl.schemaContext(ctx)
-	if ctxName != "" && !strings.HasPrefix(path, "/contexts/") {
+	if ctxName == ".." {
+		return fmt.Errorf("invalid schema context %q", ctxName)
+	}
+	if ctxName != "" && ctxName != "." && !strings.HasPrefix(path, "/contexts/") {
 		path = "/contexts/" + url.PathEscape(ctxName) + path
 	}
 
