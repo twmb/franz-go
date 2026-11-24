@@ -288,6 +288,22 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				}
 			}
 
+			// Kafka reads every record of a produced batch and
+			// refuses a batch whose count is not the number of
+			// records it has. We advance the high watermark by the
+			// count, so a false count would leave offsets with no
+			// record. The compacted check above read every record
+			// already.
+			if !compacted {
+				if n, err := batchRecordCount(b); err != nil && !errors.Is(err, errCorruptRecord) {
+					fail(rt, rp, pd, kerr.CorruptMessage.Code, "Corrupt message.")
+					continue
+				} else if err != nil || n != int(b.NumRecords) {
+					fail(rt, rp, pd, kerr.InvalidRecord.Code, "") // as Kafka answers a record it cannot read
+					continue
+				}
+			}
+
 			// Kafka stamps the batch with the topic's timestamp
 			// type, whatever type the client set, and a
 			// LogAppendTime batch with the broker's clock.

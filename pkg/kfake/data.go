@@ -1529,6 +1529,27 @@ func forEachBatchRecord(batch kmsg.RecordBatch, fn func(kmsg.Record) bool) error
 	return nil
 }
 
+// batchRecordCount returns how many records a batch has, by their lengths.
+func batchRecordCount(batch kmsg.RecordBatch) (int, error) {
+	records, err := kgo.DefaultDecompressor().Decompress(
+		batch.Records,
+		kgo.CompressionCodecType(batch.Attributes&0x0007),
+	)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	for len(records) > 0 {
+		length, amt := binary.Varint(records)
+		if amt <= 0 || length < 0 || length > int64(len(records)-amt) {
+			return 0, fmt.Errorf("%w: record length %d with %d bytes left", errCorruptRecord, length, len(records)-amt)
+		}
+		records = records[amt+int(length):]
+		n++
+	}
+	return n, nil
+}
+
 // errCorruptRecord is a record that does not parse as its batch and its
 // length say, which Kafka answers INVALID_RECORD.
 var errCorruptRecord = errors.New("corrupt record")

@@ -1694,6 +1694,9 @@ func TestProduceBatch(t *testing.T) {
 		{name: "crc", rec: kvRecord(), mod: func(b []byte) []byte { b[len(b)-1] ^= 1; return b }, want: kerr.CorruptMessage},
 		{name: "first-offset", rec: kvRecord(), mod: func(b []byte) []byte { b[7] = 1; return b }, want: kerr.InvalidRecord},
 		{name: "last-offset-delta", rec: kvRecord(), mod: func(b []byte) []byte { b[26] = 1; return sealBatch(b) }, want: kerr.InvalidRecord},
+		// Bytes 26 and 60 end the last offset delta and the record
+		// count: one record that claims to be two.
+		{name: "record-count", rec: kvRecord(), mod: func(b []byte) []byte { b[26], b[60] = 1, 2; return sealBatch(b) }, want: kerr.InvalidRecord},
 		{name: "append-fails", rec: kvRecord(), want: kerr.KafkaStorageError, failWrite: true},
 		// Byte 61 starts the record: a length varint of 63 runs past
 		// the batch, and one byte more than its fields take pads it.
