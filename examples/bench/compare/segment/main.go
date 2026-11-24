@@ -255,6 +255,6 @@ func (p *Producer) produceBatch(
 	ctx context.Context, batch []kafka.Message,
 ) {
 	if err := p.wr.WriteMessages(ctx, batch...); err != nil {
-		slog.Error("WriteMessages failes", slog.Any("err", err))
+		slog.Error("WriteMessages fails", slog.Any("err", err))
 	}
 }

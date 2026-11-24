@@ -330,7 +330,7 @@ func (b *ACLBuilder) MaybeDenyHosts(hosts ...string) *ACLBuilder {
 //	GROUPS
 //	======
 //	FindCoordinator  DESCRIBE on GROUP for group (if finding group coordinator)
-//	                 DESCRIBE on TRANSACTIONAL_ID for id (if finding transactiona coordinator)
+//	                 DESCRIBE on TRANSACTIONAL_ID for id (if finding transactional coordinator)
 //
 //	OffsetCommit     READ on GROUP for group
 //	                 READ on TOPIC for topics
