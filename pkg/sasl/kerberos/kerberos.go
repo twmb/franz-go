@@ -4,6 +4,7 @@ package kerberos
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
@@ -110,7 +111,9 @@ var _ sasl.ClosingMechanism = new(closing)
 
 // Close implements sasl.ClosingMechanism.
 func (c *closing) Close() {
-	c.auth.Client.Destroy()
+	if c.auth.Client != nil { // nil if the Auth has only a ClientFn
+		c.auth.Client.Destroy()
+	}
 }
 
 func (k) Name() string { return "GSSAPI" }
@@ -125,6 +128,9 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 	if kerb.ClientFn != nil {
 		persist = false
 		c.Client = kerb.ClientFn(ctx)
+	}
+	if c.Client == nil {
+		return nil, nil, errors.New("kerberos: Client or ClientFn must provide a non-nil client")
 	}
 
 	if !persist {
