@@ -439,7 +439,7 @@ func AppendBytes(dst, b []byte) []byte {
 	return append(dst, b...)
 }
 
-// AppendCompactBytes appends bytes to dst prefixed with a its uvarint length
+// AppendCompactBytes appends bytes to dst prefixed with its uvarint length
 // starting at 1; 0 is reserved for null, which compact bytes are not (nullable
 // compact ones are!). Thus, the length is the decoded uvarint - 1.
 //

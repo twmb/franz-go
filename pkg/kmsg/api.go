@@ -92,7 +92,7 @@ type Request interface {
 // AdminRequest represents a request that must be issued to Kafka controllers.
 type AdminRequest interface {
 	// IsAdminRequest is a method attached to requests that must be
-	// issed to Kafka controllers.
+	// issued to Kafka controllers.
 	IsAdminRequest()
 	Request
 }
@@ -189,8 +189,8 @@ type TimeoutRequest interface {
 }
 
 // SetTimeoutRequest sets the timeout in a request that can have a timeout
-// applied. Any kmsg interface that implements ThrottleRequest also implements
-// SetThrottleRequest.
+// applied. Any request that implements TimeoutRequest also implements
+// SetTimeoutRequest.
 type SetTimeoutRequest interface {
 	// SetTimeout sets the request's timeout millis value.
 	SetTimeout(timeoutMillis int32)
@@ -204,7 +204,7 @@ type RequestFormatter struct {
 	clientID *string
 }
 
-// RequestFormatterOpt applys options to a RequestFormatter.
+// RequestFormatterOpt applies options to a RequestFormatter.
 type RequestFormatterOpt interface {
 	apply(*RequestFormatter)
 }
@@ -283,7 +283,8 @@ func StringPtr(in string) *string {
 
 // ReadFrom provides decoding various versions of sticky member metadata. A key
 // point of this type is that it does not contain a version number inside it,
-// but it is versioned: if decoding v1 fails, this falls back to v0.
+// but it is versioned: v1 ends with a generation, which we read if any bytes
+// follow the assignments.
 func (s *StickyMemberMetadata) ReadFrom(src []byte) error {
 	return s.readFrom(src, false)
 }
@@ -367,7 +368,7 @@ func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-// TagReader has is a type that has the ability to skip tags.
+// TagReader is a type that has the ability to skip tags.
 //
 // This is effectively a trimmed version of the kbin.Reader, with the purpose
 // being that kmsg cannot depend on an external package.
