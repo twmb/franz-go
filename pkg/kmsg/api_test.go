@@ -20,10 +20,23 @@ func TestReadCountPastInput(t *testing.T) {
 	fetch := kbin.AppendUvarint(make([]byte, 10), 1<<20+1)
 	fetch = append(fetch, make([]byte, 1<<20)...)
 
+	// A record with no key or value, then 2^20 headers in 2^20 bytes; a
+	// header is at least two bytes.
+	record := append([]byte{0, 0, 0, 0}, kbin.AppendVarint(kbin.AppendVarint(nil, -1), -1)...)
+	record = append(kbin.AppendVarint(record, 1<<20), make([]byte, 1<<20)...)
+
+	// Sticky metadata with 2^20 assignments in 2^20 bytes, and with one
+	// assignment of 2^20 partitions in 2^20 bytes.
+	stickyAssignments := append(kbin.AppendInt32(nil, 1<<20), make([]byte, 1<<20)...)
+	stickyPartitions := append(kbin.AppendInt32(kbin.AppendInt16(kbin.AppendInt32(nil, 1), 0), 1<<20), make([]byte, 1<<20)...)
+
 	for _, tc := range []struct {
 		name string
 		read func() bool
 	}{
+		{"record headers", func() bool { return new(Record).ReadFrom(record) == nil }},
+		{"sticky assignments", func() bool { return new(StickyMemberMetadata).ReadFrom(stickyAssignments) == nil }},
+		{"sticky partitions", func() bool { return new(StickyMemberMetadata).ReadFrom(stickyPartitions) == nil }},
 		{"internalReadTags", func() bool {
 			r := NewPtrApiVersionsRequest()
 			r.Version = 3

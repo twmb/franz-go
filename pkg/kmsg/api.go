@@ -299,6 +299,12 @@ func (s *StickyMemberMetadata) readFrom(src []byte, unsafe bool) error {
 	if numAssignments < 0 {
 		numAssignments = 0
 	}
+	// We allocate every element before reading any. An assignment is at
+	// least a topic length and a partition count, and a partition is four
+	// bytes.
+	if int64(numAssignments)*6 > int64(len(b.Src)) {
+		return kbin.ErrNotEnoughData
+	}
 	need := numAssignments - int32(cap(s.CurrentAssignment))
 	if need > 0 {
 		s.CurrentAssignment = append(s.CurrentAssignment[:cap(s.CurrentAssignment)], make([]StickyMemberMetadataCurrentAssignment, need)...)
@@ -315,6 +321,9 @@ func (s *StickyMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		numPartitions := b.ArrayLen()
 		if numPartitions < 0 {
 			numPartitions = 0
+		}
+		if int64(numPartitions)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a := &s.CurrentAssignment[i]
 		a.Topic = topic

@@ -135,6 +135,11 @@ func (v *Record) readFrom(src []byte, unsafe bool) error {
 		if !b.Ok() {
 			return b.Complete()
 		}
+		// We allocate every header before reading any, and a header
+		// is at least a key length and a value length.
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
+		}
 		a = a[:0]
 		if l > 0 {
 			a = append(a, make([]Header, l)...)
