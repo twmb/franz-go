@@ -1,6 +1,7 @@
 package sr
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -543,14 +544,12 @@ func (*ConfluentHeader) UpdateID(b []byte, id uint32) error {
 // encoded data contains more indices than maxLength the function returns
 // ErrNotRegistered.
 func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, error) {
-	r := bReader{b}
-	br := io.ByteReader(&r)
-	l, err := binary.ReadVarint(br)
+	l, b, err := readVarint(b)
 	if err != nil {
 		return nil, nil, err
 	}
 	if l == 0 { // length 0 is a shortcut for length 1, index 0
-		return []int{0}, r.b, nil
+		return []int{0}, b, nil
 	}
 	if l < 0 { // index length can't be negative
 		return nil, nil, ErrBadHeader
@@ -558,18 +557,31 @@ func (*ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 	if maxLength > 0 && int(l) > maxLength { // index count is greater than expected
 		return nil, nil, ErrNotRegistered
 	}
-	if l > int64(len(r.b)) { // each index is at least one byte
+	if l > int64(len(b)) { // each index is at least one byte
 		return nil, nil, io.EOF
 	}
 	index := make([]int, l)
 	for i := range index {
-		idx, err := binary.ReadVarint(br)
+		var idx int64
+		idx, b, err = readVarint(b)
 		if err != nil {
 			return nil, nil, err
 		}
+		if int64(int(idx)) != idx { // overflows int on 32-bit builds
+			return nil, nil, ErrBadHeader
+		}
 		index[i] = int(idx)
 	}
-	return index, r.b, nil
+	return index, b, nil
+}
+
+// readVarint is binary.ReadVarint on a byte slice, with the same errors.
+func readVarint(b []byte) (int64, []byte, error) {
+	if v, n := binary.Varint(b); n > 0 {
+		return v, b[n:], nil
+	}
+	_, err := binary.ReadVarint(bytes.NewReader(b)) // the same error
+	return 0, nil, err
 }
 
 func parseGUID(s string) (g [16]byte, ok bool) {
@@ -599,8 +611,6 @@ func formatGUID(g []byte) string {
 	hex.Encode(s[24:], g[10:16])
 	return string(s[:])
 }
-
-type bReader struct{ b []byte }
 
 // IsRegistered returns whether the schema ID is registered for the given
 // encoding/decoding/generate option functions. IsRegistered also returns true
@@ -639,13 +649,4 @@ func (t tserde) has(encodingOptFns []any) bool {
 		}
 	}
 	return is
-}
-
-func (b *bReader) ReadByte() (byte, error) {
-	if len(b.b) > 0 {
-		r := b.b[0]
-		b.b = b.b[1:]
-		return r, nil
-	}
-	return 0, io.EOF
 }

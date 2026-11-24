@@ -280,6 +280,17 @@ func TestConfluentHeader(t *testing.T) {
 	if _, _, err := h.DecodeIndex(binary.AppendVarint(nil, 1<<62), 0); err != io.EOF {
 		t.Errorf("got %v != exp io.EOF", err)
 	}
+	if _, _, err := h.DecodeIndex(nil, 0); err != io.EOF {
+		t.Errorf("got %v != exp io.EOF", err)
+	}
+	if _, _, err := h.DecodeIndex([]byte{0x80}, 0); err != io.ErrUnexpectedEOF {
+		t.Errorf("got %v != exp io.ErrUnexpectedEOF", err)
+	}
+	overflow := []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}
+	_, expOverflow := binary.ReadVarint(bytes.NewReader(overflow))
+	if _, _, err := h.DecodeIndex(overflow, 0); err != expOverflow {
+		t.Errorf("got %v != exp %v", err, expOverflow)
+	}
 }
 
 const testGUID = "01234567-89ab-cdef-0123-456789abcdef"
