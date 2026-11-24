@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -380,6 +381,25 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			fn: func() (any, error) {
 				_, err := c.SubjectVersions(ctx, "")
 				return notSent(err), nil
+			},
+			expected: `true`,
+		},
+		{
+			name: "a URL's password stays out of errors",
+			fn: func() (any, error) {
+				pc, err := NewClient(URLs("http://user:secret@127.0.0.1:1")) // nothing listens on port 1
+				if err != nil {
+					return nil, err
+				}
+				_, err = pc.Subjects(ctx)
+				return err != nil && !strings.Contains(err.Error(), "secret"), nil
+			},
+			expected: `true`,
+		},
+		{
+			name: "reject Do path with a bad escape before sending", // would be GET on the base URL
+			fn: func() (any, error) {
+				return notSent(c.Do(ctx, http.MethodGet, "/subjects/100%/versions", nil, nil)), nil
 			},
 			expected: `true`,
 		},
