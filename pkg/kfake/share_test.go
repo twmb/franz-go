@@ -2690,6 +2690,7 @@ func TestShareFetchAcquiredRanges(t *testing.T) {
 // Kafka. The group's member joins after two records are produced, and
 // share.auto.offset.reset is latest. Describing every offset right after the
 // join lists the partition with the start offset it has so far, -1 for none.
+// A row can also acknowledge offsets below the start offset after its fetch.
 func TestShareGroupStartOffset(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2699,6 +2700,7 @@ func TestShareGroupStartOffset(t *testing.T) {
 		addPart   bool // add partition 1 after the join, produce one record to it, and fetch it
 		described int64
 		want      [][2]int64
+		ackTo     int64 // after the fetch, acknowledge offsets 0 through ackTo, if positive
 	}{
 		// Altering to -1 leaves the partition without a start offset.
 		{name: "altered to -1", alter: new(int64(-1)), described: -1},
@@ -2709,6 +2711,9 @@ func TestShareGroupStartOffset(t *testing.T) {
 		// A new partition of a topic the group knows starts at 0, so
 		// a record produced to it before its first fetch is kept.
 		{name: "new partition of a known topic", addPart: true, described: -1, want: [][2]int64{{0, 0}}},
+		// An ack loop that stepped over every offset below the start
+		// offset would spin run() here for decades.
+		{name: "ack below a far start offset", alter: new(int64(1 << 62)), described: 1 << 62, ackTo: 1<<62 - 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -2805,6 +2810,11 @@ func TestShareGroupStartOffset(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("acquired %v, want %v", got, tc.want)
+			}
+			if tc.ackTo > 0 {
+				if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, tc.ackTo, int8(kgo.AckAccept)); code != 0 {
+					t.Errorf("ack: %v", kerr.ErrorForCode(code))
+				}
 			}
 		})
 	}
