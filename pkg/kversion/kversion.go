@@ -366,11 +366,7 @@ func relversion(fns ...func() *release) *Versions {
 func Stable() *Versions { return relversion(b44, c44, z39) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
-func Tip() *Versions {
-	vs := relversion(ztip)
-	vs.setFeatures(ftip())
-	return vs
-}
+func Tip() *Versions { return relversion(btip, ctip, ztip) }
 
 func V0_8_0() *Versions  { return relversion(z080) }
 func V0_8_1() *Versions  { return relversion(z081) }

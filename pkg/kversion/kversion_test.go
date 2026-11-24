@@ -268,10 +268,23 @@ func TestGuessVersions(t *testing.T) {
 		// answers exactly even though Stable also carries zk and
 		// controller keys.
 		{Stable(), "v4.4"},
+		{Tip(), "v4.4"},
 	} {
 		got := test.vs.VersionGuess()
 		if got != test.exp {
 			t.Errorf("got %s != exp %s", got, test.exp)
 		}
 	}
+}
+
+func TestTipNotBehindStable(t *testing.T) {
+	tip := Tip()
+	Stable().EachMaxKeyVersion(func(k, stable int16) {
+		got, ok := tip.LookupMaxKeyVersion(k)
+		if !ok {
+			t.Errorf("key %d: in Stable at max version %d, missing in Tip", k, stable)
+		} else if got < stable {
+			t.Errorf("key %d: Tip max version %d < Stable max version %d", k, got, stable)
+		}
+	})
 }
