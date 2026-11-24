@@ -1,6 +1,10 @@
 package kmsg
 
-import "github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
+import (
+	"math"
+
+	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
+)
 
 // Generated code reads and appends fixed size fields with these. A call is
 // much smaller than the inlined kbin function at every field.
@@ -147,7 +151,22 @@ func readNullableBytes(b *kbin.Reader, dst *[]byte, flexible bool) {
 	*dst = b.Span(l)
 }
 
-func appendString(dst []byte, s string, flexible bool) []byte {
+// The append helpers below refuse a string longer than math.MaxInt16 bytes,
+// and bytes or an array longer than math.MaxInt32: the helper appends nothing
+// and sets `over`, and the AppendTo that called the helper returns nil. If we
+// instead wrote a field too long for a classic length prefix, the length
+// would wrap, and a reader would parse the rest of the field as the fields
+// after it.
+//
+// kbin's append functions have the same limits. We repeat the checks here
+// because these helpers write the length inline: kbin's compact functions do
+// not inline, and calling them adds a call per field.
+
+func appendString(dst []byte, s string, flexible bool, over *bool) []byte {
+	if len(s) > math.MaxInt16 {
+		*over = true
+		return dst
+	}
 	if flexible {
 		dst = kbin.AppendUvarint(dst, 1+uint32(len(s)))
 	} else {
@@ -156,12 +175,16 @@ func appendString(dst []byte, s string, flexible bool) []byte {
 	return append(dst, s...)
 }
 
-func appendNullableString(dst []byte, s *string, flexible bool) []byte {
+func appendNullableString(dst []byte, s *string, flexible bool, over *bool) []byte {
 	if s == nil {
 		if flexible {
 			return append(dst, 0)
 		}
 		return kbin.AppendInt16(dst, -1)
+	}
+	if len(*s) > math.MaxInt16 {
+		*over = true
+		return dst
 	}
 	if flexible {
 		dst = kbin.AppendUvarint(dst, 1+uint32(len(*s)))
@@ -171,7 +194,11 @@ func appendNullableString(dst []byte, s *string, flexible bool) []byte {
 	return append(dst, *s...)
 }
 
-func appendBytes(dst, b []byte, flexible bool) []byte {
+func appendBytes(dst, b []byte, flexible bool, over *bool) []byte {
+	if len(b) > math.MaxInt32 {
+		*over = true
+		return dst
+	}
 	if flexible {
 		dst = kbin.AppendUvarint(dst, 1+uint32(len(b)))
 	} else {
@@ -180,12 +207,16 @@ func appendBytes(dst, b []byte, flexible bool) []byte {
 	return append(dst, b...)
 }
 
-func appendNullableBytes(dst, b []byte, flexible bool) []byte {
+func appendNullableBytes(dst, b []byte, flexible bool, over *bool) []byte {
 	if b == nil {
 		if flexible {
 			return append(dst, 0)
 		}
 		return kbin.AppendInt32(dst, -1)
+	}
+	if len(b) > math.MaxInt32 {
+		*over = true
+		return dst
 	}
 	if flexible {
 		dst = kbin.AppendUvarint(dst, 1+uint32(len(b)))
@@ -206,16 +237,64 @@ func readArrayLen(b *kbin.Reader, flexible bool) int32 {
 	return b.ArrayLen()
 }
 
-func appendArrayLen(dst []byte, n int, flexible bool) []byte {
-	if flexible {
-		return kbin.AppendCompactArrayLen(dst, n)
+func appendArrayLen(dst []byte, n int, flexible bool, over *bool) []byte {
+	if n > math.MaxInt32 {
+		*over = true
+		return dst
 	}
-	return kbin.AppendArrayLen(dst, n)
+	if flexible {
+		return kbin.AppendUvarint(dst, 1+uint32(n))
+	}
+	return kbin.AppendInt32(dst, int32(n))
 }
 
-func appendNullableArrayLen(dst []byte, n int, isNil, flexible bool) []byte {
-	if flexible {
-		return kbin.AppendCompactNullableArrayLen(dst, n, isNil)
+func appendNullableArrayLen(dst []byte, n int, isNil, flexible bool, over *bool) []byte {
+	if isNil {
+		if flexible {
+			return append(dst, 0)
+		}
+		return kbin.AppendInt32(dst, -1)
 	}
-	return kbin.AppendNullableArrayLen(dst, n, isNil)
+	return appendArrayLen(dst, n, flexible, over)
+}
+
+func appendVarintArrayLen(dst []byte, n int, over *bool) []byte {
+	if n > math.MaxInt32 {
+		*over = true
+		return dst
+	}
+	return kbin.AppendVarint(dst, int32(n))
+}
+
+func appendVarintString(dst []byte, s string, over *bool) []byte {
+	if len(s) > math.MaxInt32 {
+		*over = true
+		return dst
+	}
+	dst = kbin.AppendVarint(dst, int32(len(s)))
+	return append(dst, s...)
+}
+
+func appendVarintBytes(dst, b []byte, over *bool) []byte {
+	if b == nil {
+		return kbin.AppendVarint(dst, -1)
+	}
+	if len(b) > math.MaxInt32 {
+		*over = true
+		return dst
+	}
+	dst = kbin.AppendVarint(dst, int32(len(b)))
+	return append(dst, b...)
+}
+
+// Generated code appends a tagged field once to measure it. We write the size
+// over those bytes, from lenAt on, and the generated code appends the field
+// again after the size. If the field is longer than math.MaxInt32 bytes, we
+// set `over`, and the AppendTo returns nil.
+func appendTagSize(dst []byte, lenAt int, over *bool) []byte {
+	n := len(dst) - lenAt
+	if n > math.MaxInt32 {
+		*over = true
+	}
+	return kbin.AppendUvarint(dst[:lenAt], uint32(n))
 }

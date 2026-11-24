@@ -64,9 +64,9 @@ func writeAppendValue(l *LineWriter, t Type, val string) {
 	case Varlong:
 		l.Write("dst = kbin.AppendVarlong(dst, %s)", val)
 	case VarintString:
-		l.Write("dst = kbin.AppendVarintString(dst, %s)", val)
+		l.Write("dst = appendVarintString(dst, %s, &over)", val) // see codec.go
 	case VarintBytes:
-		l.Write("dst = kbin.AppendVarintBytes(dst, %s)", val)
+		l.Write("dst = appendVarintBytes(dst, %s, &over)", val) // see codec.go
 	case String:
 		compactAppend(t.FromFlexible, "String", val, l)
 	case Bytes:
@@ -95,11 +95,16 @@ func writeAppendValue(l *LineWriter, t Type, val string) {
 }
 
 func compactAppend(fromFlexible bool, name, val string, l *LineWriter) {
+	l.Write("dst = append%s(dst, %s, %s, &over)", name, val, flexibleArg(fromFlexible)) // see codec.go
+}
+
+// flexibleArg is the flexible argument for a codec.go helper: a struct that
+// is never flexible has no isFlexible variable.
+func flexibleArg(fromFlexible bool) string {
 	if fromFlexible {
-		l.Write("dst = append%s(dst, %s, isFlexible)", name, val) // see codec.go
-		return
+		return "isFlexible"
 	}
-	l.Write("dst = kbin.Append%s(dst, %s)", name, val)
+	return "false"
 }
 
 // writeAppendV appends v, a value of t that the caller declared.
@@ -116,24 +121,16 @@ func writeAppendV(l *LineWriter, t Type) {
 
 func (a Array) WriteAppend(l *LineWriter) {
 	writeNullable := func() {
-		if a.FromFlexible {
-			l.Write("dst = appendNullableArrayLen(dst, len(v), v == nil, isFlexible)") // see codec.go
-		} else {
-			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
-		}
+		l.Write("dst = appendNullableArrayLen(dst, len(v), v == nil, %s, &over)", flexibleArg(a.FromFlexible)) // see codec.go
 	}
 
 	writeNormal := func() {
-		if a.FromFlexible {
-			l.Write("dst = appendArrayLen(dst, len(v), isFlexible)") // see codec.go
-		} else {
-			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
-		}
+		l.Write("dst = appendArrayLen(dst, len(v), %s, &over)", flexibleArg(a.FromFlexible)) // see codec.go
 	}
 
 	switch {
 	case a.IsVarintArray:
-		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
+		l.Write("dst = appendVarintArrayLen(dst, len(v), &over)") // see codec.go
 	case a.IsNullableArray:
 		if a.NullableVersion > 0 {
 			l.Write("if version >= %d {", a.NullableVersion)
@@ -285,7 +282,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 			l.Write("f%s:", f.FieldName)
 			writeAppendV(l, f.Type)
 			l.Write("if !sized {")
-			l.Write("dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))")
+			l.Write("dst = appendTagSize(dst, lenAt, &over)") // see codec.go
 			l.Write("sized = true")
 			l.Write("goto f%s", f.FieldName)
 			l.Write("}")
@@ -357,19 +354,13 @@ func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (
 // functions for strings and bytes store into dst themselves, so that the store
 // and its write barrier are not repeated at every field.
 func writeDecodeInto(l *LineWriter, t Type, dst string) {
-	flex := func(fromFlexible bool) string {
-		if fromFlexible {
-			return "isFlexible"
-		}
-		return "false"
-	}
 	switch t := t.(type) {
 	case String:
-		l.Write("readString(&b, &%s, %s, unsafe)", dst, flex(t.FromFlexible))
+		l.Write("readString(&b, &%s, %s, unsafe)", dst, flexibleArg(t.FromFlexible))
 	case Bytes:
-		l.Write("readBytes(&b, &%s, %s)", dst, flex(t.FromFlexible))
+		l.Write("readBytes(&b, &%s, %s)", dst, flexibleArg(t.FromFlexible))
 	case NullableBytes:
-		l.Write("readNullableBytes(&b, &%s, %s)", dst, flex(t.FromFlexible))
+		l.Write("readNullableBytes(&b, &%s, %s)", dst, flexibleArg(t.FromFlexible))
 	case VarintString:
 		l.Write("readVarintString(&b, &%s, unsafe)", dst)
 	case VarintBytes:
@@ -380,12 +371,12 @@ func writeDecodeInto(l *LineWriter, t Type, dst string) {
 		if t.NullableVersion > 0 {
 			l.Write("if version < %d {", t.NullableVersion)
 			l.Write("v := new(string)")
-			l.Write("readString(&b, v, %s, unsafe)", flex(t.FromFlexible))
+			l.Write("readString(&b, v, %s, unsafe)", flexibleArg(t.FromFlexible))
 			l.Write("%s = v", dst)
 			l.Write("} else {")
 			defer l.Write("}")
 		}
-		l.Write("readNullableString(&b, &%s, %s, unsafe)", dst, flex(t.FromFlexible))
+		l.Write("readNullableString(&b, &%s, %s, unsafe)", dst, flexibleArg(t.FromFlexible))
 	case FieldLengthMinusBytes:
 		l.Write("%s = b.Span(int(s.%s) - %d)", dst, t.Field, t.LengthMinus)
 	default:
@@ -856,7 +847,13 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 		l.Write("isFlexible := version >= %d", s.FlexibleAt)
 		l.Write("_ = isFlexible")
 	}
+	// An append helper sets `over` when it refuses a field that is too
+	// long; see codec.go.
+	l.Write("var over bool")
 	s.WriteAppend(l)
+	l.Write("if over {")
+	l.Write("return nil")
+	l.Write("}")
 	l.Write("return dst")
 	l.Write("}")
 }

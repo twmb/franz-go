@@ -2,7 +2,9 @@ package kmsg
 
 import (
 	"bytes"
+	"math"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
@@ -53,6 +55,55 @@ func TestReadCountPastInput(t *testing.T) {
 		if n := after.TotalAlloc - before.TotalAlloc; n > 1<<20 {
 			t.Errorf("%s: allocated %d bytes", tc.name, n)
 		}
+	}
+}
+
+// AppendTo and AppendRequest return nil for a string over math.MaxInt16
+// bytes, in the classic and in the flexible encoding. A string of exactly
+// math.MaxInt16 bytes encodes.
+func TestAppendTooLong(t *testing.T) {
+	over := strings.Repeat("a", math.MaxInt16+1)
+	atMax := over[1:]
+
+	offsetDelete := func(group string) Request { // never flexible
+		r := NewPtrOffsetDeleteRequest()
+		r.Group = group
+		return r
+	}
+	metadata := func(version int16, topic string) Request { // flexible from v9
+		r := NewPtrMetadataRequest()
+		r.Version = version
+		rt := NewMetadataRequestTopic()
+		rt.Topic = &topic
+		r.Topics = append(r.Topics, rt)
+		return r
+	}
+	for _, tc := range []struct {
+		name    string
+		r       Request
+		wantNil bool
+	}{
+		{"string in a struct that is never flexible", offsetDelete(over), true},
+		{"the same at the max", offsetDelete(atMax), false},
+		{"string at a classic version", metadata(8, over), true},
+		{"the same at the max", metadata(8, atMax), false},
+		{"string at a flexible version", metadata(12, over), true},
+		{"the same at the max", metadata(12, atMax), false},
+	} {
+		if got := tc.r.AppendTo([]byte{0}); (got == nil) != tc.wantNil {
+			t.Errorf("%s: AppendTo returned nil %v, want %v", tc.name, got == nil, tc.wantNil)
+		}
+		if got := NewRequestFormatter().AppendRequest(nil, tc.r, 1); (got == nil) != tc.wantNil {
+			t.Errorf("%s: AppendRequest returned nil %v, want %v", tc.name, got == nil, tc.wantNil)
+		}
+	}
+
+	if got := NewRequestFormatter(FormatterClientID(over)).AppendRequest(nil, offsetDelete("g"), 1); got != nil {
+		t.Error("AppendRequest with a client ID over the max returned a request, want nil")
+	}
+	sticky := StickyMemberMetadata{CurrentAssignment: []StickyMemberMetadataCurrentAssignment{{Topic: over}}}
+	if got := sticky.AppendTo([]byte{0}); got != nil {
+		t.Error("StickyMemberMetadata with a topic over the max encoded, want nil")
 	}
 }
 

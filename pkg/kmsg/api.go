@@ -28,6 +28,7 @@ package kmsg
 
 import (
 	"context"
+	"math"
 	"sort"
 
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
@@ -63,7 +64,11 @@ type Request interface {
 	// "flexible" as per the KIP-482.
 	IsFlexible() bool
 	// AppendTo appends this message in wire protocol form to a slice and
-	// returns the slice.
+	// returns the slice. AppendTo returns nil if a string is longer than
+	// math.MaxInt16 bytes, or if bytes, an array, or a tagged field are
+	// longer than math.MaxInt32; an unknown tag set with Tags.Set is not
+	// checked. Note that a message with no fields appended to a nil
+	// slice is also nil; pass a non-nil slice to tell the two apart.
 	//
 	// AppendTo may be invoked more than once for the same request: for
 	// example, a client that retries the write on a fresh connection
@@ -135,7 +140,8 @@ type Response interface {
 	// "flexible" as per the KIP-482.
 	IsFlexible() bool
 	// AppendTo appends this message in wire protocol form to a slice and
-	// returns the slice.
+	// returns the slice. AppendTo returns nil for a field that is too
+	// long for its length prefix, as a Request's AppendTo does.
 	AppendTo([]byte) []byte
 	// ReadFrom parses all of the input slice into the response type.
 	//
@@ -225,6 +231,10 @@ func NewRequestFormatter(opts ...RequestFormatterOpt) *RequestFormatter {
 // AppendRequest appends a full message request to dst, returning the updated
 // slice. This message is the full body that needs to be written to issue a
 // Kafka request.
+//
+// AppendRequest returns nil if the request's AppendTo does, if the client ID
+// is longer than math.MaxInt16 bytes, or if the request is longer than
+// math.MaxInt32 bytes.
 func (f *RequestFormatter) AppendRequest(
 	dst []byte,
 	r Request,
@@ -241,8 +251,9 @@ func (f *RequestFormatter) AppendRequest(
 	// Clients issue ApiVersions immediately before knowing the broker
 	// version, and old brokers will not be able to understand a compact
 	// client id. ControlledShutdown v0 has no client id.
+	var over bool
 	if k != 7 || v != 0 {
-		dst = kbin.AppendNullableString(dst, f.clientID)
+		dst = appendNullableString(dst, f.clientID, false, &over)
 	}
 
 	// The flexible tags end the request header, and then begins the
@@ -256,6 +267,9 @@ func (f *RequestFormatter) AppendRequest(
 
 	// Now the request body.
 	dst = r.AppendTo(dst)
+	if dst == nil || over || len(dst)-4 > math.MaxInt32 {
+		return nil
+	}
 
 	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
 	return dst
@@ -325,16 +339,20 @@ func (s *StickyMemberMetadata) readFrom(src []byte, unsafe bool) error {
 // AppendTo provides appending various versions of sticky member metadata to dst.
 // If generation is not -1 (default for v0), this appends as version 1.
 func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
-	dst = kbin.AppendArrayLen(dst, len(s.CurrentAssignment))
+	var over bool // see codec.go
+	dst = appendArrayLen(dst, len(s.CurrentAssignment), false, &over)
 	for _, assignment := range s.CurrentAssignment {
-		dst = kbin.AppendString(dst, assignment.Topic)
-		dst = kbin.AppendArrayLen(dst, len(assignment.Partitions))
+		dst = appendString(dst, assignment.Topic, false, &over)
+		dst = appendArrayLen(dst, len(assignment.Partitions), false, &over)
 		for _, partition := range assignment.Partitions {
 			dst = kbin.AppendInt32(dst, partition)
 		}
 	}
 	if s.Generation != -1 {
 		dst = kbin.AppendInt32(dst, s.Generation)
+	}
+	if over {
+		return nil
 	}
 	return dst
 }
@@ -435,7 +453,9 @@ func (t *Tags) Each(fn func(uint32, []byte)) {
 // Set sets a tag's key and val.
 //
 // Note that serializing tags does NOT check if the set key overlaps with an
-// existing used key. It is invalid to set a key used by Kafka itself.
+// existing used key. It is invalid to set a key used by Kafka itself. A val
+// longer than math.MaxInt32 bytes is invalid as well: Kafka cannot read it,
+// and we do not check for it.
 func (t *Tags) Set(key uint32, val []byte) {
 	if t.keyvals == nil {
 		t.keyvals = make(map[uint32][]byte)
