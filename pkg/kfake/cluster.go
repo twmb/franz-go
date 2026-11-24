@@ -427,8 +427,19 @@ func (c *Cluster) drainReqChForShutdown() {
 	for {
 		select {
 		case creq := <-c.reqCh:
-			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); ok {
-				creq.reply(c.groups.handleOffsetCommit(creq))
+			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); !ok {
+				continue
+			}
+			// We run what run() runs for a request, minus controls: a
+			// control can sleep the request, and nothing wakes it now.
+			// OffsetCommit has no top-level error, so its faults fire
+			// in the handler.
+			if c.cfg.enableSASL && !c.handleSASL(creq) {
+				continue
+			}
+			creq.faults = c.faultsFor(creq)
+			if kresp, err := c.handleOffsetCommit(creq); err == nil {
+				creq.reply(kresp)
 			}
 		default:
 			return

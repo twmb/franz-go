@@ -3694,3 +3694,56 @@ func TestPersistShareGroupRestart(t *testing.T) {
 		})
 	}
 }
+
+// TestShutdownDrainsOffsetCommit verifies that an OffsetCommit still queued
+// when Close runs is handled as run() handles it: a v10 commit names its
+// topic only by ID, a client that has not finished SASL may not commit, and
+// faults apply. No other test drives Close's drain, which needs the commit
+// queued while the loop runs Close.
+func TestShutdownDrainsOffsetCommit(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		version    int16
+		opts       []Opt
+		faults     []Fault
+		wantStored bool
+	}{
+		{"v10 commit by topic ID", 10, nil, nil, true},
+		{"unauthenticated", 9, []Opt{EnableSASL(), Superuser("PLAIN", "u", "p")}, nil, false},
+		{"faulted", 9, nil, []Fault{{Keys: []kmsg.Key{kmsg.OffsetCommit}, Err: kerr.CoordinatorNotAvailable}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newCluster(t, append([]Opt{NumBrokers(1), SeedTopics(1, "t")}, tc.opts...)...)
+			c.Fault(tc.faults...)
+
+			req := kmsg.NewPtrOffsetCommitRequest()
+			req.Version = tc.version
+			req.Group = "g"
+			rt := kmsg.NewOffsetCommitRequestTopic()
+			if tc.version >= 10 {
+				rt.TopicID = c.TopicInfo("t").TopicID // v10 carries no name
+			} else {
+				rt.Topic = "t"
+			}
+			rp := kmsg.NewOffsetCommitRequestTopicPartition()
+			rp.Offset = 5
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+			cc := &clientConn{c: c, b: c.bs[0], respCh: make(chan clientResp, 1), done: make(chan struct{})}
+
+			// While admin runs our function, run() serves nothing else,
+			// so the commit waits in reqCh as it does when Close wins the
+			// race against it.
+			c.admin(func() {
+				c.reqCh <- &clientReq{cc: cc, kreq: req}
+				c.drainReqChForShutdown()
+			})
+			stored := groupCommits(c, "g")["t"][0].Offset == 5
+			if stored != tc.wantStored {
+				t.Errorf("commit stored %v, want %v", stored, tc.wantStored)
+			}
+		})
+	}
+}
