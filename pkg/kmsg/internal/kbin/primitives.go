@@ -375,7 +375,15 @@ func appendUvarlong(dst []byte, u uint64) []byte {
 }
 
 // AppendString appends a string to dst prefixed with its int16 length.
+//
+// A string longer than math.MaxInt16 bytes does not fit the prefix, and we
+// append nothing. If we wrote the string after a wrapped length, a reader
+// would parse the bytes past that length as whatever follows the string. If
+// your string can be longer than math.MaxInt16 bytes, check whether dst grew.
 func AppendString(dst []byte, s string) []byte {
+	if len(s) > math.MaxInt16 {
+		return dst
+	}
 	dst = AppendInt16(dst, int16(len(s)))
 	return append(dst, s...)
 }
@@ -385,13 +393,20 @@ func AppendString(dst []byte, s string) []byte {
 // (nullable compact ones are!). Thus, the length is the decoded uvarint - 1.
 //
 // For KIP-482.
+//
+// As with AppendString, we append nothing for a string longer than
+// math.MaxInt16 bytes, the longest string Kafka reads in either encoding.
 func AppendCompactString(dst []byte, s string) []byte {
+	if len(s) > math.MaxInt16 {
+		return dst
+	}
 	dst = AppendUvarint(dst, 1+uint32(len(s)))
 	return append(dst, s...)
 }
 
 // AppendNullableString appends potentially nil string to dst prefixed with its
-// int16 length or int16(-1) if nil.
+// int16 length or int16(-1) if nil. As with AppendString, we append nothing
+// for a string longer than math.MaxInt16 bytes.
 func AppendNullableString(dst []byte, s *string) []byte {
 	if s == nil {
 		return AppendInt16(dst, -1)
@@ -404,6 +419,9 @@ func AppendNullableString(dst []byte, s *string) []byte {
 // the decoded uvarint - 1.
 //
 // For KIP-482.
+//
+// As with AppendString, we append nothing for a string longer than
+// math.MaxInt16 bytes.
 func AppendCompactNullableString(dst []byte, s *string) []byte {
 	if s == nil {
 		return AppendUvarint(dst, 0)
@@ -411,24 +429,35 @@ func AppendCompactNullableString(dst []byte, s *string) []byte {
 	return AppendCompactString(dst, *s)
 }
 
-// AppendBytes appends bytes to dst prefixed with its int32 length.
+// AppendBytes appends bytes to dst prefixed with its int32 length. As with
+// AppendString, we append nothing for bytes longer than math.MaxInt32.
 func AppendBytes(dst, b []byte) []byte {
+	if len(b) > math.MaxInt32 {
+		return dst
+	}
 	dst = AppendInt32(dst, int32(len(b)))
 	return append(dst, b...)
 }
 
-// AppendCompactBytes appends bytes to dst prefixed with a its uvarint length
+// AppendCompactBytes appends bytes to dst prefixed with its uvarint length
 // starting at 1; 0 is reserved for null, which compact bytes are not (nullable
 // compact ones are!). Thus, the length is the decoded uvarint - 1.
 //
 // For KIP-482.
+//
+// As with AppendString, we append nothing for bytes longer than
+// math.MaxInt32.
 func AppendCompactBytes(dst, b []byte) []byte {
+	if len(b) > math.MaxInt32 {
+		return dst
+	}
 	dst = AppendUvarint(dst, 1+uint32(len(b)))
 	return append(dst, b...)
 }
 
 // AppendNullableBytes appends a potentially nil slice to dst prefixed with its
-// int32 length or int32(-1) if nil.
+// int32 length or int32(-1) if nil. As with AppendString, we append nothing
+// for bytes longer than math.MaxInt32.
 func AppendNullableBytes(dst, b []byte) []byte {
 	if b == nil {
 		return AppendInt32(dst, -1)
@@ -441,6 +470,9 @@ func AppendNullableBytes(dst, b []byte) []byte {
 // the decoded uvarint - 1.
 //
 // For KIP-482.
+//
+// As with AppendString, we append nothing for bytes longer than
+// math.MaxInt32.
 func AppendCompactNullableBytes(dst, b []byte) []byte {
 	if b == nil {
 		return AppendUvarint(dst, 0)
@@ -449,24 +481,36 @@ func AppendCompactNullableBytes(dst, b []byte) []byte {
 }
 
 // AppendVarintString appends a string to dst prefixed with its length encoded
-// as a varint.
+// as a varint. As with AppendString, we append nothing for a string longer
+// than math.MaxInt32 bytes.
 func AppendVarintString(dst []byte, s string) []byte {
+	if len(s) > math.MaxInt32 {
+		return dst
+	}
 	dst = AppendVarint(dst, int32(len(s)))
 	return append(dst, s...)
 }
 
 // AppendVarintBytes appends a slice to dst prefixed with its length encoded as
-// a varint.
+// a varint. As with AppendString, we append nothing for a slice longer than
+// math.MaxInt32.
 func AppendVarintBytes(dst, b []byte) []byte {
 	if b == nil {
 		return AppendVarint(dst, -1)
+	}
+	if len(b) > math.MaxInt32 {
+		return dst
 	}
 	dst = AppendVarint(dst, int32(len(b)))
 	return append(dst, b...)
 }
 
-// AppendArrayLen appends the length of an array as an int32 to dst.
+// AppendArrayLen appends the length of an array as an int32 to dst. As with
+// AppendString, we append nothing for a length over math.MaxInt32.
 func AppendArrayLen(dst []byte, l int) []byte {
+	if l > math.MaxInt32 {
+		return dst
+	}
 	return AppendInt32(dst, int32(l))
 }
 
@@ -474,28 +518,36 @@ func AppendArrayLen(dst []byte, l int) []byte {
 // as the length + 1.
 //
 // For KIP-482.
+//
+// As with AppendString, we append nothing for a length over math.MaxInt32.
 func AppendCompactArrayLen(dst []byte, l int) []byte {
+	if l > math.MaxInt32 {
+		return dst
+	}
 	return AppendUvarint(dst, 1+uint32(l))
 }
 
 // AppendNullableArrayLen appends the length of an array as an int32 to dst,
-// or -1 if isNil is true.
+// or -1 if isNil is true. As with AppendString, we append nothing for a
+// length over math.MaxInt32.
 func AppendNullableArrayLen(dst []byte, l int, isNil bool) []byte {
 	if isNil {
 		return AppendInt32(dst, -1)
 	}
-	return AppendInt32(dst, int32(l))
+	return AppendArrayLen(dst, l)
 }
 
 // AppendCompactNullableArrayLen appends the length of an array as a uvarint to
 // dst as the length + 1; if isNil is true, this appends 0 as a uvarint.
 //
 // For KIP-482.
+//
+// As with AppendString, we append nothing for a length over math.MaxInt32.
 func AppendCompactNullableArrayLen(dst []byte, l int, isNil bool) []byte {
 	if isNil {
 		return AppendUvarint(dst, 0)
 	}
-	return AppendUvarint(dst, 1+uint32(l))
+	return AppendCompactArrayLen(dst, l)
 }
 
 // Reader is used to decode Kafka messages.

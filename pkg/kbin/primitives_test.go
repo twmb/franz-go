@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/quick"
 )
@@ -103,5 +106,44 @@ func BenchmarkUvarint(b *testing.B) {
 				Uvarint(s)
 			}
 		})
+	}
+}
+
+// We append nothing for a string or an array length over the limit, and we
+// append both at the limit.
+func TestAppendTooLong(t *testing.T) {
+	over := strings.Repeat("a", math.MaxInt16+1)
+	atMax := over[1:]
+	for name, fn := range map[string]func([]byte, string) []byte{
+		"AppendString":                AppendString,
+		"AppendCompactString":         AppendCompactString,
+		"AppendNullableString":        func(dst []byte, s string) []byte { return AppendNullableString(dst, &s) },
+		"AppendCompactNullableString": func(dst []byte, s string) []byte { return AppendCompactNullableString(dst, &s) },
+	} {
+		if got := fn([]byte{1}, over); len(got) != 1 {
+			t.Errorf("%s appended %d bytes for a string over the max, want 0", name, len(got)-1)
+		}
+		if got := fn([]byte{1}, atMax); len(got) <= 1+len(atMax) {
+			t.Errorf("%s appended %d bytes for a string at the max, want the string and its length", name, len(got)-1)
+		}
+	}
+
+	if strconv.IntSize < 64 {
+		return // an int cannot be over math.MaxInt32
+	}
+	overLen := int64(math.MaxInt32)
+	overLen++
+	for name, fn := range map[string]func([]byte, int) []byte{
+		"AppendArrayLen":                AppendArrayLen,
+		"AppendCompactArrayLen":         AppendCompactArrayLen,
+		"AppendNullableArrayLen":        func(dst []byte, l int) []byte { return AppendNullableArrayLen(dst, l, false) },
+		"AppendCompactNullableArrayLen": func(dst []byte, l int) []byte { return AppendCompactNullableArrayLen(dst, l, false) },
+	} {
+		if got := fn([]byte{1}, int(overLen)); len(got) != 1 {
+			t.Errorf("%s appended %d bytes for a length over the max, want 0", name, len(got)-1)
+		}
+		if got := fn([]byte{1}, math.MaxInt32); len(got) == 1 {
+			t.Errorf("%s appended nothing for a length at the max", name)
+		}
 	}
 }

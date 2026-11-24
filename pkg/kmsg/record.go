@@ -42,6 +42,7 @@ type Record struct {
 }
 
 func (v *Record) AppendTo(dst []byte) []byte {
+	var over bool // see codec.go
 	{
 		v := v.Length
 		dst = kbin.AppendVarint(dst, v)
@@ -63,26 +64,29 @@ func (v *Record) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Key
-		dst = kbin.AppendVarintBytes(dst, v)
+		dst = appendVarintBytes(dst, v, &over)
 	}
 	{
 		v := v.Value
-		dst = kbin.AppendVarintBytes(dst, v)
+		dst = appendVarintBytes(dst, v, &over)
 	}
 	{
 		v := v.Headers
-		dst = kbin.AppendVarint(dst, int32(len(v)))
+		dst = appendVarintArrayLen(dst, len(v), &over)
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Key
-				dst = kbin.AppendVarintString(dst, v)
+				dst = appendVarintString(dst, v, &over)
 			}
 			{
 				v := v.Value
-				dst = kbin.AppendVarintBytes(dst, v)
+				dst = appendVarintBytes(dst, v, &over)
 			}
 		}
+	}
+	if over {
+		return nil
 	}
 	return dst
 }
@@ -130,6 +134,11 @@ func (v *Record) readFrom(src []byte, unsafe bool) error {
 		l := b.VarintArrayLen()
 		if !b.Ok() {
 			return b.Complete()
+		}
+		// We allocate every header before reading any, and a header
+		// is at least a key length and a value length.
+		if int64(l)*2 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a = a[:0]
 		if l > 0 {

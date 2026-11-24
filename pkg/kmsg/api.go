@@ -28,6 +28,7 @@ package kmsg
 
 import (
 	"context"
+	"math"
 	"sort"
 
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
@@ -63,7 +64,11 @@ type Request interface {
 	// "flexible" as per the KIP-482.
 	IsFlexible() bool
 	// AppendTo appends this message in wire protocol form to a slice and
-	// returns the slice.
+	// returns the slice. AppendTo returns nil if a string is longer than
+	// math.MaxInt16 bytes, or if bytes, an array, or a tagged field are
+	// longer than math.MaxInt32; an unknown tag set with Tags.Set is not
+	// checked. Note that a message with no fields appended to a nil
+	// slice is also nil; pass a non-nil slice to tell the two apart.
 	//
 	// AppendTo may be invoked more than once for the same request: for
 	// example, a client that retries the write on a fresh connection
@@ -87,7 +92,7 @@ type Request interface {
 // AdminRequest represents a request that must be issued to Kafka controllers.
 type AdminRequest interface {
 	// IsAdminRequest is a method attached to requests that must be
-	// issed to Kafka controllers.
+	// issued to Kafka controllers.
 	IsAdminRequest()
 	Request
 }
@@ -135,7 +140,8 @@ type Response interface {
 	// "flexible" as per the KIP-482.
 	IsFlexible() bool
 	// AppendTo appends this message in wire protocol form to a slice and
-	// returns the slice.
+	// returns the slice. AppendTo returns nil for a field that is too
+	// long for its length prefix, as a Request's AppendTo does.
 	AppendTo([]byte) []byte
 	// ReadFrom parses all of the input slice into the response type.
 	//
@@ -183,8 +189,8 @@ type TimeoutRequest interface {
 }
 
 // SetTimeoutRequest sets the timeout in a request that can have a timeout
-// applied. Any kmsg interface that implements ThrottleRequest also implements
-// SetThrottleRequest.
+// applied. Any request that implements TimeoutRequest also implements
+// SetTimeoutRequest.
 type SetTimeoutRequest interface {
 	// SetTimeout sets the request's timeout millis value.
 	SetTimeout(timeoutMillis int32)
@@ -198,7 +204,7 @@ type RequestFormatter struct {
 	clientID *string
 }
 
-// RequestFormatterOpt applys options to a RequestFormatter.
+// RequestFormatterOpt applies options to a RequestFormatter.
 type RequestFormatterOpt interface {
 	apply(*RequestFormatter)
 }
@@ -225,26 +231,31 @@ func NewRequestFormatter(opts ...RequestFormatterOpt) *RequestFormatter {
 // AppendRequest appends a full message request to dst, returning the updated
 // slice. This message is the full body that needs to be written to issue a
 // Kafka request.
+//
+// AppendRequest returns nil if the request's AppendTo does, if the client ID
+// is longer than math.MaxInt16 bytes, or if the request is longer than
+// math.MaxInt32 bytes.
 func (f *RequestFormatter) AppendRequest(
 	dst []byte,
 	r Request,
 	correlationID int32,
 ) []byte {
+	start := len(dst)
 	dst = append(dst, 0, 0, 0, 0) // reserve length
 	k := r.Key()
 	v := r.GetVersion()
 	dst = kbin.AppendInt16(dst, k)
 	dst = kbin.AppendInt16(dst, v)
 	dst = kbin.AppendInt32(dst, correlationID)
-	if k == 7 && v == 0 {
-		return dst
-	}
 
 	// Even with flexible versions, we do not use a compact client id.
 	// Clients issue ApiVersions immediately before knowing the broker
 	// version, and old brokers will not be able to understand a compact
-	// client id.
-	dst = kbin.AppendNullableString(dst, f.clientID)
+	// client id. ControlledShutdown v0 has no client id.
+	var over bool
+	if k != 7 || v != 0 {
+		dst = appendNullableString(dst, f.clientID, false, &over)
+	}
 
 	// The flexible tags end the request header, and then begins the
 	// request body.
@@ -257,8 +268,11 @@ func (f *RequestFormatter) AppendRequest(
 
 	// Now the request body.
 	dst = r.AppendTo(dst)
+	if dst == nil || over || len(dst)-start-4 > math.MaxInt32 {
+		return nil
+	}
 
-	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
+	kbin.AppendInt32(dst[start:start], int32(len(dst[start+4:])))
 	return dst
 }
 
@@ -269,7 +283,8 @@ func StringPtr(in string) *string {
 
 // ReadFrom provides decoding various versions of sticky member metadata. A key
 // point of this type is that it does not contain a version number inside it,
-// but it is versioned: if decoding v1 fails, this falls back to v0.
+// but it is versioned: v1 ends with a generation, which we read if any bytes
+// follow the assignments.
 func (s *StickyMemberMetadata) ReadFrom(src []byte) error {
 	return s.readFrom(src, false)
 }
@@ -285,6 +300,12 @@ func (s *StickyMemberMetadata) readFrom(src []byte, unsafe bool) error {
 	numAssignments := b.ArrayLen()
 	if numAssignments < 0 {
 		numAssignments = 0
+	}
+	// We allocate every element before reading any. An assignment is at
+	// least a topic length and a partition count, and a partition is four
+	// bytes.
+	if int64(numAssignments)*6 > int64(len(b.Src)) {
+		return kbin.ErrNotEnoughData
 	}
 	need := numAssignments - int32(cap(s.CurrentAssignment))
 	if need > 0 {
@@ -302,6 +323,9 @@ func (s *StickyMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		numPartitions := b.ArrayLen()
 		if numPartitions < 0 {
 			numPartitions = 0
+		}
+		if int64(numPartitions)*4 > int64(len(b.Src)) {
+			return kbin.ErrNotEnoughData
 		}
 		a := &s.CurrentAssignment[i]
 		a.Topic = topic
@@ -326,10 +350,11 @@ func (s *StickyMemberMetadata) readFrom(src []byte, unsafe bool) error {
 // AppendTo provides appending various versions of sticky member metadata to dst.
 // If generation is not -1 (default for v0), this appends as version 1.
 func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
-	dst = kbin.AppendArrayLen(dst, len(s.CurrentAssignment))
+	var over bool // see codec.go
+	dst = appendArrayLen(dst, len(s.CurrentAssignment), false, &over)
 	for _, assignment := range s.CurrentAssignment {
-		dst = kbin.AppendString(dst, assignment.Topic)
-		dst = kbin.AppendArrayLen(dst, len(assignment.Partitions))
+		dst = appendString(dst, assignment.Topic, false, &over)
+		dst = appendArrayLen(dst, len(assignment.Partitions), false, &over)
 		for _, partition := range assignment.Partitions {
 			dst = kbin.AppendInt32(dst, partition)
 		}
@@ -337,10 +362,13 @@ func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
 	if s.Generation != -1 {
 		dst = kbin.AppendInt32(dst, s.Generation)
 	}
+	if over {
+		return nil
+	}
 	return dst
 }
 
-// TagReader has is a type that has the ability to skip tags.
+// TagReader is a type that has the ability to skip tags.
 //
 // This is effectively a trimmed version of the kbin.Reader, with the purpose
 // being that kmsg cannot depend on an external package.
@@ -436,7 +464,9 @@ func (t *Tags) Each(fn func(uint32, []byte)) {
 // Set sets a tag's key and val.
 //
 // Note that serializing tags does NOT check if the set key overlaps with an
-// existing used key. It is invalid to set a key used by Kafka itself.
+// existing used key. It is invalid to set a key used by Kafka itself. A val
+// longer than math.MaxInt32 bytes is invalid as well: Kafka cannot read it,
+// and we do not check for it.
 func (t *Tags) Set(key uint32, val []byte) {
 	if t.keyvals == nil {
 		t.keyvals = make(map[uint32][]byte)
