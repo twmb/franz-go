@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -479,13 +480,33 @@ func (a Array) WriteDecode(l *LineWriter) {
 // reading any, and an element can take hundreds of bytes in memory.
 //
 // The fewest bytes can change with version; we check the size of the latest
-// versions, and the smallest size of every version before them. We do not
-// know here which versions are flexible, so a size is the smaller of the
-// flexible and non-flexible sizes.
+// versions, and the smallest size of every version before them. The fewest
+// bytes also differ between the two encodings: a compact length is one byte,
+// and a flexible struct ends with a tag count. A struct with flexible versions
+// checks the flexible sizes when isFlexible and the classic sizes otherwise.
 func (a Array) writeLenBound(l *LineWriter) {
-	size := func(v int) int {
-		return min(minSize(a.Inner, v, false), minSize(a.Inner, v, true))
+	conds := []string{"!b.Ok()"}
+	if !a.FromFlexible {
+		conds = append(conds, a.lenBounds(false)...)
+	} else if flex, classic := a.lenBounds(true), a.lenBounds(false); slices.Equal(flex, classic) {
+		conds = append(conds, flex...)
+	} else {
+		if len(flex) > 0 {
+			conds = append(conds, fmt.Sprintf("isFlexible && (%s)", strings.Join(flex, " || ")))
+		}
+		if len(classic) > 0 {
+			conds = append(conds, fmt.Sprintf("!isFlexible && (%s)", strings.Join(classic, " || ")))
+		}
 	}
+	l.Write("if %s {", strings.Join(conds, " || "))
+	l.Write("return kbin.ErrNotEnoughData")
+	l.Write("}")
+}
+
+// lenBounds returns the conditions under which l elements cannot fit in the
+// bytes left, for the flexible or the classic encoding.
+func (a Array) lenBounds(flexible bool) []string {
+	size := func(v int) int { return minSize(a.Inner, v, flexible) }
 	last := lastVersionChange(a.Inner)
 	latest := size(last)
 	since, least := last, latest
@@ -496,16 +517,14 @@ func (a Array) writeLenBound(l *LineWriter) {
 		}
 		least = min(least, n)
 	}
-	conds := []string{"!b.Ok()"}
+	var conds []string
 	if least > 1 {
 		conds = append(conds, fmt.Sprintf("int64(l)*%d > int64(len(b.Src))", least))
 	}
 	if latest > least {
 		conds = append(conds, fmt.Sprintf("version >= %d && int64(l)*%d > int64(len(b.Src))", since, latest))
 	}
-	l.Write("if %s {", strings.Join(conds, " || "))
-	l.Write("return kbin.ErrNotEnoughData")
-	l.Write("}")
+	return conds
 }
 
 // minSize returns the fewest bytes t can be encoded in at version, if the

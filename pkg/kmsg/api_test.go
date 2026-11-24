@@ -20,6 +20,12 @@ func TestReadCountPastInput(t *testing.T) {
 	fetch := kbin.AppendUvarint(make([]byte, 10), 1<<20+1)
 	fetch = append(fetch, make([]byte, 1<<20)...)
 
+	// FetchResponse v11, which is not flexible: throttle, error code, and
+	// session ID, then 2^20 topics in 3*2^20 bytes. We allow a flexible
+	// topic two bytes and a classic topic four.
+	fetchClassic := kbin.AppendInt32(make([]byte, 10), 1<<20)
+	fetchClassic = append(fetchClassic, make([]byte, 3<<20)...)
+
 	// A record with no key or value, then 2^20 headers in 2^20 bytes; a
 	// header is at least two bytes.
 	record := append([]byte{0, 0, 0, 0}, kbin.AppendVarint(kbin.AppendVarint(nil, -1), -1)...)
@@ -56,6 +62,11 @@ func TestReadCountPastInput(t *testing.T) {
 			r := NewPtrFetchResponse()
 			r.Version = 16
 			return r.ReadFrom(fetch) == nil
+		}},
+		{"array at a classic version", func() bool {
+			r := NewPtrFetchResponse()
+			r.Version = 11
+			return r.ReadFrom(fetchClassic) == nil
 		}},
 	} {
 		var before, after runtime.MemStats
