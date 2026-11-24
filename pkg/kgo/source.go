@@ -764,15 +764,22 @@ func (s *source) takeNBuffered(paused pausedTopics, n int, one *pollOne) (Fetch,
 		t := &bf.Topics[0]
 		tCursors := b.usedOffsets[t.Topic]
 
-		// If the topic is outright paused, we allowUsable all
-		// partitions in the topic and skip the topic entirely.
+		// If the topic is outright paused, we allowUsable the topic's
+		// partitions in this entry and skip the entry entirely. Kafka
+		// merges a topic's partitions into one entry only when they are
+		// adjacent in its response, so a later entry can hold more of
+		// the topic; their cursors stay until we reach that entry. Any
+		// cursor left when the fetch drains is released by takeBuffered.
 		if paused.has(t.Topic, -1) {
 			rstrip.Topics = append(rstrip.Topics, *t)
 			bf.Topics = bf.Topics[1:]
-			for _, pCursor := range tCursors {
-				pCursor.from.allowUsable()
+			for _, p := range t.Partitions {
+				tCursors[p.Partition].from.allowUsable()
+				delete(tCursors, p.Partition)
 			}
-			delete(b.usedOffsets, t.Topic)
+			if len(tCursors) == 0 {
+				delete(b.usedOffsets, t.Topic)
+			}
 			continue
 		}
 

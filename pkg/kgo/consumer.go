@@ -626,45 +626,49 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		c.sourcesReadyMu.Lock()
-		if maxPollRecords < 0 {
-			for _, ready := range c.sourcesReadyForDraining {
-				if f := ready.takeBuffered(paused); len(f.Topics) > 0 {
-					fetches = append(fetches, f)
+		// A panic below must not leave sourcesReadyMu locked: Close
+		// would block on it, and the panic would never print.
+		var realFetches Fetches
+		func() {
+			c.sourcesReadyMu.Lock()
+			defer c.sourcesReadyMu.Unlock()
+			if maxPollRecords < 0 {
+				for _, ready := range c.sourcesReadyForDraining {
+					if f := ready.takeBuffered(paused); len(f.Topics) > 0 {
+						fetches = append(fetches, f)
+					}
+				}
+				c.sourcesReadyForDraining = nil
+			} else {
+				var one *pollOne
+				if len(fetches) == 0 && len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
+					one = new(pollOne)
+				}
+				for len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
+					source := c.sourcesReadyForDraining[0]
+					fetch, taken, drained := source.takeNBuffered(paused, maxPollRecords, one)
+					if drained {
+						c.sourcesReadyForDraining = c.sourcesReadyForDraining[1:]
+					}
+					maxPollRecords -= taken
+					if len(fetch.Topics) == 0 {
+						continue // every partition was paused
+					}
+					if one != nil {
+						one.f[0] = fetch
+						fetches = one.f[:]
+						one = nil
+						continue
+					}
+					fetches = append(fetches, fetch)
 				}
 			}
-			c.sourcesReadyForDraining = nil
-		} else {
-			var one *pollOne
-			if len(fetches) == 0 && len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
-				one = new(pollOne)
-			}
-			for len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
-				source := c.sourcesReadyForDraining[0]
-				fetch, taken, drained := source.takeNBuffered(paused, maxPollRecords, one)
-				if drained {
-					c.sourcesReadyForDraining = c.sourcesReadyForDraining[1:]
-				}
-				maxPollRecords -= taken
-				if len(fetch.Topics) == 0 {
-					continue // every partition was paused
-				}
-				if one != nil {
-					one.f[0] = fetch
-					fetches = one.f[:]
-					one = nil
-					continue
-				}
-				fetches = append(fetches, fetch)
-			}
-		}
 
-		realFetches := fetches
+			realFetches = fetches
 
-		fetches = append(fetches, c.fakeReadyForDraining...)
-		c.fakeReadyForDraining = nil
-
-		c.sourcesReadyMu.Unlock()
+			fetches = append(fetches, c.fakeReadyForDraining...)
+			c.fakeReadyForDraining = nil
+		}()
 
 		if len(realFetches) == 0 {
 			return
