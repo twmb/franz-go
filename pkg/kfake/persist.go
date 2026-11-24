@@ -797,11 +797,16 @@ func (c *Cluster) forEachPartition(fn func(topic string, part int32, pd *partDat
 		mu.Unlock()
 	}
 
+	// Each job renames and syncs files, and a goroutine blocked in a
+	// syscall holds an OS thread: thousands of such goroutines can
+	// exhaust the process's threads.
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, 64)
 	for _, j := range jobs {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(j partJob) {
-			defer wg.Done()
+			defer func() { <-sem; wg.Done() }()
 			if err := fn(j.topic, j.part, j.pd); err != nil {
 				setErr(fmt.Errorf("partition %s-%d: %w", j.topic, j.part, err))
 			}
