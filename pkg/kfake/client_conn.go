@@ -250,7 +250,12 @@ func (cc *clientConn) write() {
 		if resp.kresp.IsFlexible() && resp.kresp.Key() != 18 {
 			buf = append(buf, 0) // empty tagged fields section
 		}
-		buf = resp.kresp.AppendTo(buf)
+		// kmsg refuses a string, bytes, or array too long for its length
+		// prefix, which a response can have if a request did.
+		if buf = resp.kresp.AppendTo(buf); buf == nil {
+			cc.c.cfg.logger.Logf(LogLevelInfo, "client %s response has a field too long to encode, closing the connection", who)
+			return
+		}
 
 		binary.BigEndian.PutUint32(buf[:4], uint32(len(buf)-4))
 		binary.BigEndian.PutUint32(buf[4:8], uint32(resp.corr))
