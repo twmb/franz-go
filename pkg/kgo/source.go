@@ -2042,38 +2042,37 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	// NumRecords is decoded straight off the wire and is therefore
 	// attacker/bug controlled. A negative count would panic the slice
 	// sizing below (ensureLen does s[:n], which panics for n<0); reject it
-	// as a corrupt batch, matching the Java client's InvalidRecordException
-	// guard (DefaultRecordBatch: "Found invalid record count"). A count
-	// larger than the available record bytes is likewise impossible for a
-	// well-formed batch - every record needs at least one byte - so clamp
-	// the up-front allocation to the byte count to keep a bogus huge count
-	// from driving a massive allocation. The true decodable count is
-	// recomputed by readRawRecordsDirect, and the truncation defer below
-	// leaves the offset unadvanced whenever it disagrees with numRecords.
+	// as a corrupt batch, as Kafka's client does. A count larger than the
+	// available record bytes is likewise impossible for a well-formed
+	// batch, so alloc below bounds the up-front allocation, to keep a
+	// bogus huge count from driving a massive allocation. The true
+	// decodable count is recomputed by readRawRecordsDirect, and the
+	// truncation defer below leaves the offset unadvanced whenever it
+	// disagrees with numRecords.
 	if numRecords < 0 {
 		fp.Err = fmt.Errorf("invalid record batch: negative record count %d", numRecords)
 		return 0, 0
 	}
-	if numRecords > len(rawRecords) {
-		// A batch claiming records with ZERO record bytes deserves a
-		// special word: the clamp below would make it decode zero
-		// records "successfully", and the KAFKA-5443 defer would then
-		// advance the offset past the batch's whole claimed range -- a
-		// silent skip of offsets the broker asserts hold records. The
-		// legitimate compacted-empty batch (KAFKA-5443) claims ZERO
-		// records, so claiming more with no bytes is corruption; error
-		// loudly like the Java client's InvalidRecordException instead
-		// of silently skipping.
-		if len(rawRecords) == 0 {
-			fp.Err = fmt.Errorf("invalid record batch: %d claimed records with no record bytes", numRecords)
-			return 0, uncompressedBytes
-		}
-		numRecords = len(rawRecords)
+	// A batch claiming records with ZERO record bytes deserves a special
+	// word. The legitimate compacted-empty batch (KAFKA-5443) claims zero
+	// records, so claiming more with no bytes is corruption; error loudly,
+	// as Kafka's client does, rather than decode zero records and leave
+	// the offset unadvanced.
+	if numRecords > 0 && len(rawRecords) == 0 {
+		fp.Err = fmt.Errorf("invalid record batch: %d claimed records with no record bytes", numRecords)
+		return 0, uncompressedBytes
 	}
+
+	// We allocate for every claimed record before decoding any, so we
+	// allocate for no more records than the bytes can hold. A record is
+	// at least 7 bytes: its length, attributes, timestamp delta, offset
+	// delta, key length, value length, and header count. numRecords
+	// itself stays as is for the truncation check in the defer below.
+	alloc := min(numRecords, len(rawRecords)/7)
 
 	// Presize for the first batch; later batches grow the slice normally.
 	if cap(fp.Records) == 0 {
-		fp.Records = make([]*Record, 0, numRecords)
+		fp.Records = make([]*Record, 0, alloc)
 	}
 
 	var ndecoded int // set once we decode, below
@@ -2102,13 +2101,13 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	var rrecords []Record
 	pools(o.Pools).each(func(p Pool) bool {
 		if precs, ok := p.(PoolRecords); ok {
-			rrecords = precs.GetRecords(numRecords)
+			rrecords = precs.GetRecords(alloc)
 			usesPools = true
 			return true
 		}
 		return false
 	})
-	rrecords = ensureLen(rrecords, numRecords)
+	rrecords = ensureLen(rrecords, alloc)
 
 	var p *recordPools
 	var poolsCtx context.Context
@@ -2119,7 +2118,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	recordCtx := poolsCtx
 	var slabbed bool
 	if o.shareAckSlab != nil && len(rrecords) > 0 {
-		if slab := o.shareAckSlab(numRecords, &rrecords[0]); slab != nil {
+		if slab := o.shareAckSlab(alloc, &rrecords[0]); slab != nil {
 			slabbed = true
 			parent := poolsCtx
 			if parent == nil {
@@ -2205,6 +2204,12 @@ func readRawRecordsDirect(ctx context.Context, rs []Record, in []byte, topic str
 		value := b.VarintBytes()
 		var headers []RecordHeader
 		if nh := int(b.VarintArrayLen()); nh > 0 {
+			// As with records, we allocate every header before
+			// reading any, and a header is at least a key length
+			// and a value length.
+			if nh > len(b.Src)/2 {
+				break
+			}
 			headers = make([]RecordHeader, nh)
 			for i := range headers {
 				headers[i] = RecordHeader{Key: b.VarintString(), Value: b.VarintBytes()}
