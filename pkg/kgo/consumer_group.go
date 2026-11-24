@@ -1992,7 +1992,6 @@ start:
 		reqg.MemberEpoch = gen
 	}
 	groupTopics := g.tps.load()
-	pinV9 := false
 	for topic, partitions := range added {
 		// Skip partitions we have already surfaced a non-retryable error
 		// for and dropped (injected, below). On the first pass injected is
@@ -2016,22 +2015,10 @@ start:
 		if td := groupTopics.loadTopic(topic); td != nil {
 			reqTopic.TopicID = td.id
 		}
-		if reqTopic.TopicID == noID {
-			pinV9 = true
-		}
 		reqTopic.Partitions = partitions
 		reqg.Topics = append(reqg.Topics, reqTopic)
 	}
 	req.Groups = append(req.Groups, reqg)
-
-	// OffsetFetch v10 switched Topic to TopicID. If we have no TopicID
-	// for some topic (e.g. broker caps Metadata below v10, like Azure
-	// Event Hubs), v10+ would put a zero TopicID on the wire. Pin to
-	// v9 so the broker continues to match by name. See #1312.
-	reqCtx := ctx
-	if pinV9 {
-		reqCtx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 9})
-	}
 
 	var resp *kmsg.OffsetFetchResponse
 	var err error
@@ -2041,7 +2028,7 @@ start:
 		"require_stable", req.RequireStable,
 		"num_topics", len(reqg.Topics),
 	)
-	resp, err = req.RequestWith(reqCtx, g.cl)
+	resp, err = req.RequestWith(ctx, g.cl)
 	if ctx.Err() != nil {
 		g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed due to context cancelation", "group", g.cfg.group)
 		return ctx.Err()
@@ -3832,33 +3819,6 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		// OffsetCommit v10 switched Topic to TopicID. If we have no
-		// TopicID for some topic (e.g. broker caps Metadata below v10,
-		// like Azure Event Hubs), v10+ would put a zero TopicID on the
-		// wire. Pin to v9 so the broker continues to match by name.
-		// See #1312. Held in a separate variable from commitCtx so
-		// the cancel/retry-sleep paths keep using the unwrapped ctx.
-		//
-		// This is computed after the PreCommitFnContext fn ran, since
-		// the fn may add topics with or without ids, and not
-		// recomputed inside the STALE_MEMBER_EPOCH retry loop below
-		// because that loop only DROPS partitions from req.Topics; it
-		// never re-adds topics whose TopicID state could change the
-		// pin. If a future change allows re-adding topics on retry,
-		// recompute the pin (and rebuild reqCtx) inside the loop so a
-		// topic-id-less topic never lands on a v10+ wire by accident.
-		reqCtx := commitCtx
-		var pinV9 bool
-		for _, t := range req.Topics {
-			if t.TopicID == noID {
-				pinV9 = true
-				break
-			}
-		}
-		if pinV9 {
-			reqCtx = context.WithValue(commitCtx, ctxPinReq, &pinReq{pinMax: true, max: 9})
-		}
-
 		var resp *kmsg.OffsetCommitResponse
 		var err error
 		// KIP-848 STALE_MEMBER_EPOCH is expected under rebalance
@@ -3897,7 +3857,7 @@ func (g *groupConsumer) commit(
 				break
 			}
 			start := time.Now()
-			resp, err = req.RequestWith(reqCtx, g.cl)
+			resp, err = req.RequestWith(commitCtx, g.cl)
 			if err != nil {
 				req.Topics = append(origReqTopics, refused...)
 				onDone(g.cl, req, nil, err)
@@ -4017,8 +3977,8 @@ func (g *groupConsumer) commit(
 				// v10+ responses carry only the TopicID (Topic is
 				// v0-v9 on the wire, so kept topics arrive with an
 				// empty name); v9 and below carry only the name (and
-				// pinV9 above guarantees an id-less topic never goes
-				// out v10+, so a zero d.id implies a v9 response).
+				// broker.byNameMax guarantees an id-less topic never
+				// goes out v10+, so a zero d.id implies a v9 response).
 				// Match whichever side the wire carried; requiring
 				// both duplicated the topic on v10 and the length
 				// mismatch then made updateCommitted skip the whole

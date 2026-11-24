@@ -104,7 +104,7 @@ type Client struct {
 		mu     xsync.Mutex
 		topics map[string]cachedMetaTopic
 		byID   map[[16]byte]string // TopicID => topic name
-		allAt  time.Time           // when last all-topics fetch completed
+		allAt  time.Time           // when the last all-topics fetch completed; zero makes the next all-topics request refetch
 	}
 }
 
@@ -983,21 +983,7 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 // v1 introduces support for regex and requires the client to generate
 // the member ID, and fully stabilizes KIP-848.
 func (cl *Client) supportsKIP848v1() bool {
-	if !cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1) {
-		return false
-	}
-	// The 848 manage loop runs v1 semantics (client-generated member ID,
-	// regex subscriptions). If the user's MaxVersions caps the heartbeat
-	// below v1, the wire request would be v0 while we behave as v1: v0
-	// has no SubscribedTopicRegex field at all, so a regex consumer's
-	// join would carry no subscription and silently consume nothing.
-	// Only opt in if the cap allows v1, mirroring supportsKIP890p2.
-	if mv := cl.cfg.maxVersions; mv != nil {
-		if v, ok := mv.LookupMaxKeyVersion(int16(kmsg.ConsumerGroupHeartbeat)); !ok || v < 1 {
-			return false
-		}
-	}
-	return true
+	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
 }
 
 // Called after the first metric observed, which is always after a response.
@@ -1006,9 +992,18 @@ func (cl *Client) supportsClientMetrics() bool {
 		cl.supportsKeyVersion(int16(kmsg.PushTelemetry), 0)
 }
 
-// A broker may not support some requests we want to make. This function checks
-// support. This should only be used *after* at least one successful response.
+// A broker, or the user's MaxVersions, may not support some requests we want
+// to make. This function checks support. A request that MaxVersions caps
+// below version would go out at a lower version than we act on, or, if
+// MaxVersions lacks the key, fail before it is sent. This should only be used
+// *after* at least one successful response.
 func (cl *Client) supportsKeyVersion(key, version int16) bool {
+	if mv := cl.cfg.maxVersions; mv != nil {
+		if v, ok := mv.LookupMaxKeyVersion(key); !ok || v < version {
+			return false
+		}
+	}
+
 	cl.brokersMu.RLock()
 	defer cl.brokersMu.RUnlock()
 
@@ -2435,18 +2430,6 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		return cl.controller(ctx)
 	})
 
-	// The only request that can break cached metadata is CreatePartitions,
-	// because our mapping will still be "valid" but behind the scenes,
-	// more partitions exist. If CreatePartitions is going through this
-	// client, we preemptively delete any mapping for these topics.
-	if t, ok := req.(*kmsg.CreatePartitionsRequest); ok {
-		var topics []string
-		for i := range t.Topics {
-			topics = append(topics, t.Topics[i].Topic)
-		}
-		cl.maybeDeleteCachedMeta(false, topics...)
-	}
-
 	d := failDial{clearFn: func() {
 		cl.forgetControllerID(r.last.meta.NodeID)
 		cl.deleteStaleCoordinatorsByNode(r.last.meta.NodeID)
@@ -2506,6 +2489,58 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 	}
 
 	resp, err := r.Request(ctx, req)
+
+	// CreateTopics, CreatePartitions, and DeleteTopics break cached
+	// metadata: a cached all-topics response is missing a created topic, a
+	// topic requested before we created it remains cached as missing, a
+	// topic's cached mapping misses its new partitions, and a deleted topic
+	// remains cached. We update the cache after the request, so that a fetch
+	// that finishes while the request runs does not leave the old state
+	// cached. We update the cache even if the request failed, because the
+	// broker may have applied the request. We drop each topic the request
+	// names, and expire the cached all-topics response, which loses the
+	// dropped topics.
+	var (
+		topics []string
+		ids    [][16]byte
+	)
+	switch t := req.(type) {
+	case *kmsg.CreateTopicsRequest:
+		for i := range t.Topics {
+			topics = append(topics, t.Topics[i].Topic)
+		}
+	case *kmsg.CreatePartitionsRequest:
+		for i := range t.Topics {
+			topics = append(topics, t.Topics[i].Topic)
+		}
+	case *kmsg.DeleteTopicsRequest:
+		topics = append(topics, t.TopicNames...)
+		for _, dt := range t.Topics {
+			if dt.Topic != nil {
+				topics = append(topics, *dt.Topic)
+			} else {
+				ids = append(ids, dt.TopicID)
+			}
+		}
+	default:
+		return shard(r.last, req, resp, err)
+	}
+
+	cl.metaCache.mu.Lock()
+	cl.metaCache.allAt = time.Time{}
+	for _, id := range ids {
+		if topic, ok := cl.metaCache.byID[id]; ok {
+			topics = append(topics, topic)
+		}
+	}
+	for _, topic := range topics {
+		if ct, ok := cl.metaCache.topics[topic]; ok {
+			delete(cl.metaCache.topics, topic)
+			delete(cl.metaCache.byID, ct.id)
+		}
+	}
+	cl.metaCache.mu.Unlock()
+
 	return shard(r.last, req, resp, err)
 }
 
@@ -2978,12 +3013,12 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 			var (
 				myIssue     = issues[i]
 				isPinned    bool
-				ctx         = ctx         // loop local context, in case we override by pinning
-				avoidBroker = avoidBroker // same
+				reqCtx      = ctx         // loop local context for the shard's own request, in case we pin
+				avoidBroker = avoidBroker // loop local
 				tries       = try.tries   // same
 			)
 			if isPinned = myIssue.pin != nil; isPinned {
-				ctx = context.WithValue(ctx, ctxPinReq, myIssue.pin)
+				reqCtx = context.WithValue(ctx, ctxPinReq, myIssue.pin)
 			}
 
 			if myIssue.err != nil {
@@ -3016,7 +3051,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 					return
 				}
 
-				resp, err := br.waitResp(ctx, myIssue.req)
+				resp, err := br.waitResp(reqCtx, myIssue.req)
 				var errIsFromResp bool
 				if err == nil {
 					err = sharder.onResp(ctx, myIssue.req, resp) // perform some potential cleanup, and potentially receive an error to retry
@@ -3243,14 +3278,19 @@ func (cl *Client) resolveTopicMeta(ctx context.Context, topics []string, useCach
 		cl.brokersMu.RUnlock()
 	}
 
-	// All-topics: return a copy of the cache if fresh.
+	// All-topics: return a copy of the cache if fresh. We skip topics cached
+	// with an error: a request by name for a missing or unauthorized topic
+	// caches the topic with its error, and Kafka's all-topics response lists
+	// neither.
 	if all && useCache {
 		var cached map[string]cachedMetaTopic
 		cl.metaCache.mu.Lock()
 		if cl.metaCache.topics != nil && time.Since(cl.metaCache.allAt) < limit {
 			cached = make(map[string]cachedMetaTopic, len(cl.metaCache.topics))
 			for k, v := range cl.metaCache.topics {
-				cached[k] = v
+				if v.t.ErrorCode == 0 {
+					cached[k] = v
+				}
 			}
 		}
 		cl.metaCache.mu.Unlock()
@@ -3298,14 +3338,14 @@ func leaderGone(cached map[string]cachedMetaTopic, brokers map[int32]bool) bool 
 }
 
 // storeCachedMeta caches the fetched metadata in the Client, and
-// optionally stores each topic in results. If the request was for all
-// topics, stale entries not in the response are evicted.
+// optionally stores each topic in results.
 //
-// If prune is true, we also evict entries older than MetadataMinAge that the
+// If prune is true, we evict entries older than MetadataMinAge that the
 // response does not contain. Only requests that say something about what we
 // want cached prune: the metadata loop, a user's own metadata request, and
-// RequestCachedMetadata. Internal targeted fetches say nothing about the
-// topics they did not ask for, so loading brokers, resolving topic IDs,
+// resolveTopicMeta, which RequestCachedMetadata and the sharded requests use.
+// Internal targeted fetches say nothing about the topics they did not ask
+// for, so loading brokers, looking up topics with resolveTopicMetaByID,
 // creating unknown produce topics, and loading the group's topics to balance
 // all leave the rest of the cache alone.
 //
@@ -3659,6 +3699,8 @@ func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequest
 	return g
 }
 
+// The request is valid at every version: v0-v7 send Group, and v8+ send
+// Groups.
 func offsetFetchGroupToReq(requireStable bool, group kmsg.OffsetFetchRequestGroup) *kmsg.OffsetFetchRequest {
 	req := kmsg.NewPtrOffsetFetchRequest()
 	req.RequireStable = requireStable
@@ -3669,6 +3711,7 @@ func offsetFetchGroupToReq(requireStable bool, group kmsg.OffsetFetchRequestGrou
 		reqTopic.Partitions = topic.Partitions
 		req.Topics = append(req.Topics, reqTopic)
 	}
+	req.Groups = []kmsg.OffsetFetchRequestGroup{group}
 	return req
 }
 
@@ -3755,11 +3798,12 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 			}
 		}
 	}
+	ids := cl.supportsKeyVersion(int16(kmsg.Metadata), 10) // topic IDs need Metadata v10
 	if len(unresolvedIDs) > 0 {
 		cl.resolveTopicMetaByID(ctx, unresolvedIDs)
 	}
 	var nameMeta map[string]cachedMetaTopic
-	if len(unresolvedNames) > 0 {
+	if len(unresolvedNames) > 0 && ids {
 		nameMeta, _ = cl.resolveTopicMeta(ctx, unresolvedNames, true, 0)
 	}
 	if resolving {
@@ -3858,7 +3902,6 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 			}
 		} else if len(req.Groups) <= 1 {
 			single := offsetFetchGroupToReq(req.RequireStable, req.Groups[0])
-			single.Groups = req.Groups
 			issues = append(issues, issueShard{
 				req:    single,
 				broker: id,
@@ -3891,17 +3934,25 @@ func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kre
 	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
+	// A v0-v7 response has no groups, so we move the top level into Groups
+	// for v8+ forward compat. We move before resolving below, so that the
+	// moved topics are resolved as well.
+	moved := len(resp.Groups) == 0
+	if moved {
+		resp.Groups = append(resp.Groups, offsetFetchRespToGroup(req, resp))
+	}
+
 	// All-topics fetches could leave topics nil, in which case we do not
 	// bi-directionally resolve the name in shard, so we handle it here.
 	//
-	// We always run the resolution from cache (it lets clients use the
-	// "by ID" APIs against v9 brokers via name -> ID fallback). What we
-	// gate on resp.Version >= 10 is the safety-net error injection:
-	// below v10, TopicID is structurally absent from the wire, so a
-	// zero TopicID after cache lookup is expected, not an error. At v10+
-	// the broker should have sent the missing side; failing to resolve
-	// is a real surprise. See #1312 for the EH case where a v8/v9 OffsetFetch
-	// against a sub-v10 Metadata broker would synthesize a bogus
+	// We resolve names to IDs whenever the cluster has topic IDs, which lets
+	// clients use the "by ID" APIs against brokers before OffsetFetch v10.
+	// What we gate on resp.Version >= 10 is the safety-net error injection:
+	// below v10, TopicID is structurally absent from the wire, so a zero
+	// TopicID after cache lookup is expected, not an error. At v10+ the
+	// broker should have sent the missing side; failing to resolve is a real
+	// surprise. See #1312 for the EH case where a v8/v9 OffsetFetch against
+	// a sub-v10 Metadata broker would synthesize a bogus
 	// UNKNOWN_TOPIC_OR_PARTITION on every partition.
 	var unresolvedIDs [][16]byte
 	var unresolvedNames []string
@@ -3917,11 +3968,12 @@ func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kre
 		}
 	}
 
-	// If anything is unresolved, resolve both, then do the walk again.
+	// If anything is unresolved, we resolve what we can, then do the walk
+	// again.
 	if len(unresolvedIDs) > 0 {
 		cl.resolveTopicMetaByID(ctx, unresolvedIDs)
 	}
-	if len(unresolvedNames) > 0 {
+	if len(unresolvedNames) > 0 && cl.supportsKeyVersion(int16(kmsg.Metadata), 10) { // topic IDs need Metadata v10
 		cl.resolveTopicMeta(ctx, unresolvedNames, false, 0)
 	}
 	if len(unresolvedIDs) > 0 || len(unresolvedNames) > 0 {
@@ -3966,15 +4018,9 @@ func (cl *offsetFetchSharder) onResp(ctx context.Context, kreq kmsg.Request, kre
 		cl.metaCache.mu.Unlock()
 	}
 
-	switch len(resp.Groups) {
-	case 0:
-		// Requested no groups: move top level into batch for v0-v7 to
-		// v8 forward compat.
-		resp.Groups = append(resp.Groups, offsetFetchRespToGroup(req, resp))
-	case 1:
-		// Requested 1 group v8+: set top level for v0-v7 back-compat.
+	// Requested 1 group v8+: set top level for v0-v7 back-compat.
+	if !moved && len(resp.Groups) == 1 {
 		offsetFetchRespGroupIntoResp(resp.Groups[0], resp)
-	default:
 	}
 
 	var retErr error
@@ -4074,6 +4120,7 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 		sreq := kmsg.NewPtrFindCoordinatorRequest()
 		sreq.CoordinatorType = req.CoordinatorType
 		sreq.CoordinatorKey = key
+		sreq.CoordinatorKeys = []string{key} // not sent below v4, but a caller reads a failed shard's keys from it
 		issues = append(issues, issueShard{
 			req: sreq,
 			pin: &pinReq{pinMax: true, max: 3},
