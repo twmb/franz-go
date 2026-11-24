@@ -65,7 +65,7 @@ func (r AlterReplicaLogDirsReq) dirfor(t string, p int32) string {
 // partition directories.
 type AlterAllReplicaLogDirsResponses map[int32]AlterReplicaLogDirsResponses
 
-// Sorted returns the responses sorted by broker, topic, and partition.
+// Sorted returns the responses sorted by broker, dir, topic, and partition.
 func (rs AlterAllReplicaLogDirsResponses) Sorted() []AlterReplicaLogDirsResponse {
 	var all []AlterReplicaLogDirsResponse
 	rs.Each(func(r AlterReplicaLogDirsResponse) {
@@ -86,7 +86,7 @@ func (rs AlterAllReplicaLogDirsResponses) Each(fn func(AlterReplicaLogDirsRespon
 // directories for a single broker.
 type AlterReplicaLogDirsResponses map[string]map[int32]AlterReplicaLogDirsResponse
 
-// Sorted returns the responses sorted by topic and partition.
+// Sorted returns the responses sorted by dir, topic, and partition.
 func (rs AlterReplicaLogDirsResponses) Sorted() []AlterReplicaLogDirsResponse {
 	var all []AlterReplicaLogDirsResponse
 	rs.Each(func(r AlterReplicaLogDirsResponse) {
@@ -105,8 +105,8 @@ func (rs AlterReplicaLogDirsResponses) Each(fn func(AlterReplicaLogDirsResponse)
 	}
 }
 
-// AlterReplicaLogDirsResponse contains a the response for an individual
-// altered partition directory.
+// AlterReplicaLogDirsResponse contains the response for an individual altered
+// partition directory.
 type AlterReplicaLogDirsResponse struct {
 	Broker    int32  // Broker is the broker this response came from.
 	Dir       string // Dir is the directory this partition was requested to be moved to.
@@ -347,8 +347,8 @@ func (ds DescribedLogDirs) SortedPartitionsBySize() []DescribedLogDirPartition {
 	return all
 }
 
-// SmallestPartitionBySize returns the smallest partition by directory size, or
-// no partition if there are no partitions.
+// SmallestPartitionBySize returns the smallest partition by size, or no
+// partition if there are no partitions.
 func (ds DescribedLogDirs) SmallestPartitionBySize() (DescribedLogDirPartition, bool) {
 	sorted := ds.SortedPartitionsBySize()
 	if len(sorted) == 0 {
@@ -357,8 +357,8 @@ func (ds DescribedLogDirs) SmallestPartitionBySize() (DescribedLogDirPartition, 
 	return sorted[0], true
 }
 
-// LargestPartitionBySize returns the largest partition by directory size, or
-// no partition if there are no partitions.
+// LargestPartitionBySize returns the largest partition by size, or no
+// partition if there are no partitions.
 func (ds DescribedLogDirs) LargestPartitionBySize() (DescribedLogDirPartition, bool) {
 	sorted := ds.SortedPartitionsBySize()
 	if len(sorted) == 0 {
@@ -460,8 +460,8 @@ func (ds DescribedLogDirTopics) Each(fn func(p DescribedLogDirPartition)) {
 	}
 }
 
-// DescribedLogDirPartition is the information for a single partitions described
-// log directory.
+// DescribedLogDirPartition is the information for a single partition's
+// described log directory.
 type DescribedLogDirPartition struct {
 	Broker    int32  // Broker is the broker this partition is on.
 	Dir       string // Dir is the directory this partition lives in.
@@ -475,9 +475,10 @@ type DescribedLogDirPartition struct {
 	//     if IsFuture {
 	//         logEndOffset - futureLogEndOffset
 	//     } else {
-	//         max(highWaterMark - logEndOffset)
+	//         max(highWaterMark - logEndOffset, 0)
 	//     }
 	//
+	// OffsetLag is -1 if the replica does not exist or is offline.
 	OffsetLag int64
 	// IsFuture is true if this replica was created by an
 	// AlterReplicaLogDirsRequest and will replace the current log of the
@@ -485,8 +486,8 @@ type DescribedLogDirPartition struct {
 	IsFuture bool
 }
 
-// Less returns if one dir partition is less than the other, by dir, topic,
-// partition, and size.
+// Less returns if one dir partition is less than the other, by broker, dir,
+// topic, partition, and size.
 func (p DescribedLogDirPartition) Less(other DescribedLogDirPartition) bool {
 	if p.Broker < other.Broker {
 		return true
