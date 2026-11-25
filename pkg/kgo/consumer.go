@@ -959,9 +959,15 @@ func (c *consumer) purgeTopics(topics []string) {
 // topic has been previously purged. That is, if you directly consumed only one
 // of five partitions originally, this will not add the other four until the
 // entire topic is purged.
+//
+// A topic name that is empty or longer than 249 bytes is skipped and logged:
+// no topic can have such a name.
 func (cl *Client) AddConsumeTopics(topics ...string) {
 	c := &cl.consumer
 	if len(topics) == 0 || !c.consuming() || cl.cfg.regex {
+		return
+	}
+	if topics = slices.DeleteFunc(slices.Clone(topics), cl.invalidConsumeTopic); len(topics) == 0 {
 		return
 	}
 
@@ -981,6 +987,17 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 		}
 	}
 	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
+}
+
+// Reports, and logs, a name that validate refuses in ConsumeTopics: an empty
+// name spins on UNKNOWN_TOPIC metadata forever, and a name long enough makes
+// our metadata request too long to encode.
+func (cl *Client) invalidConsumeTopic(topic string) bool {
+	if topic != "" && len(topic) <= maxTopicLen {
+		return false
+	}
+	cl.cfg.logger.Log(LogLevelWarn, "skipping a topic name that is empty or too long to consume", "len", len(topic))
+	return true
 }
 
 // GetConsumeTopics retrieves a list of current topics being consumed.
@@ -1010,6 +1027,9 @@ func (cl *Client) GetConsumeTopics() []string {
 
 // AddConsumePartitions adds new partitions to be consumed at the given
 // offsets. This function works only for direct, non-regex consumers.
+//
+// A topic name that is empty or longer than 249 bytes is deleted from the
+// partitions map and logged: no topic can have such a name.
 func (cl *Client) AddConsumePartitions(partitions map[string]map[int32]Offset) {
 	c := &cl.consumer
 	if c.d == nil || cl.cfg.regex {
@@ -1017,7 +1037,7 @@ func (cl *Client) AddConsumePartitions(partitions map[string]map[int32]Offset) {
 	}
 	var topics []string
 	for t, ps := range partitions {
-		if len(ps) == 0 {
+		if len(ps) == 0 || cl.invalidConsumeTopic(t) {
 			delete(partitions, t)
 			continue
 		}
