@@ -2312,7 +2312,7 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		batchWireLength += uvarlen(len(partitions)+1) - uvarlen(len(partitions))
 	}
 
-	if p.wireLength+batchWireLength > p.wireLengthLimit {
+	if int64(p.wireLength)+int64(batchWireLength) > int64(p.wireLengthLimit) {
 		return false
 	}
 
@@ -2558,8 +2558,12 @@ func (b *recBatch) recordNumbersAt(r *Record, offsetDelta int32) recordNumbers {
 			len(h.Value)
 	}
 
+	// produce bounds the bytes of a record's key, value, and headers, but
+	// not the length bytes of each header. Past 1GiB, the largest request
+	// we can write, we stop at 1GiB rather than wrap the int32, and
+	// tryBuffer refuses the record for its size.
 	return recordNumbers{
-		lengthField: int32(l),
+		lengthField: int32(min(l, 1<<30)),
 		tsDelta:     tsDelta,
 	}
 }
@@ -2620,9 +2624,15 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 	nums := b.calculateRecordNumbers(pr.Record)
 
 	batchWireLength := b.wireLengthForProduceVersion(produceVersion)
-	newBatchLength := batchWireLength + nums.wireLength()
+	newBatchLength := int64(batchWireLength) + int64(nums.wireLength())
 
-	if b.frozen || newBatchLength > maxBatchBytes {
+	// The message set form of a batch can be larger than the record batch
+	// form, and its size is an int32 as well, so a batch with records
+	// takes no more once that size would pass 1GiB, the largest request
+	// we can write.
+	v1Length := int64(b.v1wireLength) + int64(messageSet1Length(pr.Record))
+
+	if b.frozen || newBatchLength > int64(maxBatchBytes) || len(b.records) > 0 && v1Length > 1<<30 {
 		return false, false
 	}
 	if abortOnNewBatch {
