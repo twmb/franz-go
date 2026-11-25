@@ -668,7 +668,8 @@ func (fs Fetches) RecordsAll() iter.Seq[*Record] {
 // EachPartition calls fn for each partition in Fetches.
 //
 // Partitions are not visited in any specific order, and a topic may be visited
-// multiple times if it is spread across fetches.
+// multiple times if it is spread across fetches or across the entries of one
+// fetch.
 func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
 	for _, fetch := range fs {
 		for _, topic := range fetch.Topics {
@@ -684,31 +685,42 @@ func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
 
 // EachTopic calls fn for each topic in Fetches.
 //
-// This is a convenience function that groups all partitions for the same topic
-// from many fetches into one FetchTopic. A map is internally allocated to
-// group partitions per topic before calling fn.
+// This is a convenience function that groups all partitions for the same
+// topic, across fetches and across the entries of one fetch, into one
+// FetchTopic. A map is internally allocated to group partitions per topic
+// before calling fn.
 func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 	switch len(fs) {
 	case 0:
 		return
 	case 1:
-		for _, topic := range fs[0].Topics {
-			fn(topic)
+		// A broker can split a topic across entries of one response,
+		// when the topic's partitions are not adjacent in the fetch
+		// session's order. Only a response with one entry needs no
+		// grouping.
+		if topics := fs[0].Topics; len(topics) <= 1 {
+			for _, topic := range topics {
+				fn(topic)
+			}
+			return
 		}
-		return
 	}
 
 	// A topic's partitions are led by different brokers, so the same topic
 	// is spread across multiple Fetch entries (one per broker response); we
 	// must carry the TopicID across them rather than zeroing it. The broker
-	// returns the same ID in every fetch response for the topic, so the
-	// first non-zero copy is authoritative. Without this, EachTopic returns
-	// a zero TopicID whenever more than one broker replied -- i.e. nearly
+	// returns the same ID in every fetch response for the topic, so any
+	// non-zero copy is authoritative. Without this, EachTopic returns a
+	// zero TopicID whenever more than one broker replied -- i.e. nearly
 	// always in a real cluster, yet never in a single-broker test.
 	topics := make(map[string][]FetchPartition)
 	ids := make(map[string][16]byte)
+	var order []string // we call fn in the order topics first appear
 	for _, fetch := range fs {
 		for _, topic := range fetch.Topics {
+			if _, seen := topics[topic.Topic]; !seen {
+				order = append(order, topic.Topic)
+			}
 			topics[topic.Topic] = append(topics[topic.Topic], topic.Partitions...)
 			if topic.TopicID != noID {
 				ids[topic.Topic] = topic.TopicID
@@ -716,11 +728,11 @@ func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 		}
 	}
 
-	for topic, partitions := range topics {
+	for _, topic := range order {
 		fn(FetchTopic{
 			topic,
 			ids[topic],
-			partitions,
+			topics[topic],
 		})
 	}
 }

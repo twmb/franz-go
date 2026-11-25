@@ -2,15 +2,17 @@ package kgo
 
 import (
 	"context"
+	"fmt"
 	"math/rand/v2"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// TestEachTopicPreservesTopicID verifies that Fetches.EachTopic carries
-// FetchTopic.TopicID through its grouping.
+// TestEachTopic verifies that Fetches.EachTopic groups a topic's partitions
+// and carries FetchTopic.TopicID through its grouping.
 //
 // A topic's partitions are led by different brokers, so the same topic is
 // returned in separate Fetch entries (one per broker response). EachTopic
@@ -20,7 +22,7 @@ import (
 // broker replied -- nearly always in a real cluster, yet never in a
 // single-broker test (which hits the len(fs) == 1 path that preserves the
 // ID). The grouped TopicID must match the per-fetch TopicID.
-func TestEachTopicPreservesTopicID(t *testing.T) {
+func TestEachTopic(t *testing.T) {
 	t.Parallel()
 
 	fooID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
@@ -74,6 +76,24 @@ func TestEachTopicPreservesTopicID(t *testing.T) {
 		ids, _ := collect(fs)
 		if ids["foo"] != fooID {
 			t.Errorf("foo TopicID: got %v, want %v", ids["foo"], fooID)
+		}
+	})
+
+	t.Run("one topic in two entries of a single fetch", func(t *testing.T) {
+		t.Parallel()
+		// A broker splits a topic across entries when the topic's
+		// partitions are not adjacent in the fetch session's order. fn
+		// is called in the order topics first appear, which is the
+		// order a single fetch had before its entries were grouped.
+		fs := Fetches{{Topics: []FetchTopic{
+			{Topic: "foo", TopicID: fooID, Partitions: []FetchPartition{{Partition: 0}}},
+			{Topic: "bar", TopicID: barID, Partitions: []FetchPartition{{Partition: 0}}},
+			{Topic: "foo", TopicID: fooID, Partitions: []FetchPartition{{Partition: 1}}},
+		}}}
+		var got []string
+		fs.EachTopic(func(ft FetchTopic) { got = append(got, fmt.Sprintf("%s:%d", ft.Topic, len(ft.Partitions))) })
+		if want := []string{"foo:2", "bar:1"}; !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
 		}
 	})
 
