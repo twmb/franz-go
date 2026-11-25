@@ -32,6 +32,7 @@ func TestProduceRequestCount(t *testing.T) {
 		topics     []string
 		partitions int32 // per topic
 		records    int   // per partition, each with a one byte value
+		header     int   // bytes of each record's one header, if any
 		limit      int32 // of a request; a batch's limit is half
 
 		built, moved int32 // the produce version of the sink the batches are built on, and moved to
@@ -55,6 +56,9 @@ func TestProduceRequestCount(t *testing.T) {
 		{name: "moved to an unknown version", topics: []string{"a"}, partitions: 1, records: 100, limit: 2048, built: 9, moved: -1, batches: 1},
 		{name: "moved to message sets", topics: []string{"a"}, partitions: 1, records: 100, limit: 2048, built: 9, moved: 2, batches: 1, refused: true},
 		{name: "built at an unknown version", topics: []string{"a"}, partitions: 1, records: 100, limit: 2048, built: -1, moved: -1, batches: 1},
+
+		// A message set has no headers, and a batch built for one fits the batch limit as a record batch as well.
+		{name: "headers below v3", topics: []string{"a"}, partitions: 1, records: 20, header: 500, limit: 2048, built: 2, moved: 13, batches: 1},
 	} {
 		// Uncompressed, a batch is written at its largest size.
 		cl, s, r0 := sinkHarness(t, append([]Opt{ProducerBatchCompression(NoCompression())}, tc.opts...)...)
@@ -70,16 +74,20 @@ func TestProduceRequestCount(t *testing.T) {
 				r.lingerFn = r.unlingerAndManuallyDrain
 				s.addRecBuf(r)
 				for range tc.records {
+					rec := &Record{Value: []byte("v"), Context: context.Background()}
+					if tc.header > 0 {
+						rec.Headers = []RecordHeader{{Key: "h", Value: make([]byte, tc.header)}}
+					}
 					r.bufferRecord(promisedRec{ctx: context.Background(), promise: func(_ *Record, err error) {
 						select {
 						case failed <- err:
 						default:
 						}
-					}, Record: &Record{Value: []byte("v"), Context: context.Background()}}, false)
+					}, Record: rec}, false)
 				}
 				for _, b := range r.batches {
-					if tc.built < 3 && b.v1wireLength > r.maxRecordBatchBytes {
-						t.Errorf("%s: a batch is %d bytes as a message set, over the limit of %d", tc.name, b.v1wireLength, r.maxRecordBatchBytes)
+					if b.wireLength > r.maxRecordBatchBytes || tc.built < 3 && b.v1wireLength > r.maxRecordBatchBytes {
+						t.Errorf("%s: a batch is %d bytes as a record batch and %d as a message set, over the limit of %d", tc.name, b.wireLength, b.v1wireLength, r.maxRecordBatchBytes)
 					}
 				}
 				s.removeRecBuf(r)

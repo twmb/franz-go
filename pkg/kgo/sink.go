@@ -2110,8 +2110,7 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 	return nil
 }
 
-func (b *recBatch) v0wireLength() int32 { return b.v1wireLength - 8 } // no timestamp
-func (b *recBatch) batchLength() int32  { return b.wireLength - 4 }   // no length prefix
+func (b *recBatch) batchLength() int32 { return b.wireLength - 4 } // no length prefix
 func (b *recBatch) flexibleWireLength() int32 { // uvarint length prefix
 	batchLength := b.batchLength()
 	return int32(kbin.UvarintLen(uvar32(batchLength))) + batchLength
@@ -2310,7 +2309,7 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 	// count the larger of the two.
 	batchWireLength := batch.wireLength
 	if produceVersion < 3 {
-		batchWireLength = batch.wireLengthForProduceVersion(-1)
+		batchWireLength = batch.wireLengthForProduceVersion(produceVersion)
 	}
 	batchWireLength += producePartitionOverhead
 	if partitions, exists := p.batches.bs[recBuf.topic]; !exists {
@@ -2604,6 +2603,10 @@ func (b *recBatch) wireLengthForProduceVersion(v int32) int32 {
 	// If we do not yet know the produce version, we default to the largest
 	// size. Our request building sizes will always be an overestimate.
 	//
+	// Below v3 we use the largest size as well. The batch is written as a
+	// message set, which has no headers, and the batch's partition can
+	// move to a broker that takes record batches, so we bound both forms.
+	//
 	// A merged batch is sized by its sealed blob. Its message set size is
 	// the uncompressed records, which can be far past the request limit,
 	// so counting it here would keep the batch out of every request until
@@ -2611,7 +2614,7 @@ func (b *recBatch) wireLengthForProduceVersion(v int32) int32 {
 	// turns out to speak message sets, Kafka below 0.11, then writes the
 	// records uncompressed against this size; createReq fails the batch
 	// once the version is known.)
-	if v < 0 {
+	if v < 3 {
 		v1BatchWireLength := b.v1wireLength
 		if b.stream == nil && v1BatchWireLength > batchWireLength {
 			batchWireLength = v1BatchWireLength
@@ -2622,10 +2625,6 @@ func (b *recBatch) wireLengthForProduceVersion(v int32) int32 {
 		}
 	} else {
 		switch v {
-		case 0, 1:
-			batchWireLength = b.v0wireLength()
-		case 2:
-			batchWireLength = b.v1wireLength
 		case 3, 4, 5, 6, 7, 8:
 			batchWireLength = b.wireLength
 		default:
