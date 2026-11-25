@@ -2239,10 +2239,9 @@ type produceRequest struct {
 
 	compressor Compressor
 
-	// wireLength is initially the size of sending a produce request,
-	// including the request header, with no topics. We start with the
-	// non-flexible size because it is strictly larger than flexible, but
-	// we use the proper flexible numbers when calculating.
+	// wireLength is our count of the request's bytes: initially the
+	// request header and the request with no topics, and then what
+	// tryAddBatch counts for each batch.
 	wireLength      int32
 	wireLengthLimit int32
 }
@@ -2275,35 +2274,43 @@ func (p produceMetrics) hook(cfg *cfg, br *broker) {
 
 func (p *produceRequest) idempotent() bool { return p.producerID >= 0 }
 
-func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch *recBatch) bool {
-	batchWireLength, flexible, topicIDs := batch.wireLengthForProduceVersion(produceVersion)
-	batchWireLength += 4 // int32 partition prefix
+// Returns the most bytes that a produce version from 3 through 13 writes
+// for a topic, its partitions aside.
+func produceTopicLength(topic string) int32 {
+	return max(
+		2+int32(len(topic))+4, // int16 length, topic, int32 partitions array length; v9 through v12 write two uvarints and tags, which are no larger
+		16+1+1,                // v13: topic ID, uvarint partitions array length, tags
+	)
+}
 
-	if flexible {
-		batchWireLength++ // the partition's empty tagged field section
+// The most bytes that a produce version writes for a partition, on top of
+// its batch's wire length.
+const producePartitionOverhead = 4 + // int32 partition
+	1 + // a flexible version's uvarint batch length can be 5 bytes, and the wire length counts an int32
+	1 // tags
+
+func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch *recBatch) bool {
+	// produceVersion is the version of the sink's first response, and we
+	// can write this request at another version: a request for a
+	// transaction, or with a topic that has no ID, is capped lower, and
+	// the broker's versions can change. We count the batch, its
+	// partition, and its topic at the largest size that any version from
+	// 3 through 13 writes them at, so that the request we write is never
+	// larger than what we count. If the sink's version is below 3 or
+	// unknown, the batch can also be written as a message set, and we
+	// count the larger of the two.
+	batchWireLength := batch.wireLength
+	if produceVersion < 3 {
+		batchWireLength = batch.wireLengthForProduceVersion(-1)
 	}
+	batchWireLength += producePartitionOverhead
 	if partitions, exists := p.batches.bs[recBuf.topic]; !exists {
-		if topicIDs {
-			batchWireLength += 16 + 1 + 1 // topic ID size, compact array len for 1 item, topic tagged fields (if we are using topic IDs, we are definitely flexible)
-		} else {
-			lt := int32(len(recBuf.topic))
-			if flexible {
-				batchWireLength += uvarlen(len(recBuf.topic)) + lt + 1 + 1 // compact string len, topic, compact array len for 1 item, topic tagged fields
-			} else {
-				batchWireLength += 2 + lt + 4 // string len, topic, partition array len
-			}
-		}
-	} else if flexible {
-		// If the topic exists and we are flexible, adding this
-		// partition may increase the length of our size prefix.
-		lastPartitionsLen := uvarlen(len(partitions))
-		newPartitionsLen := uvarlen(len(partitions) + 1)
-		batchWireLength += (newPartitionsLen - lastPartitionsLen)
+		batchWireLength += produceTopicLength(recBuf.topic)
+	} else {
+		// A flexible version writes the partitions array length as a
+		// uvarint, which can grow with this partition.
+		batchWireLength += uvarlen(len(partitions)+1) - uvarlen(len(partitions))
 	}
-	// If we are flexible but do not know it yet, adding partitions may
-	// increase our length prefix. Since we are pessimistically assuming
-	// non-flexible, we have 200mil partitions to add before we have to
-	// worry about hitting 5 bytes vs. the non-flexible 4. We do not worry.
 
 	if p.wireLength+batchWireLength > p.wireLengthLimit {
 		return false
@@ -2435,25 +2442,21 @@ func (bs recBatches) eachOwnerLocked(fn func(*recBatch)) {
 // COUNTING // - this section is all about counting how bytes lay out on the wire
 //////////////
 
-// Returns the non-flexible base produce request length (the request header and
-// the request itself with no topics).
-//
-// See the large comment on maxRecordBatchBytesForTopic for why we always use
-// non-flexible (in short: it is strictly larger).
+// Returns the base produce request length (the request header and the
+// request itself with no topics), with each field at its largest size in any
+// produce version.
 func (cl *Client) baseProduceRequestLength() int32 {
 	const messageRequestOverhead int32 = 4 + // int32 length prefix
 		2 + // int16 key
 		2 + // int16 version
 		4 + // int32 correlation ID
-		2 // int16 client ID len (always non flexible)
-		// The flexible header's empty tag section is not counted: the
-		// topics array length below is counted at its 4 byte non-flexible
-		// size and flexible writes 1, which covers it.
+		2 + // int16 client ID len (always non flexible)
+		1 // the flexible header's tagged fields
 
 	const produceRequestBaseOverhead int32 = 2 + // int16 transactional ID len (flexible or not, since we cap at 16382)
 		2 + // int16 acks
 		4 + // int32 timeout
-		4 + // int32 topics non-flexible array length
+		5 + // topics array length: an int32, or a flexible uvarint of up to 5 bytes
 		1 // request tagged fields, counted whether or not we end up flexible
 
 	baseLength := messageRequestOverhead + produceRequestBaseOverhead
@@ -2575,8 +2578,8 @@ func (n recordNumbers) wireLength() int32 {
 	return int32(kbin.VarintLen(n.lengthField)) + n.lengthField
 }
 
-func (b *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int32, flexible, topicIDs bool) {
-	batchWireLength = b.wireLength
+func (b *recBatch) wireLengthForProduceVersion(v int32) int32 {
+	batchWireLength := b.wireLength
 
 	// If we do not yet know the produce version, we default to the largest
 	// size. Our request building sizes will always be an overestimate.
@@ -2607,18 +2610,16 @@ func (b *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int32, 
 			batchWireLength = b.wireLength
 		default:
 			batchWireLength = b.flexibleWireLength()
-			flexible = true
-			topicIDs = v >= 13
 		}
 	}
 
-	return batchWireLength, flexible, topicIDs
+	return batchWireLength
 }
 
 func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32, abortOnNewBatch bool) (appended, aborted bool) {
 	nums := b.calculateRecordNumbers(pr.Record)
 
-	batchWireLength, _, _ := b.wireLengthForProduceVersion(produceVersion)
+	batchWireLength := b.wireLengthForProduceVersion(produceVersion)
 	newBatchLength := batchWireLength + nums.wireLength()
 
 	if b.frozen || newBatchLength > maxBatchBytes {

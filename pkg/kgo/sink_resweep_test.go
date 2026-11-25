@@ -2,8 +2,84 @@ package kgo
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
+
+// We do not know the version that a produce request is written at while we
+// build the request, so createReq counts each part at the largest size that
+// any version writes the part at. We build requests of many shapes and check
+// that no version writes more bytes than createReq counted.
+func TestProduceRequestCount(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("t", 249)
+	for _, tc := range []struct {
+		name       string
+		opts       []Opt
+		topics     []string
+		partitions int32 // per topic
+		records    int   // per partition, each with a one byte value
+		limit      int32 // of a request; a batch's limit is half
+
+		built, moved int32 // the produce version of the sink the batches are built on, and moved to
+		batches      int   // in the request
+	}{
+		{name: "short topics by ID", topics: []string{"a", "b"}, partitions: 3, records: 1, limit: 1 << 20, built: 13, moved: 13, batches: 6},
+		{name: "long topics counted for IDs", topics: []string{long, long[1:]}, partitions: 3, records: 1, limit: 1 << 20, built: 13, moved: 13, batches: 6},
+		{name: "long topics, flexible", topics: []string{long, long[1:]}, partitions: 3, records: 1, limit: 1 << 20, built: 9, moved: 9, batches: 6},
+		{name: "long topics, version unknown", topics: []string{long, long[1:]}, partitions: 3, records: 1, limit: 1 << 20, built: -1, moved: -1, batches: 6},
+		{name: "message sets", topics: []string{long, "b"}, partitions: 3, records: 1, limit: 1 << 20, built: 2, moved: 2, batches: 6},
+		{name: "130 partitions", topics: []string{"a"}, partitions: 130, records: 1, limit: 1 << 20, built: 13, moved: 13, batches: 130},
+		{name: "130 partitions, non-flexible", topics: []string{"a"}, partitions: 130, records: 1, limit: 1 << 20, built: 3, moved: 3, batches: 130},
+		{
+			name: "long client and transactional IDs", opts: []Opt{ClientID(long), TransactionalID(long)},
+			topics: []string{"a", long}, partitions: 2, records: 1, limit: 1 << 20, built: 9, moved: 9, batches: 4,
+		},
+		{name: "full request", topics: []string{"a", long}, partitions: 20, records: 1, limit: 2048, built: 13, moved: 13, batches: 22},
+	} {
+		// Uncompressed, a batch is written at its largest size.
+		cl, s, r0 := sinkHarness(t, append([]Opt{ProducerBatchCompression(NoCompression())}, tc.opts...)...)
+		cl.cfg.maxBrokerWriteBytes = tc.limit
+		s.removeRecBuf(r0)
+		s.produceVersion.Store(tc.built)
+		fresh := cl.newSink(2)
+		fresh.produceVersion.Store(tc.moved)
+		for _, topic := range tc.topics {
+			for partition := range tc.partitions {
+				r := &recBuf{cl: cl, topic: topic, topicID: [16]byte{1}, partition: partition, maxRecordBatchBytes: tc.limit / 2, recBufsIdx: -1, lastAckedOffset: -1, sink: s}
+				r.lingerFn = r.unlingerAndManuallyDrain
+				s.addRecBuf(r)
+				for range tc.records {
+					r.bufferRecord(promisedRec{ctx: context.Background(), promise: func(*Record, error) {}, Record: &Record{Value: []byte("v"), Context: context.Background()}}, false)
+				}
+				s.removeRecBuf(r)
+				r.mu.Lock()
+				r.sink = fresh
+				r.mu.Unlock()
+				fresh.addRecBuf(r)
+			}
+		}
+
+		req, _, _ := fresh.createReq(5, 0)
+		var batches int
+		for _, partitions := range req.batches.bs {
+			batches += len(partitions)
+		}
+		if batches != tc.batches || batches > 1 && req.wireLength > tc.limit {
+			t.Errorf("%s: request has %d batches counted at %d bytes, want %d batches within %d bytes", tc.name, batches, req.wireLength, tc.batches, tc.limit)
+		}
+		lo := int16(3) // the count of a sink at v3 or higher is for record batches only
+		if tc.moved < 3 {
+			lo = 0
+		}
+		for v := lo; v <= 13; v++ {
+			req.SetVersion(v)
+			if n := int32(len(cl.reqFormatter.AppendRequest(nil, req, 0))); n > req.wireLength {
+				t.Errorf("%s: v%d writes %d bytes, more than the %d counted", tc.name, v, n, req.wireLength)
+			}
+		}
+	}
+}
 
 // TestAuditTxnRecheckRewindUnmarksAddedToTxn guards the producer-ID/epoch
 // recheck rewind in produce(): when a TV1 transactional drain stages a request

@@ -61,13 +61,13 @@ func verifyBatch(t *testing.T, r *recBuf, b *recBatch) []*Record {
 	for _, version := range []int16{3, 8, 9, 13} {
 		txn := version%2 == 1
 		wire, _ := seqRecBatch{seq: 7, recBatch: b}.appendTo(nil, version, 5, 2, txn, r.cl.cfg.compressor)
-		wireLength, _, _ := b.wireLengthForProduceVersion(int32(version))
+		wireLength := b.wireLengthForProduceVersion(int32(version))
 		if int32(len(wire)) > wireLength || wireLength > r.maxRecordBatchBytes || b.stream != nil && int32(len(wire)) != wireLength {
 			t.Fatalf("v%d: encoded %d bytes, wireLength %d, limit %d, merged %v", version, len(wire), wireLength, r.maxRecordBatchBytes, b.stream != nil)
 		}
 		// A sink that has not seen a produce response sizes with the
 		// largest encoding; for a merged batch that must still fit.
-		if unknown, _, _ := b.wireLengthForProduceVersion(-1); b.stream != nil && unknown > r.maxRecordBatchBytes {
+		if unknown := b.wireLengthForProduceVersion(-1); b.stream != nil && unknown > r.maxRecordBatchBytes {
 			t.Fatalf("merged batch sizes to %d bytes at an unknown produce version, limit %d", unknown, r.maxRecordBatchBytes)
 		}
 		rd := kbin.Reader{Src: wire}

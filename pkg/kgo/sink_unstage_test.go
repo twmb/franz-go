@@ -14,13 +14,13 @@ import (
 
 // sinkHarness returns a client, a sink, and one recBuf on that sink,
 // with the producer topics wired so Close can fail any still-buffered records.
-func sinkHarness(t *testing.T) (*Client, *sink, *recBuf) {
+func sinkHarness(t *testing.T, opts ...Opt) (*Client, *sink, *recBuf) {
 	t.Helper()
 
-	cl, err := NewClient(
+	cl, err := NewClient(append([]Opt{
 		SeedBrokers("127.0.0.1:1"), // metadata never loads; we drive the sink directly
 		ManualFlushing(),           // keep buffered batches from spawning a real drain
-	)
+	}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
