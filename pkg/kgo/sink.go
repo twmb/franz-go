@@ -859,14 +859,23 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 	case errors.Is(err, ErrClientClosed):
 		s.cl.failBufferedRecords(ErrClientClosed)
 
-	case errors.Is(err, errBrokerTooOld), errors.Is(err, errUnknownRequestKey):
+	case errors.Is(err, errBrokerTooOld), errors.Is(err, errUnknownRequestKey), errors.Is(err, errRequestTooLarge):
 		// The broker cannot take any produce request we can build
 		// (e.g., we are pinned below Kafka 4.0's minimum produce
 		// version), and retrying cannot change that. We never wrote
 		// the request, so we fail what we can fail safely; anything
 		// that may have been produced by an earlier attempt goes
 		// through the normal retry path.
-		s.cl.cfg.logger.Log(LogLevelError, "broker cannot handle any produce request we can issue, failing records", "broker", logID(s.nodeID), "err", err)
+		//
+		// A request is over BrokerMaxWriteBytes only if a batch is
+		// larger as written than as built (see tryAddBatch). No
+		// request can take that batch to this broker, so the records
+		// fail with the error a broker gives for a batch that is too
+		// large.
+		if errors.Is(err, errRequestTooLarge) {
+			err = fmt.Errorf("%w: %w", kerr.MessageTooLarge, err)
+		}
+		s.cl.cfg.logger.Log(LogLevelError, "unable to issue a produce request that the broker can handle, failing records", "broker", logID(s.nodeID), "err", err)
 		req.batches.eachOwnerLocked(func(batch seqRecBatch) {
 			if !batch.isOwnersFirstBatch() || batch.owner.sink != s {
 				return
@@ -875,7 +884,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 				batch.owner.failAllRecords(err)
 			}
 		})
-		s.handleRetryBatches(req.batches, nil, req.backoffSeq, true, false, "produce request failed with a version error")
+		s.handleRetryBatches(req.batches, nil, req.backoffSeq, true, false, "produce request failed before it was written")
 	}
 }
 
@@ -2312,7 +2321,14 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		batchWireLength += uvarlen(len(partitions)+1) - uvarlen(len(partitions))
 	}
 
-	if int64(p.wireLength)+int64(batchWireLength) > int64(p.wireLengthLimit) {
+	// A request takes its first batch whatever the batch's size. A batch
+	// that fits no empty request never will, and drain would loop on a
+	// skipped batch with no wait. A batch can be that large after its
+	// partition moves to a sink that sizes the batch in another form: a
+	// batch is built to fit a request only in the form its first sink
+	// writes. If the request we write is over the limit, appendReq
+	// refuses the request, and handleReqClientErr fails the records.
+	if len(p.batches.bs) > 0 && int64(p.wireLength)+int64(batchWireLength) > int64(p.wireLengthLimit) {
 		return false
 	}
 
@@ -2630,9 +2646,19 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 	// form, and its size is an int32 as well, so a batch with records
 	// takes no more once that size would pass 1GiB, the largest request
 	// we can write.
+	//
+	// Below produce v3, and before we know the version, the batch can be
+	// written as a message set, so the limit is the batch limit. The
+	// length above adds the record in its record batch form, which is
+	// smaller: without this limit, the message set size could pass the
+	// batch limit, and the batch could fit no request.
 	v1Length := int64(b.v1wireLength) + int64(messageSet1Length(pr.Record))
+	v1Limit := int64(1 << 30)
+	if produceVersion < 3 {
+		v1Limit = int64(maxBatchBytes)
+	}
 
-	if b.frozen || newBatchLength > int64(maxBatchBytes) || len(b.records) > 0 && v1Length > 1<<30 {
+	if b.frozen || newBatchLength > int64(maxBatchBytes) || len(b.records) > 0 && v1Length > v1Limit {
 		return false, false
 	}
 	if abortOnNewBatch {

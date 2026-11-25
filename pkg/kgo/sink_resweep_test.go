@@ -2,14 +2,27 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // We do not know the version that a produce request is written at while we
 // build the request, so createReq counts each part at the largest size that
 // any version writes the part at. We build requests of many shapes and check
 // that no version writes more bytes than createReq counted.
+//
+// In the last rows, a batch's partition moves to a sink of another version
+// after the batch is built. A batch built for a record batch version is
+// bounded by its record batch size, so its message set can be larger than
+// any request: the request takes the batch alone, and if we write the
+// request as a message set, appendReq refuses the request and the records
+// fail. A batch built before the version is known stays within the batch
+// limit as a message set. The other tests of a fresh sink cover merged
+// batches, which are never sized as message sets.
 func TestProduceRequestCount(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("t", 249)
@@ -23,6 +36,7 @@ func TestProduceRequestCount(t *testing.T) {
 
 		built, moved int32 // the produce version of the sink the batches are built on, and moved to
 		batches      int   // in the request
+		refused      bool  // written at the moved version, the request is over the limit
 	}{
 		{name: "short topics by ID", topics: []string{"a", "b"}, partitions: 3, records: 1, limit: 1 << 20, built: 13, moved: 13, batches: 6},
 		{name: "long topics counted for IDs", topics: []string{long, long[1:]}, partitions: 3, records: 1, limit: 1 << 20, built: 13, moved: 13, batches: 6},
@@ -36,6 +50,11 @@ func TestProduceRequestCount(t *testing.T) {
 			topics: []string{"a", long}, partitions: 2, records: 1, limit: 1 << 20, built: 9, moved: 9, batches: 4,
 		},
 		{name: "full request", topics: []string{"a", long}, partitions: 20, records: 1, limit: 2048, built: 13, moved: 13, batches: 22},
+
+		// About 900 bytes as a record batch, and 3500 as a message set.
+		{name: "moved to an unknown version", topics: []string{"a"}, partitions: 1, records: 100, limit: 2048, built: 9, moved: -1, batches: 1},
+		{name: "moved to message sets", topics: []string{"a"}, partitions: 1, records: 100, limit: 2048, built: 9, moved: 2, batches: 1, refused: true},
+		{name: "built at an unknown version", topics: []string{"a"}, partitions: 1, records: 100, limit: 2048, built: -1, moved: -1, batches: 1},
 	} {
 		// Uncompressed, a batch is written at its largest size.
 		cl, s, r0 := sinkHarness(t, append([]Opt{ProducerBatchCompression(NoCompression())}, tc.opts...)...)
@@ -44,13 +63,24 @@ func TestProduceRequestCount(t *testing.T) {
 		s.produceVersion.Store(tc.built)
 		fresh := cl.newSink(2)
 		fresh.produceVersion.Store(tc.moved)
+		failed := make(chan error, 1)
 		for _, topic := range tc.topics {
 			for partition := range tc.partitions {
 				r := &recBuf{cl: cl, topic: topic, topicID: [16]byte{1}, partition: partition, maxRecordBatchBytes: tc.limit / 2, recBufsIdx: -1, lastAckedOffset: -1, sink: s}
 				r.lingerFn = r.unlingerAndManuallyDrain
 				s.addRecBuf(r)
 				for range tc.records {
-					r.bufferRecord(promisedRec{ctx: context.Background(), promise: func(*Record, error) {}, Record: &Record{Value: []byte("v"), Context: context.Background()}}, false)
+					r.bufferRecord(promisedRec{ctx: context.Background(), promise: func(_ *Record, err error) {
+						select {
+						case failed <- err:
+						default:
+						}
+					}, Record: &Record{Value: []byte("v"), Context: context.Background()}}, false)
+				}
+				for _, b := range r.batches {
+					if tc.built < 3 && b.v1wireLength > r.maxRecordBatchBytes {
+						t.Errorf("%s: a batch is %d bytes as a message set, over the limit of %d", tc.name, b.v1wireLength, r.maxRecordBatchBytes)
+					}
 				}
 				s.removeRecBuf(r)
 				r.mu.Lock()
@@ -77,6 +107,25 @@ func TestProduceRequestCount(t *testing.T) {
 			if n := int32(len(cl.reqFormatter.AppendRequest(nil, req, 0))); n > req.wireLength {
 				t.Errorf("%s: v%d writes %d bytes, more than the %d counted", tc.name, v, n, req.wireLength)
 			}
+		}
+
+		if !tc.refused {
+			continue
+		}
+		req.SetVersion(int16(tc.moved))
+		_, err := (&brokerCxn{cl: cl}).appendReq(req)
+		if !errors.Is(err, errRequestTooLarge) {
+			t.Errorf("%s: appendReq returned %v, want errRequestTooLarge", tc.name, err)
+			continue
+		}
+		fresh.handleReqClientErr(req, err)
+		select {
+		case err := <-failed:
+			if !errors.Is(err, kerr.MessageTooLarge) {
+				t.Errorf("%s: records failed with %v, want MESSAGE_TOO_LARGE", tc.name, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("%s: records did not fail", tc.name)
 		}
 	}
 }
