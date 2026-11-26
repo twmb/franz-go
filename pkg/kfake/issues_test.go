@@ -4120,6 +4120,10 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		flip       bool        // the retry uses the other TransactionEndTry
 		concurrent bool        // the EndTxn gets CONCURRENT_TRANSACTIONS until its ctx ends
 		firstErr   *kerr.Error // if non-nil, the EndTxn gets this definitive answer instead
+		retryErr   *kerr.Error // if non-nil, the retry's EndTxn gets this answer
+		resend     bool        // after retryErr, a second retry resends the EndTxn
+		resendErr  *kerr.Error // if non-nil, the resent EndTxn gets this answer
+		askAbort   bool        // a ProducerID call runs while the retry's EndTxn is in flight
 		purge      bool        // the client purges the topic before the retry
 		failProd   bool        // the transaction's produce fails, so no partition is added
 		// Before the retry: the coordinator committed or aborted at our
@@ -4127,9 +4131,10 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		// producer ID.
 		committed, aborted, takeover, askedID bool
 
-		wantErr  error  // what the retry returns; nil means it heals
-		wantMsg  string // if non-empty, the retry is refused with this text
-		wantEnds int    // EndTxn requests the retry sends
+		wantErr   error  // what the retry returns; nil means it heals
+		wantMsg   string // if non-empty, the retry is refused with this text
+		wantEnds  int    // EndTxn requests the retry sends
+		wantInits int    // InitProducerID requests the retry sends
 	}{
 		{name: "lost", wantEnds: 1},
 		{name: "tv1-lost", tv1: true, wantEnds: 1},
@@ -4148,7 +4153,12 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		{name: "tv1-commit-purged", tv1: true, commit: true, purge: true, wantEnds: 1},
 		{name: "commit-failed-produce", commit: true, failProd: true, wantEnds: 1},
 		{name: "commit-fenced", commit: true, flip: true, firstErr: kerr.ProducerFenced, wantErr: kerr.ProducerFenced},
-		{name: "commit-abortable", commit: true, flip: true, firstErr: kerr.TransactionAbortable},
+		{name: "commit-abortable", commit: true, flip: true, firstErr: kerr.TransactionAbortable, wantEnds: 1},
+		{name: "abortable-takeover", commit: true, flip: true, firstErr: kerr.TransactionAbortable, takeover: true, wantErr: kerr.ProducerFenced, wantEnds: 1},
+		{name: "abortable-unauthorized", commit: true, flip: true, firstErr: kerr.TransactionAbortable, retryErr: kerr.TransactionalIDAuthorizationFailed, wantErr: kerr.TransactionalIDAuthorizationFailed, wantEnds: 1},
+		{name: "abortable-mapping", commit: true, flip: true, firstErr: kerr.TransactionAbortable, retryErr: kerr.InvalidProducerIDMapping, wantEnds: 1},
+		{name: "abortable-asked-id", commit: true, flip: true, firstErr: kerr.TransactionAbortable, askAbort: true, wantEnds: 1},
+		{name: "abortable-resend-mapping", commit: true, flip: true, firstErr: kerr.TransactionAbortable, retryErr: kerr.UnknownServerError, resend: true, resendErr: kerr.InvalidProducerIDMapping, wantEnds: 2, wantInits: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -4217,6 +4227,9 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			if test.purge {
 				cl.PurgeTopicsFromClient(topic)
 			}
+			if test.retryErr != nil {
+				c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: test.retryErr})
+			}
 			var other *kgo.Client
 			switch {
 			case test.committed, test.aborted:
@@ -4235,9 +4248,37 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			if err := cl.BeginTransaction(); test.firstErr == nil && err == nil {
 				t.Fatal("began a transaction before the client learned whether the last EndTxn happened")
 			}
+			asked := make(chan error, 1)
+			if test.askAbort {
+				c.ControlKey(int16(kmsg.EndTxn), func(kmsg.Request) (kmsg.Response, error, bool) {
+					c.DropControl()
+					_, _, err := cl.ProducerID(ctx)
+					asked <- err
+					return nil, nil, false
+				})
+			}
 
 			preEnds, preInits := endTxns.Hits(), initPIDs.Hits()
 			err := cl.EndTransaction(ctx, kgo.TransactionEndTry(test.commit != test.flip))
+			if test.resend {
+				if !errors.Is(err, test.retryErr) {
+					t.Fatalf("retry: got %v, want %v", err, test.retryErr)
+				}
+				if test.resendErr != nil {
+					c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: test.resendErr})
+				}
+				err = cl.EndTransaction(ctx, kgo.TransactionEndTry(test.commit != test.flip))
+			}
+			if test.askAbort {
+				select {
+				case err := <-asked:
+					if err == nil || !strings.Contains(err.Error(), "did not learn whether") {
+						t.Errorf("ProducerID while the abort was in flight: got %v, want the error that the abort may not have happened", err)
+					}
+				default:
+					t.Error("the retry sent no EndTxn")
+				}
+			}
 			if test.wantMsg != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantMsg) {
 					t.Fatalf("retry: got %v, want a refusal with %q", err, test.wantMsg)
@@ -4248,8 +4289,8 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			if got := endTxns.Hits() - preEnds; got != test.wantEnds {
 				t.Errorf("retry sent %d EndTxn, want %d", got, test.wantEnds)
 			}
-			if got := initPIDs.Hits() - preInits; got != 0 {
-				t.Errorf("retry sent %d InitProducerID, want none", got)
+			if got := initPIDs.Hits() - preInits; got != test.wantInits {
+				t.Errorf("retry sent %d InitProducerID, want %d", got, test.wantInits)
 			}
 			if other != nil && other.EndTransaction(ctx, kgo.TryCommit) != nil {
 				t.Fatal("the new producer's transaction did not commit")

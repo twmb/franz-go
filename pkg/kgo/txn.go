@@ -900,6 +900,12 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 		stored := cl.producer.id.Load().(*producerID)
 		err := cl.endTxn(ctx, u.id, u.epoch, commit)
+		if u.recoverID && (err == nil || errors.Is(err, kerr.InvalidProducerIDMapping)) {
+			// As after the first send of this abort below.
+			cl.producer.endUnconfirmed.Store(nil)
+			_, _, err = cl.maybeRecoverProducerID(ctx)
+			return err
+		}
 		if err == nil {
 			// Without KIP-890 part 2, the end leaves the producer ID
 			// and epoch as they are. With KIP-890 part 2, endTxn stored
@@ -928,28 +934,58 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		return err
 	}
 
-	id, epoch, err := cl.producerID(ctx2fn(ctx))
-	if err != nil {
-		if commit {
-			// We are not attempting the commit: restore everything this
-			// call consumed. The documented retry is TryAbort, and that
-			// retry must still see the transaction state to issue the
-			// EndTxn abort; consuming the state here would turn the
-			// retry into a no-op that leaves the broker-side
-			// transaction ongoing until the transaction timeout aborts
-			// it.
+	// An abort with the producer ID failed with a recoverable error, or
+	// flagged for reload, sends EndTxn(abort) at the stored producer ID
+	// and epoch first, as Java does. Reloading first would abort the
+	// transaction of another producer that took over our transactional
+	// ID; the abort tells us whether another producer did. A definitive
+	// answer other than INVALID_PRODUCER_ID_MAPPING, PRODUCER_FENCED
+	// included, fails the producer ID with that answer, with nothing more
+	// sent.
+	if stored := cl.producer.id.Load().(*producerID); !bool(commit) && stored.err != nil && cl.recoverableProducerIDErr(stored.err) {
+		cl.cfg.logger.Log(LogLevelInfo, "aborting at the failed producer ID before reloading it",
+			"transactional_id", *cl.cfg.txnID,
+			"producer_id", stored.id,
+			"epoch", stored.epoch,
+			"err", stored.err,
+		)
+		// While the abort is in flight, producerID must not reload the
+		// producer ID, which would abort the transaction too.
+		cl.producer.endUnconfirmed.Store(&sentEndTxn{id: stored.id, epoch: stored.epoch, recoverID: true})
+		err := cl.endTxn(ctx, stored.id, stored.epoch, TryAbort)
+		switch {
+		case err != nil && !definitiveTxnErr(err):
+			// A later TryAbort resends the abort.
+			cl.producer.id.CompareAndSwap(stored, &producerID{id: stored.id, epoch: stored.epoch, err: errReloadProducerID})
 			restore()
-			return kerr.OperationNotAttempted
+			return err
+		case err != nil && !errors.Is(err, kerr.InvalidProducerIDMapping):
+			cl.producer.id.CompareAndSwap(stored, &producerID{id: stored.id, epoch: stored.epoch, err: err})
+			cl.producer.endUnconfirmed.Store(nil)
+			if errors.Is(err, kerr.TransactionAbortable) {
+				restore()
+			}
+			return err
 		}
+		// The abort ended the transaction, or the coordinator has none
+		// for this producer ID. maybeRecoverProducerID reloads a
+		// producer ID flagged for reload, and flags any other
+		// recoverable error for BeginTransaction to reload.
+		cl.producer.endUnconfirmed.Store(nil)
+		_, _, err = cl.maybeRecoverProducerID(ctx)
+		return err
+	}
 
-		// If we recovered the producer ID, we return early, since
-		// there is no reason to issue an abort now that the id is
-		// different. Otherwise, we issue our EndTxn which will likely
-		// fail, but that is ok, we will just return error.
-		_, didRecover, _ := cl.maybeRecoverProducerID(ctx)
-		if didRecover {
-			return nil
-		}
+	id, epoch, err := cl.producerID(ctx2fn(ctx))
+	if err != nil && commit {
+		// We are not attempting the commit: restore everything this
+		// call consumed. The documented retry is TryAbort, and that
+		// retry must still see the transaction state to issue the
+		// EndTxn abort; consuming the state here would turn the retry
+		// into a no-op that leaves the broker-side transaction ongoing
+		// until the transaction timeout aborts it.
+		restore()
+		return kerr.OperationNotAttempted
 	}
 
 	cl.cfg.logger.Log(LogLevelInfo, "ending transaction",

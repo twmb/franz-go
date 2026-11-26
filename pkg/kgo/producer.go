@@ -96,9 +96,13 @@ type producer struct {
 	// producerID loads the producer ID, then endUnconfirmed, and does not
 	// reload the producer ID while endUnconfirmed is set. EndTransaction
 	// sets endUnconfirmed before EndTransaction fails the producer ID for
-	// reload, and clears endUnconfirmed after EndTransaction replaces that
-	// failed producer ID, so a producerID call running at the same time
-	// does not reload that producer ID.
+	// reload, and before EndTransaction sends EndTxn(abort) at a producer
+	// ID that needs recovery. EndTransaction clears endUnconfirmed only
+	// after EndTransaction replaces the producer ID, or once the
+	// coordinator has no open transaction for the producer ID, so a
+	// producerID call running at the same time does not reload the
+	// producer ID while the coordinator may still have our transaction
+	// open.
 	endUnconfirmed atomic.Pointer[sentEndTxn]
 	tx890p2        atomic.Bool
 
@@ -1065,11 +1069,15 @@ type producerID struct {
 	err   error
 }
 
-// The producer ID, epoch, and direction of an EndTxn.
+// The producer ID and epoch of an EndTxn, and whether the EndTxn commits.
+// EndTransaction recovers the producer ID after the EndTxn ends the
+// transaction if recoverID is set: the EndTxn is an abort at a producer ID that
+// needs recovery.
 type sentEndTxn struct {
-	id     int64
-	epoch  int16
-	commit bool
+	id        int64
+	epoch     int16
+	commit    bool
+	recoverID bool
 }
 
 // producerID returns, loading if necessary, the client's producer ID for idempotent
