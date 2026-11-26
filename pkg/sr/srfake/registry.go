@@ -774,37 +774,54 @@ func parseVersion(s string) (int, error) {
 	return v, nil
 }
 
-func (r *Registry) resolveVersion(subject, versionStr string, includeDeleted bool) (int, error) {
-	v, err := parseVersion(versionStr)
-	if err != nil {
-		return 0, err
+// Returns what find returns for the first of subject and, for a subject of the
+// default context, the same name in every other context, for which find
+// succeeds. This is how Confluent's registry looks a subject up. The caller
+// must hold the lock.
+func (r *Registry) findUsingContextsLocked(subject string, find func(subject string) (sr.SubjectSchema, bool)) (sr.SubjectSchema, bool) {
+	if ss, ok := find(subject); ok {
+		return ss, true
 	}
-	if v == -1 {
-		r.mu.RLock()
-		defer r.mu.RUnlock()
-
-		// As in Confluent's registry, latest is the highest version that
-		// is not soft-deleted, or with ?deleted=true the highest version.
-		subj, ok := r.subjects[subject]
-		switch {
-		case ok && includeDeleted && len(subj.versions) > 0:
-			return subj.highestExisting(), nil
-		case ok && subj.active():
-			return subj.latestVersion, nil
-		default:
-			return 0, errSubjectNotFound(subject)
+	if ctx, name := splitSubject(subject); ctx == "." {
+		for _, c := range r.sortedContextsLocked() {
+			if ss, ok := find(qualifiedContext(c) + name); ok {
+				return ss, true
+			}
 		}
 	}
-	return v, nil
+	return sr.SubjectSchema{}, false
+}
+
+// Returns version of subject, with -1 for the latest version, looking the
+// subject up as findUsingContextsLocked does. As in Confluent's registry,
+// latest is the highest version that is not soft-deleted, or with
+// includeDeleted the highest version. The caller must hold the lock.
+func (r *Registry) lookupVersionLocked(subject string, version int, includeDeleted bool) (sr.SubjectSchema, bool) {
+	return r.findUsingContextsLocked(subject, func(s string) (sr.SubjectSchema, bool) {
+		subj, ok := r.subjects[s]
+		if !ok {
+			return sr.SubjectSchema{}, false
+		}
+		v := version
+		if v == -1 {
+			v = subj.latestVersion
+			if includeDeleted {
+				v = subj.highestVersion
+			}
+		}
+		vd, ok := subj.versions[v]
+		if !ok || vd.isDeleted && !includeDeleted {
+			return sr.SubjectSchema{}, false
+		}
+		return vd.schema, true
+	})
 }
 
 // Returns the error for a version of subject that a lookup did not find. As in
 // Confluent's registry, the subject is not found if it has no version that the
-// lookup could return, else the version is not found.
-func (r *Registry) errMissingVersion(subject string, version int, includeDeleted bool) error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+// lookup could return, else the version is not found. The caller must hold
+// the lock.
+func (r *Registry) errMissingVersionLocked(subject string, version int, includeDeleted bool) error {
 	if subj, ok := r.subjects[subject]; ok && (subj.active() || includeDeleted && len(subj.versions) > 0) {
 		return errVersionNotFound(version)
 	}

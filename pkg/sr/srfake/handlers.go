@@ -543,43 +543,38 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 // handleGetSubjectSchemaByVersion emulates GET /subjects/{subject}/versions/{version}
 // to return a specific schema version for a subject.
 func (r *Registry) handleGetSubjectSchemaByVersion(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	versionStr := req.PathValue("version")
-	del := parseDeleted(req)
+	if ss, ok := r.subjectVersion(w, req); ok {
+		respondJSON(w, http.StatusOK, ss)
+	}
+}
 
-	version, err := r.resolveVersion(subject, versionStr, del.any())
+// Returns the version that GET /subjects/{subject}/versions/{version} and its
+// /schema route ask for, or writes the error and returns false.
+func (r *Registry) subjectVersion(w http.ResponseWriter, req *http.Request) (sr.SubjectSchema, bool) {
+	subject := req.PathValue("subject")
+	del := parseDeleted(req)
+	version, err := parseVersion(req.PathValue("version"))
 	if err != nil {
 		r.handleAPIError(w, err)
-		return
+		return sr.SubjectSchema{}, false
 	}
 
-	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	ss, ok := r.lookupVersionLocked(subject, version, del.any())
 	if !ok {
-		r.handleAPIError(w, r.errMissingVersion(subject, version, del.any()))
-		return
+		r.handleAPIError(w, r.errMissingVersionLocked(subject, version, del.any()))
 	}
-	respondJSON(w, http.StatusOK, sch)
+	return ss, ok
 }
 
 // handleGetSubjectRawSchemaByVersion emulates GET /subjects/{subject}/versions/{version}/schema
 // to return the raw schema string for a specific version.
 func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	versionStr := req.PathValue("version")
-	del := parseDeleted(req)
-
-	version, err := r.resolveVersion(subject, versionStr, del.any())
-	if err != nil {
-		r.handleAPIError(w, err)
-		return
+	if ss, ok := r.subjectVersion(w, req); ok {
+		respondJSON(w, http.StatusOK, ss.Schema.Schema)
 	}
-
-	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
-	if !ok {
-		r.handleAPIError(w, r.errMissingVersion(subject, version, del.any()))
-		return
-	}
-	respondJSON(w, http.StatusOK, sch.Schema)
 }
 
 // handleGetReferencedBy emulates GET /subjects/{subject}/versions/{version}/referencedby
@@ -589,7 +584,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	versionStr := req.PathValue("version")
 	del := parseDeleted(req)
 
-	version, err := r.resolveVersion(subject, versionStr, del.any())
+	asked, err := parseVersion(versionStr)
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
@@ -598,18 +593,15 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if the target schema exists. As in Confluent's registry, a
-	// numbered version is found even if it is soft-deleted, and latest
-	// honors ?deleted.
-	asked, _ := parseVersion(versionStr)
-	if _, exists := r.getSchemaBySubjectVersionLocked(subject, version, del.any() || asked != -1); !exists {
-		if subj, ok := r.subjects[subject]; !ok || len(subj.versions) == 0 {
-			r.handleAPIError(w, errSubjectNotFound(subject))
-			return
-		}
-		r.handleAPIError(w, errVersionNotFound(version))
+	// Find the target schema. As in Confluent's registry, a numbered version
+	// is found even if it is soft-deleted, and latest honors ?deleted.
+	includeTarget := del.any() || asked != -1
+	target, ok := r.lookupVersionLocked(subject, asked, includeTarget)
+	if !ok {
+		r.handleAPIError(w, r.errMissingVersionLocked(subject, asked, includeTarget))
 		return
 	}
+	subject, version := target.Subject, target.Version
 
 	// Find all schemas that reference this target schema
 	referencingIDs := make([]int, 0) // Initialize as empty slice, not nil
@@ -698,34 +690,43 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if subject exists and is not soft-deleted
-	subj, ok := r.subjects[subject]
-	if !ok || (!subj.active() && !del.any()) {
-		r.handleAPIError(w, errSubjectNotFound(subject))
+	// Look the schema up in subject, and in the same name in every other
+	// context, as Confluent's registry does.
+	match, ok := r.findUsingContextsLocked(subject, func(s string) (sr.SubjectSchema, bool) {
+		subj, ok := r.subjects[s]
+		if !ok || (!subj.active() && !del.any()) {
+			return sr.SubjectSchema{}, false
+		}
+		for _, versionData := range subj.versions {
+			if del.keep(versionData.isDeleted) && r.schemasEqual(versionData.schema.Schema, body) {
+				return versionData.schema, true
+			}
+		}
+		return sr.SubjectSchema{}, false
+	})
+	if !ok {
+		if subj, exists := r.subjects[subject]; !exists || (!subj.active() && !del.any()) {
+			r.handleAPIError(w, errSubjectNotFound(subject))
+			return
+		}
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
 
-	for v, versionData := range subj.versions {
-		if !del.keep(versionData.isDeleted) || !r.schemasEqual(versionData.schema.Schema, body) {
-			continue
-		}
-		resp := map[string]any{
-			"subject": subject,
-			"version": v,
-			"id":      versionData.schema.ID,
-			"guid":    versionData.schema.GUID,
-			"schema":  versionData.schema.Schema.Schema,
-		}
-		if versionData.schema.Type != sr.TypeAvro {
-			resp["schemaType"] = versionData.schema.Type.String()
-		}
-		if len(versionData.schema.References) > 0 {
-			resp["references"] = versionData.schema.References
-		}
-		respondJSON(w, http.StatusOK, resp)
-		return
+	resp := map[string]any{
+		"subject": match.Subject,
+		"version": match.Version,
+		"id":      match.ID,
+		"guid":    match.GUID,
+		"schema":  match.Schema.Schema,
 	}
-	r.handleAPIError(w, errSchemaNotFound(""))
+	if match.Type != sr.TypeAvro {
+		resp["schemaType"] = match.Type.String()
+	}
+	if len(match.References) > 0 {
+		resp["references"] = match.References
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // handleCheckCompatibility emulates POST /compatibility/subjects/{subject}/versions/{version}

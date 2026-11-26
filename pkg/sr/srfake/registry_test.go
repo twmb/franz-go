@@ -2681,6 +2681,33 @@ func TestContextHandlers(t *testing.T) {
 			wantBody:   `["."]`,
 		},
 
+		// A subject without a context in every other context
+		{
+			name:       "GET /subjects/{s}/versions/{v} - subject of another context answers",
+			method:     "GET",
+			path:       "/subjects/topic-value/versions/1",
+			setup:      func(r *srfake.Registry) { r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:       "POST /subjects/{s} - subject of another context answers",
+			method:     "POST",
+			path:       "/subjects/topic-value",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup:      func(r *srfake.Registry) { r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:       "GET /subjects/{s}/versions/{v}/referencedby - subject of another context answers",
+			method:     "GET",
+			path:       "/subjects/product/versions/1/referencedby",
+			setup:      withOrder,
+			wantStatus: http.StatusOK,
+			wantBody:   `[2]`,
+		},
+
 		// subjectPrefix
 		{
 			name:   "GET /contexts/.myctx/subjects?subjectPrefix={p} - prefix within the context",
