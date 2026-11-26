@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,9 +26,11 @@ import (
 // from EndTxn; conformant Kafka / kfake does not emit it on their own, so the
 // test injects it via a fault.
 //
-// Before KIP-447, End stops resending EndTxn after the rebalance timeout. A
-// resent commit answered with INVALID_TXN_STATE is definitive and ends End,
-// even when a producer ID reload would get UNKNOWN_SERVER_ERROR.
+// Before KIP-447, End stops resending EndTxn after the rebalance timeout. An
+// End that does not learn whether its commit happened fails the session, and a
+// second End returns the same error without sending anything. A resent commit
+// answered with INVALID_TXN_STATE is definitive and ends End, even when a
+// producer ID reload would get UNKNOWN_SERVER_ERROR.
 func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
@@ -53,6 +56,7 @@ func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 
 			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 			produceN(t, c, topic, msgs)
+			inits := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Observe: true, Count: -1})
 
 			opts := []kgo.Opt{
 				kgo.SeedBrokers(c.ListenAddrs()...),
@@ -113,6 +117,13 @@ func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 			}
 			if test.pre447 && ctx.Err() != nil {
 				t.Fatal("End resent EndTxn past the rebalance timeout")
+			}
+			if !test.wantCommitted {
+				endtxns.Remove()
+				pre := inits.Hits()
+				if committed2, err2 := s.End(ctx, kgo.TryCommit); committed2 || err2 == nil || !errors.Is(err, err2) || inits.Hits() != pre {
+					t.Fatalf("second End: got committed=%v err=%v after %d InitProducerID, want %v after none", committed2, err2, inits.Hits()-pre, err)
+				}
 			}
 		})
 	}

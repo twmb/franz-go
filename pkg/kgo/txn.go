@@ -36,6 +36,10 @@ type GroupTransactSession struct {
 	revokedCh chan struct{} // closed once when revoked is set; reset after End
 	lost      bool
 	lostCh    chan struct{} // closed once when lost is set; reset after End
+
+	// The error of an End that did not learn whether its commit or abort
+	// happened. Every later End returns unconfirmedEnd.
+	unconfirmedEnd error
 }
 
 // NewGroupTransactSession is exactly the same as NewClient, but wraps the
@@ -227,16 +231,27 @@ func (s *GroupTransactSession) failed() bool {
 // successful. If any of these conditions are false, this aborts. This flushes
 // or aborts depending on `commit`.
 //
-// This returns whether the transaction committed or any error that occurred.
-// No returned error is retryable. Either the transactional ID has entered a
-// failed state, or the client retried so much that the retry limit was hit,
-// and odds are you should not continue. The exception is a transaction that
-// produced to or consumed from a topic which was then deleted and recreated:
-// this aborts and returns an error wrapping kerr.UnknownTopicID, and you can
-// continue once you purge the topic and add it back; see EndTransaction.
-// While a context is allowed, canceling it will likely leave the client in
-// an invalid state. Canceling should only be done if you want to shut down.
+// End returns whether the transaction committed, and any error. No error End
+// returns is retryable. Either the transactional ID is in a failed state, or
+// End did not learn whether the commit or abort happened, and a later End
+// returns the same error. In most cases, the client cannot continue after End
+// returns an error.
+//
+// If the transaction produced to or consumed from a topic that was then
+// deleted and recreated, End aborts the transaction and returns an error
+// wrapping kerr.UnknownTopicID. The client can continue after you purge the
+// topic and add it back.
+//
+// Canceling the context will likely leave the client in an invalid state.
+// Cancel the context only to shut down.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (committed bool, err error) {
+	// Another End would rerun the offset commit, which fails while
+	// EndTransaction does not know whether its last commit or abort
+	// happened. Another End would then try TryAbort, which EndTransaction
+	// refuses if it does not know whether its last commit happened.
+	if s.unconfirmedEnd != nil {
+		return false, s.unconfirmedEnd
+	}
 	defer func() {
 		s.failMu.Lock()
 		s.revoked = false
@@ -523,6 +538,10 @@ retry:
 			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction returned an unknown server error and did not learn whether the commit or abort happened; resending the same EndTxn", "commit", willTryCommit)
 			goto retry
 		}
+	}
+
+	if endTxnErr != nil && s.cl.producer.endUnconfirmed.Load() != nil {
+		s.unconfirmedEnd = endTxnErr
 	}
 
 	if !willTryCommit || endTxnErr != nil {
