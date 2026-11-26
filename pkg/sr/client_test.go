@@ -51,7 +51,7 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			case "/config/foo":
 				switch r.Method {
 				case http.MethodDelete:
-					output = SetCompatibility{Level: CompatFull, Normalize: true}
+					output = map[string]any{"compatibilityLevel": "FULL", "normalize": true}
 				default:
 					output = CompatibilityResult{Subject: dummySchema.Subject, Level: CompatFull}
 				}

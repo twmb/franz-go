@@ -23,11 +23,11 @@ func writeError(w http.ResponseWriter, status, code int, msg string) {
 }
 
 // decodeJSONRequest safely decodes a single JSON object from an HTTP request body.
-// It ensures there is no trailing data after the JSON object and rejects unknown fields.
+// It ensures there is no trailing data after the JSON object. As in Confluent's
+// registry, unknown fields are ignored.
 // This addresses the json.NewDecoder issue described in https://github.com/golang/go/issues/36225
 func decodeJSONRequest(r io.Reader, v any) error {
 	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(v); err != nil {
 		return err

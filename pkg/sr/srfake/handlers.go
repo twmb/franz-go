@@ -2,8 +2,11 @@ package srfake
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +19,43 @@ type ctxKey struct{}
 func requestContext(req *http.Request) string {
 	v, _ := req.Context().Value(ctxKey{}).(string)
 	return v
+}
+
+// Returns the query parameter name, a subject or subject prefix, and whether
+// the request has it. As in Confluent's registry, a context path adds its
+// context to a value without one, and gives a request without the parameter
+// the context as its value.
+func contextParam(req *http.Request, name string) (string, bool) {
+	q := req.URL.Query()
+	value, ok := q.Get(name), q.Has(name)
+	if ctx := requestContext(req); ctx != "" {
+		if !hasContext(value) {
+			value = qualifiedContext(ctx) + value
+		}
+		ok = true
+	}
+	return value, ok
+}
+
+// Reports whether subject matches a subjectPrefix, as Confluent's registry
+// matches it: ":*:" followed by a name prefix matches in every context, a
+// prefix that names a context matches the qualified subject, and any other
+// prefix matches subjects of the default context.
+func matchesPrefix(subject, prefix string) bool {
+	switch {
+	case strings.HasPrefix(prefix, ":*:"):
+		_, name := splitSubject(subject)
+		return strings.HasPrefix(name, prefix[len(":*:"):])
+	case strings.HasPrefix(prefix, ":."):
+		return strings.HasPrefix(subject, prefix)
+	default:
+		return subjectContext(subject) == "." && strings.HasPrefix(subject, prefix)
+	}
+}
+
+// Reports whether subject names its context, or the wildcard context.
+func hasContext(subject string) bool {
+	return strings.HasPrefix(subject, ":.") || strings.HasPrefix(subject, ":*:")
 }
 
 /* -------------------------------------------------------------------------
@@ -51,116 +91,176 @@ func (r *Registry) interceptorMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// contextMiddleware serves a /contexts/{context}/... request as the path after
+// the context, as Confluent's registry does. The request context carries the
+// context's name. A subject without a context after /subjects in the path gets
+// the context, and so does the subject of a root /config or /mode. A root
+// /config or /mode without a subject gets the context itself as its subject.
+// Every subject in a path, with or without a context path, is then normalized
+// as rewriteSubjects describes.
 func (*Registry) contextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		p := req.URL.Path
-		if !strings.HasPrefix(p, "/contexts/") {
-			next.ServeHTTP(w, req)
-			return
-		}
-
-		rest := p[len("/contexts/"):]
-		slash := strings.IndexByte(rest, '/')
-		if slash < 0 {
-			next.ServeHTTP(w, req)
-			return
-		}
-
-		name := rest[:slash]
-		remaining := rest[slash:]
-
-		ctx := context.WithValue(req.Context(), ctxKey{}, name)
-		req = req.WithContext(ctx)
-		req.URL.Path = remaining
-		if req.URL.RawPath != "" {
-			raw := req.URL.RawPath
-			if strings.HasPrefix(raw, "/contexts/") {
-				rawRest := raw[len("/contexts/"):]
-				if i := strings.IndexByte(rawRest, '/'); i >= 0 {
-					req.URL.RawPath = rawRest[i:]
-				}
+		escaped := req.URL.EscapedPath()
+		var ctx string
+		if rest, ok := strings.CutPrefix(escaped, "/contexts/"); ok {
+			rawName, after, ok := strings.Cut(rest, "/")
+			if !ok {
+				next.ServeHTTP(w, req)
+				return
 			}
+			name, err := url.PathUnescape(rawName)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+				return
+			}
+			name, ok = normalizeContext(name)
+			if !ok {
+				writeError(w, http.StatusBadRequest, http.StatusBadRequest, fmt.Sprintf("Context name '%s' cannot contain a colon", name))
+				return
+			}
+			ctx, escaped = name, "/"+strings.TrimRight(after, "/")
+			req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, name))
 		}
+
+		rewritten := "/" + strings.Join(rewriteSubjects(strings.Split(escaped[1:], "/"), ctx), "/")
+		if ctx == "" && rewritten == escaped {
+			next.ServeHTTP(w, req)
+			return
+		}
+		path, err := url.PathUnescape(rewritten)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.URL.Path, req.URL.RawPath = path, rewritten
 
 		next.ServeHTTP(w, req)
 	})
 }
 
-// Caller must hold r.mu (at least RLock).
-func (r *Registry) schemaInContext(id int, ctx string) bool {
-	for subject, subj := range r.subjects {
-		if subj.isDeleted || subjectContext(subject) != ctx {
+// Returns the escaped path segments segs with each subject as Confluent's
+// registry reads it. A subject is the segment after "subjects", or after a root
+// "config" or "mode". When ctx is not empty, a subject without a context gets
+// ctx, and a root config or mode without a subject gets ctx as its subject.
+// Each subject is then normalized: ":.:foo" is foo, and ":.ctx" is ":.ctx:". A
+// root config or mode whose subject is the default context loses its subject,
+// which makes it the global route.
+func rewriteSubjects(segs []string, ctx string) []string {
+	out := make([]string, 0, len(segs)+1)
+	var subjectNext, rootConfig bool
+	for i, seg := range segs {
+		if !subjectNext {
+			root := i == 0 && (seg == "config" || seg == "mode")
+			subjectNext = seg == "subjects" || root
+			rootConfig = rootConfig || root
+			out = append(out, seg)
 			continue
 		}
-		for _, vd := range subj.versions {
-			if !vd.isDeleted && vd.schema.ID == id {
-				return true
-			}
+		subjectNext = false
+		orig, err := url.PathUnescape(seg)
+		if err != nil {
+			out = append(out, seg)
+			continue
+		}
+		s := orig
+		if ctx != "" && !hasContext(s) {
+			s = qualifiedContext(ctx) + s
+		}
+		s = normalizeSubject(s)
+		switch {
+		case s == "" && rootConfig:
+		case s == orig || s == "":
+			out = append(out, seg)
+		default:
+			out = append(out, url.PathEscape(s))
 		}
 	}
-	return false
+	if rootConfig && subjectNext && ctx != "" && qualifiedContext(ctx) != "" {
+		out = append(out, url.PathEscape(qualifiedContext(ctx)))
+	}
+	return out
+}
+
+// Returns name as a context, without surrounding colons and with a leading
+// dot, as Confluent's registry normalizes it. A colon inside the name makes it
+// invalid.
+func normalizeContext(name string) (string, bool) {
+	name = strings.TrimPrefix(name, ":")
+	name = strings.TrimSuffix(name, ":")
+	if strings.Contains(name, ":") {
+		return name, false
+	}
+	if !strings.HasPrefix(name, ".") {
+		name = "." + name
+	}
+	return name, true
+}
+
+// Returns the prefix that puts a subject into ctx: empty for the default
+// context, ":ctx:" otherwise.
+func qualifiedContext(ctx string) string {
+	if ctx == "." {
+		return ""
+	}
+	return ":" + ctx + ":"
 }
 
 /* -------------------------------------------------------------------------
    Handlers – Schemas
    ------------------------------------------------------------------------- */
 
+// idSchema is the body of GET /schemas/ids/{id}. As in Confluent's registry,
+// it has the GUID of the schema, and the subject and version of the schema when
+// the lookup has a subject.
+type idSchema struct {
+	Subject string `json:"subject,omitempty"`
+	Version int    `json:"version,omitempty"`
+	GUID    string `json:"guid,omitempty"`
+	sr.Schema
+}
+
 // handleGetSchemaByID emulates GET /schemas/ids/{id} to retrieve a full schema
-// definition by its global ID.
+// definition by its ID.
 func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request) {
 	id, err := strconv.Atoi(req.PathValue("id"))
 	if err != nil {
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
+	subject, hasSubject := contextParam(req, "subject")
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	sch, ok := r.schemasByID[id]
+	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(strconv.Itoa(id)))
 		return
 	}
-	if ctx := requestContext(req); ctx != "" {
-		if !r.schemaInContext(id, ctx) {
-			r.handleAPIError(w, errSchemaNotFound())
-			return
-		}
+	body := idSchema{GUID: ss.GUID, Schema: ss.Schema}
+	if hasSubject {
+		body.Subject, body.Version = ss.Subject, ss.Version
 	}
-	if subject := req.URL.Query().Get("subject"); subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-	respondJSON(w, http.StatusOK, sch)
+	respondJSON(w, http.StatusOK, body)
 }
 
 // handleGetRawSchemaByID emulates GET /schemas/ids/{id}/schema to retrieve
-// only the schema string by its global ID.
+// only the schema string by its ID.
 func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Request) {
 	id, err := strconv.Atoi(req.PathValue("id"))
 	if err != nil {
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
+	subject, hasSubject := contextParam(req, "subject")
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	sch, ok := r.schemasByID[id]
+	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(strconv.Itoa(id)))
 		return
 	}
-	if ctx := requestContext(req); ctx != "" {
-		if !r.schemaInContext(id, ctx) {
-			r.handleAPIError(w, errSchemaNotFound())
-			return
-		}
-	}
-	if subject := req.URL.Query().Get("subject"); subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-	respondJSON(w, http.StatusOK, sch.Schema)
+	respondJSON(w, http.StatusOK, ss.Schema.Schema)
 }
 
 // handleGetSchemaVersionsByID emulates GET /schemas/ids/{id}/versions to retrieve
@@ -171,47 +271,17 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-
-	ctx := requestContext(req)
-	del := parseDeleted(req)
-	subjectParam := req.URL.Query().Get("subject")
+	subject, hasSubject := contextParam(req, "subject")
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if schema exists
-	if _, ok := r.schemasByID[id]; !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+	usages, ok := r.idUsagesLocked(id, subject, hasSubject, deleted)
+	if !ok {
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
-
-	// Find all subject-version pairs that use this schema ID
-	var usages []map[string]any
-	for subject, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
-			continue
-		}
-		if ctx != "" && subjectContext(subject) != ctx {
-			continue
-		}
-		if subjectParam != "" && subject != subjectParam {
-			continue
-		}
-		for version, versionData := range subj.versions {
-			if versionData.schema.ID == id && del.keep(versionData.isDeleted) {
-				usages = append(usages, map[string]any{
-					"subject": subject,
-					"version": version,
-				})
-			}
-		}
-	}
-
-	if ctx != "" && len(usages) == 0 {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-
 	respondJSON(w, http.StatusOK, usages)
 }
 
@@ -222,50 +292,56 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-
-	ctx := requestContext(req)
-	del := parseDeleted(req)
-	subjectParam := req.URL.Query().Get("subject")
+	subject, hasSubject := contextParam(req, "subject")
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if _, ok := r.schemasByID[id]; !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+	usages, ok := r.idUsagesLocked(id, subject, hasSubject, deleted)
+	if !ok {
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
+	subjects := make([]string, 0, len(usages))
+	for _, u := range usages {
+		if len(subjects) == 0 || subjects[len(subjects)-1] != u.Subject {
+			subjects = append(subjects, u.Subject)
+		}
+	}
+	respondJSON(w, http.StatusOK, subjects)
+}
 
-	subjectSet := make(map[string]bool)
-	for subject, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
+// Returns the versions that carry id in the context that a lookup of id
+// resolves to, sorted by subject and then version. As in Confluent's registry,
+// the subject query parameter selects the context and does not filter the
+// subjects. As in Confluent's registry, soft-deleted versions are listed only
+// with ?deleted=true, and ?deletedOnly is not supported. The caller must hold
+// the lock.
+func (r *Registry) idUsagesLocked(id int, subject string, hasSubject, deleted bool) ([]sr.SubjectVersion, bool) {
+	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
+	if !ok {
+		return nil, false
+	}
+	ctx := subjectContext(ss.Subject)
+	usages := make([]sr.SubjectVersion, 0)
+	for s, subj := range r.subjects {
+		if subjectContext(s) != ctx {
 			continue
 		}
-		if ctx != "" && subjectContext(subject) != ctx {
-			continue
-		}
-		if subjectParam != "" && subject != subjectParam {
-			continue
-		}
-		for _, vd := range subj.versions {
-			if del.keep(vd.isDeleted) && vd.schema.ID == id {
-				subjectSet[subject] = true
-				break
+		for v, vd := range subj.versions {
+			if vd.schema.ID == id && (deleted || !vd.isDeleted) {
+				usages = append(usages, sr.SubjectVersion{Subject: s, Version: v})
 			}
 		}
 	}
-
-	if ctx != "" && len(subjectSet) == 0 {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-
-	subjects := make([]string, 0, len(subjectSet))
-	for s := range subjectSet {
-		subjects = append(subjects, s)
-	}
-	sort.Strings(subjects)
-
-	respondJSON(w, http.StatusOK, subjects)
+	sort.Slice(usages, func(i, j int) bool {
+		if usages[i].Subject != usages[j].Subject {
+			return usages[i].Subject < usages[j].Subject
+		}
+		return usages[i].Version < usages[j].Version
+	})
+	return usages, true
 }
 
 // handleGetSchemaByGUID emulates GET /schemas/guids/{guid} to retrieve a schema
@@ -279,7 +355,7 @@ func (r *Registry) handleGetSchemaByGUID(w http.ResponseWriter, req *http.Reques
 
 	ss, ok := r.subjectSchemaByGUIDLocked(guid)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(guid))
 		return
 	}
 	respondJSON(w, http.StatusOK, ss)
@@ -287,35 +363,22 @@ func (r *Registry) handleGetSchemaByGUID(w http.ResponseWriter, req *http.Reques
 
 // handleGetSchemaIDsByGUID emulates GET /schemas/guids/{guid}/ids to retrieve the
 // (context, schema ID) pairs that the GUID resolves to. A GUID is global, so
-// every context is searched; each context that contains the schema contributes
-// its own ID.
+// every known context is searched, in sorted order; each context that has the
+// GUID contributes its own ID. As in Confluent's registry, that is the ID last
+// seeded, registered, or soft-deleted with the GUID, which a permanent delete
+// does not remove, and an unknown GUID returns an empty list.
 func (r *Registry) handleGetSchemaIDsByGUID(w http.ResponseWriter, req *http.Request) {
 	guid := req.PathValue("guid")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	byContext := make(map[string]int)
-	for subject, subj := range r.subjects {
-		if subj.isDeleted {
-			continue
-		}
-		for _, vd := range subj.versions {
-			if !vd.isDeleted && vd.schema.GUID == guid {
-				byContext[subjectContext(subject)] = vd.schema.ID
-				break
-			}
+	ids := make([]sr.ContextID, 0)
+	for _, c := range append([]string{"."}, r.sortedContextsLocked()...) {
+		if id, ok := r.idsByGUID[contextGUID{c, guid}]; ok {
+			ids = append(ids, sr.ContextID{Context: c, ID: id})
 		}
 	}
-	if len(byContext) == 0 {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-	ids := make([]sr.ContextID, 0, len(byContext))
-	for c, id := range byContext {
-		ids = append(ids, sr.ContextID{Context: c, ID: id})
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i].Context < ids[j].Context })
 	respondJSON(w, http.StatusOK, ids)
 }
 
@@ -361,9 +424,10 @@ func (f deletedFilter) any() bool { return f.includeDeleted || f.onlyDeleted }
 // and latestOnly query parameters.
 func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 	includeDeleted := req.URL.Query().Get("deleted") == "true"
-	subjPrefix := req.URL.Query().Get("subjectPrefix")
 	latestOnly := req.URL.Query().Get("latestOnly") == "true"
-	ctx := requestContext(req)
+	// As in Confluent's registry, GET /schemas without a prefix lists the
+	// default context.
+	subjPrefix, _ := contextParam(req, "subjectPrefix")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -377,13 +441,10 @@ func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 	out := make([]sr.SubjectSchema, 0)
 	for _, s := range subjects {
 		subj := r.subjects[s]
-		if !includeDeleted && subj.isDeleted {
+		if !includeDeleted && !subj.active() {
 			continue
 		}
-		if ctx != "" && subjectContext(s) != ctx {
-			continue
-		}
-		if subjPrefix != "" && !strings.HasPrefix(s, subjPrefix) {
+		if !matchesPrefix(s, subjPrefix) {
 			continue
 		}
 
@@ -409,19 +470,20 @@ func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 
 func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 	del := parseDeleted(req)
-	subjPrefix := req.URL.Query().Get("subjectPrefix")
-	ctx := requestContext(req)
+	// As in Confluent's registry, GET /subjects without a prefix lists every
+	// context.
+	subjPrefix, ok := contextParam(req, "subjectPrefix")
+	if !ok {
+		subjPrefix = ":*:"
+	}
 
 	r.mu.RLock()
 	subjects := make([]string, 0, len(r.subjects))
 	for s, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
+		if !del.keep(!subj.active()) {
 			continue
 		}
-		if ctx != "" && subjectContext(s) != ctx {
-			continue
-		}
-		if subjPrefix != "" && !strings.HasPrefix(s, subjPrefix) {
+		if !matchesPrefix(s, subjPrefix) {
 			continue
 		}
 		subjects = append(subjects, s)
@@ -445,7 +507,7 @@ func (r *Registry) handleGetSubjectVersions(w http.ResponseWriter, req *http.Req
 	defer r.mu.RUnlock()
 
 	subj, ok := r.subjects[subject]
-	if !ok || (subj.isDeleted && !del.any()) {
+	if !ok || len(subj.versions) == 0 || (!subj.active() && !del.any()) {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
@@ -467,13 +529,24 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 	req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
 	subject := req.PathValue("subject")
 
-	var body sr.Schema
+	var body struct {
+		sr.Schema
+		ID      *int `json:"id"`
+		Version *int `json:"version"`
+	}
 	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
 		return
 	}
+	reqID, reqVersion := -1, 0
+	if body.ID != nil {
+		reqID = *body.ID
+	}
+	if body.Version != nil {
+		reqVersion = *body.Version
+	}
 
-	id, _, err := r.RegisterSchema(subject, body)
+	id, _, err := r.register(subject, body.Schema, reqID, reqVersion)
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
@@ -484,43 +557,39 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 // handleGetSubjectSchemaByVersion emulates GET /subjects/{subject}/versions/{version}
 // to return a specific schema version for a subject.
 func (r *Registry) handleGetSubjectSchemaByVersion(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	versionStr := req.PathValue("version")
-	del := parseDeleted(req)
+	if ss, ok := r.subjectVersion(w, req); ok {
+		respondJSON(w, http.StatusOK, ss)
+	}
+}
 
-	version, err := r.resolveVersion(subject, versionStr, del.any())
+// Returns the version that GET /subjects/{subject}/versions/{version} and its
+// /schema route ask for, or writes the error and returns false.
+func (r *Registry) subjectVersion(w http.ResponseWriter, req *http.Request) (sr.SubjectSchema, bool) {
+	subject := req.PathValue("subject")
+	// As in Confluent's registry, this route has ?deleted and not ?deletedOnly.
+	deleted := req.URL.Query().Get("deleted") == "true"
+	version, err := parseVersion(req.PathValue("version"))
 	if err != nil {
 		r.handleAPIError(w, err)
-		return
+		return sr.SubjectSchema{}, false
 	}
 
-	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	ss, ok := r.lookupVersionLocked(subject, version, deleted)
 	if !ok {
-		r.handleAPIError(w, errVersionNotFound(subject, version))
-		return
+		r.handleAPIError(w, r.errMissingVersionLocked(subject, version, deleted))
 	}
-	respondJSON(w, http.StatusOK, sch)
+	return ss, ok
 }
 
 // handleGetSubjectRawSchemaByVersion emulates GET /subjects/{subject}/versions/{version}/schema
 // to return the raw schema string for a specific version.
 func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	versionStr := req.PathValue("version")
-	del := parseDeleted(req)
-
-	version, err := r.resolveVersion(subject, versionStr, del.any())
-	if err != nil {
-		r.handleAPIError(w, err)
-		return
+	if ss, ok := r.subjectVersion(w, req); ok {
+		respondJSON(w, http.StatusOK, ss.Schema.Schema)
 	}
-
-	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
-	if !ok {
-		r.handleAPIError(w, errVersionNotFound(subject, version))
-		return
-	}
-	respondJSON(w, http.StatusOK, sch.Schema)
 }
 
 // handleGetReferencedBy emulates GET /subjects/{subject}/versions/{version}/referencedby
@@ -528,9 +597,10 @@ func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req
 func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
 	versionStr := req.PathValue("version")
-	del := parseDeleted(req)
+	// As in Confluent's registry, this route has ?deleted and not ?deletedOnly.
+	deleted := req.URL.Query().Get("deleted") == "true"
 
-	version, err := r.resolveVersion(subject, versionStr, del.any())
+	asked, err := parseVersion(versionStr)
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
@@ -539,28 +609,27 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if the target schema exists
-	_, exists := r.getSchemaBySubjectVersionLocked(subject, version, del.any())
-	if !exists {
-		r.handleAPIError(w, errVersionNotFound(subject, version))
+	// Find the target schema. As in Confluent's registry, a numbered version
+	// is found even if it is soft-deleted, and latest honors ?deleted.
+	includeTarget := deleted || asked != -1
+	target, ok := r.lookupVersionLocked(subject, asked, includeTarget)
+	if !ok {
+		r.handleAPIError(w, r.errMissingVersionLocked(subject, asked, includeTarget))
 		return
 	}
+	subject, version := target.Subject, target.Version
 
 	// Find all schemas that reference this target schema
 	referencingIDs := make([]int, 0) // Initialize as empty slice, not nil
-	for _, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
-			continue
-		}
-
+	for referrer, subj := range r.subjects {
 		for _, versionData := range subj.versions {
-			if !del.keep(versionData.isDeleted) {
+			if !deleted && versionData.isDeleted {
 				continue
 			}
 
 			// Check if this schema references our target
 			for _, ref := range versionData.schema.References {
-				if ref.Subject == subject && ref.Version == version {
+				if refSubject(referrer, ref.Subject) == subject && ref.Version == version {
 					referencingIDs = append(referencingIDs, versionData.schema.ID)
 					break // Only add each schema ID once
 				}
@@ -597,16 +666,17 @@ func (r *Registry) handleDeleteVersion(w http.ResponseWriter, req *http.Request)
 	verStr := req.PathValue("version")
 	permanent := req.URL.Query().Get("permanent") == "true"
 
-	version, err := strconv.Atoi(verStr)
+	version, err := parseVersion(verStr)
 	if err != nil {
-		r.handleAPIError(w, errInvalidVersion("invalid version"))
+		r.handleAPIError(w, err)
 		return
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if err := r.deleteVersion(subject, version, permanent); err != nil {
+	version, err = r.deleteVersion(subject, version, permanent)
+	if err != nil {
 		r.handleAPIError(w, err)
 		return
 	}
@@ -631,39 +701,49 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	del := parseDeleted(req)
+	// As in Confluent's registry, this route has ?deleted and not ?deletedOnly.
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if subject exists and is not soft-deleted
-	subj, ok := r.subjects[subject]
-	if !ok || (subj.isDeleted && !del.any()) {
-		r.handleAPIError(w, errSubjectNotFound(subject))
+	// Look the schema up in subject, and in the same name in every other
+	// context, as Confluent's registry does.
+	match, ok := r.findUsingContextsLocked(subject, func(s string) (sr.SubjectSchema, bool) {
+		subj, ok := r.subjects[s]
+		if !ok || (!subj.active() && !deleted) {
+			return sr.SubjectSchema{}, false
+		}
+		for _, versionData := range subj.versions {
+			if (deleted || !versionData.isDeleted) && r.schemasEqual(versionData.schema.Schema, body) {
+				return versionData.schema, true
+			}
+		}
+		return sr.SubjectSchema{}, false
+	})
+	if !ok {
+		if subj, exists := r.subjects[subject]; !exists || (!subj.active() && !deleted) {
+			r.handleAPIError(w, errSubjectNotFound(subject))
+			return
+		}
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
 
-	for v, versionData := range subj.versions {
-		if !del.keep(versionData.isDeleted) || !r.schemasEqual(versionData.schema.Schema, body) {
-			continue
-		}
-		resp := map[string]any{
-			"subject": subject,
-			"version": v,
-			"id":      versionData.schema.ID,
-			"guid":    versionData.schema.GUID,
-			"schema":  versionData.schema.Schema.Schema,
-		}
-		if versionData.schema.Type != sr.TypeAvro {
-			resp["schemaType"] = versionData.schema.Type.String()
-		}
-		if len(versionData.schema.References) > 0 {
-			resp["references"] = versionData.schema.References
-		}
-		respondJSON(w, http.StatusOK, resp)
-		return
+	resp := map[string]any{
+		"subject": match.Subject,
+		"version": match.Version,
+		"id":      match.ID,
+		"guid":    match.GUID,
+		"schema":  match.Schema.Schema,
 	}
-	r.handleAPIError(w, errSchemaNotFound())
+	if match.Type != sr.TypeAvro {
+		resp["schemaType"] = match.Type.String()
+	}
+	if len(match.References) > 0 {
+		resp["references"] = match.References
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // handleCheckCompatibility emulates POST /compatibility/subjects/{subject}/versions/{version}
@@ -684,80 +764,128 @@ func (r *Registry) handleCheckCompatibility(w http.ResponseWriter, req *http.Req
 
 // handleGetGlobalConfig emulates GET /config to retrieve the global
 // compatibility level.
-func (r *Registry) handleGetGlobalConfig(w http.ResponseWriter, _ *http.Request) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.globalCompat})
+func (r *Registry) handleGetGlobalConfig(w http.ResponseWriter, req *http.Request) {
+	r.getConfig(w, req, "")
 }
 
 // handlePutGlobalConfig emulates PUT /config to update the global
 // compatibility level.
 func (r *Registry) handlePutGlobalConfig(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	var body struct {
-		Compatibility sr.CompatibilityLevel `json:"compatibility"`
-	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
-		return
-	}
-	r.mu.Lock()
-	r.globalCompat = body.Compatibility
-	r.mu.Unlock()
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibility": body.Compatibility})
+	r.putConfig(w, req, "")
 }
 
 // handleGetSubjectConfig emulates GET /config/{subject} to retrieve a
 // subject's compatibility level.
 func (r *Registry) handleGetSubjectConfig(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	useDefault := req.URL.Query().Get("defaultToGlobal") != "false"
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	subj, ok := r.subjects[subject]
-	switch {
-	case ok && subj.compatLevel != nil:
-		respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": *subj.compatLevel})
-	case useDefault:
-		respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.globalCompat})
-	default:
-		r.handleAPIError(w, errSubjectNotFound(subject))
-	}
+	r.getConfig(w, req, req.PathValue("subject"))
 }
 
 // handlePutSubjectConfig emulates PUT /config/{subject} to update a subject's
 // compatibility level.
 func (r *Registry) handlePutSubjectConfig(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	subject := req.PathValue("subject")
-
-	var body struct {
-		Compatibility sr.CompatibilityLevel `json:"compatibility"`
-	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
-		return
-	}
-	if err := r.SetCompat(subject, body.Compatibility); err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
-		return
-	}
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibility": body.Compatibility})
+	r.putConfig(w, req, req.PathValue("subject"))
 }
 
-// handleDeleteSubjectConfig emulates DELETE /config/{subject} to remove a
-// subject-specific compatibility level, reverting it to the global default.
-func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
+// Serves GET /config and GET /config/{subject}, as Confluent's registry does:
+// with ?defaultToGlobal=true, the level that applies to subject, else the level
+// set for subject. A subject without a level returns 40408, and the global
+// level is the default until it is set.
+func (r *Registry) getConfig(w http.ResponseWriter, req *http.Request, subject string) {
+	defaultToGlobal := req.URL.Query().Get("defaultToGlobal") == "true"
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	level, ok := r.compats[subject]
+	switch {
+	case defaultToGlobal:
+		level = r.compatInScopeLocked(subject)
+	case !ok && subject == "":
+		level = r.defaultCompat
+	case !ok:
+		r.handleAPIError(w, errCompatNotConfigured(subject))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.levelOf(level)})
+}
+
+// Serves PUT /config and PUT /config/{subject}. As in Confluent's registry, a
+// body without a level keeps the level that is set, a null level removes it,
+// and a subject in read-only mode refuses the change.
+func (r *Registry) putConfig(w http.ResponseWriter, req *http.Request, subject string) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
+	var body struct {
+		Compatibility json.RawMessage `json:"compatibility"`
+	}
+	var level sr.CompatibilityLevel
+	err := decodeJSONRequest(req.Body, &body)
+	if err == nil && body.Compatibility != nil && string(body.Compatibility) != "null" {
+		if err = json.Unmarshal(body.Compatibility, &level); err == nil && level.String() == "" {
+			err = errInvalidCompatLevel()
+		}
+	}
+	if err != nil {
+		r.handleAPIError(w, errInvalidCompatLevel())
+		return
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if subj, ok := r.subjects[subject]; ok {
-		subj.compatLevel = nil
+	if err := r.errReadOnlyLocked(subject); err != nil {
+		r.handleAPIError(w, err)
+		return
 	}
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.globalCompat})
+	if body.Compatibility == nil {
+		level = r.compats[subject]
+	}
+	r.compats[subject] = level
+	resp := make(map[string]sr.CompatibilityLevel)
+	if level != 0 {
+		resp["compatibility"] = level
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// handleDeleteGlobalConfig emulates DELETE /config, which removes the global
+// compatibility level and returns the level that was in effect, as Confluent's
+// registry does.
+func (r *Registry) handleDeleteGlobalConfig(w http.ResponseWriter, _ *http.Request) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.errReadOnlyLocked(""); err != nil {
+		r.handleAPIError(w, err)
+		return
+	}
+	level, ok := r.compats[""]
+	if !ok {
+		level = r.defaultCompat
+	}
+	delete(r.compats, "")
+	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.levelOf(level)})
+}
+
+// handleDeleteSubjectConfig emulates DELETE /config/{subject}, which removes the
+// compatibility level of a subject and returns it, as Confluent's registry
+// does. A subject without a level returns 40401.
+func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Request) {
+	subject := req.PathValue("subject")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	level, ok := r.compats[subject]
+	if !ok {
+		r.handleAPIError(w, errSubjectNotFound(subject))
+		return
+	}
+	if err := r.errReadOnlyLocked(subject); err != nil {
+		r.handleAPIError(w, err)
+		return
+	}
+	delete(r.compats, subject)
+	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.levelOf(level)})
 }
 
 /* -------------------------------------------------------------------------
@@ -765,77 +893,86 @@ func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Re
    ------------------------------------------------------------------------- */
 
 // handleGetMode emulates GET /mode and returns the global mode.
-func (r *Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
+func (r *Registry) handleGetMode(w http.ResponseWriter, req *http.Request) {
+	r.getMode(w, req, "")
+}
+
+// handleGetSubjectMode emulates GET /mode/{subject}.
+func (r *Registry) handleGetSubjectMode(w http.ResponseWriter, req *http.Request) {
+	r.getMode(w, req, req.PathValue("subject"))
+}
+
+// Serves GET /mode and GET /mode/{subject}, as Confluent's registry does: with
+// ?defaultToGlobal=true, the mode that applies to subject, else the mode set
+// for subject. A subject without a mode returns 40409, and the global mode is
+// READWRITE until it is set.
+func (r *Registry) getMode(w http.ResponseWriter, req *http.Request, subject string) {
+	defaultToGlobal := req.URL.Query().Get("defaultToGlobal") == "true"
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
+
+	mode, ok := r.modes[subject]
+	switch {
+	case defaultToGlobal:
+		mode = r.modeInScopeLocked(subject)
+	case !ok && subject == "":
+		mode = sr.ModeReadWrite
+	case !ok:
+		r.handleAPIError(w, errModeNotConfigured(subject))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": mode})
 }
 
 // handlePutMode emulates PUT /mode and sets the global mode. The ?force query
 // parameter is accepted but not enforced: the mock does not restrict setting
 // IMPORT mode on a non-empty registry.
 func (r *Registry) handlePutMode(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	var body struct {
-		Mode sr.Mode `json:"mode"`
-	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidMode(err.Error()))
-		return
-	}
-	r.mu.Lock()
-	r.globalMode = body.Mode
-	r.mu.Unlock()
-	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
-}
-
-// handleGetSubjectMode emulates GET /mode/{subject}. If the subject has no mode
-// override it falls back to the global mode unless defaultToGlobal=false.
-func (r *Registry) handleGetSubjectMode(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	useDefault := req.URL.Query().Get("defaultToGlobal") != "false"
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	subj, ok := r.subjects[subject]
-	switch {
-	case ok && subj.mode != nil:
-		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": *subj.mode})
-	case useDefault:
-		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
-	default:
-		r.handleAPIError(w, errSubjectNotFound(subject))
-	}
+	r.putMode(w, req, "")
 }
 
 // handlePutSubjectMode emulates PUT /mode/{subject} and sets a per-subject mode.
 // As with the global setter, ?force is accepted but not enforced.
 func (r *Registry) handlePutSubjectMode(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	subject := req.PathValue("subject")
+	r.putMode(w, req, req.PathValue("subject"))
+}
 
+// Serves PUT /mode and PUT /mode/{subject}. As in Confluent's registry, a body
+// without a mode removes the mode that is set.
+func (r *Registry) putMode(w http.ResponseWriter, req *http.Request, subject string) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
 	var body struct {
-		Mode sr.Mode `json:"mode"`
+		Mode *sr.Mode `json:"mode"`
 	}
 	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidMode(err.Error()))
 		return
 	}
-	if err := r.SetMode(subject, body.Mode); err != nil {
-		r.handleAPIError(w, errInvalidMode(err.Error()))
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if body.Mode == nil {
+		delete(r.modes, subject)
+		respondJSON(w, http.StatusOK, map[string]sr.Mode{})
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
+	r.modes[subject] = *body.Mode
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": *body.Mode})
 }
 
 // handleDeleteMode emulates DELETE /mode, resetting the global mode to the
 // default (READWRITE) and returning the mode that was in effect.
 func (r *Registry) handleDeleteMode(w http.ResponseWriter, _ *http.Request) {
 	r.mu.Lock()
-	deleted := r.globalMode
-	r.globalMode = sr.ModeReadWrite
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+
+	deleted, ok := r.modes[""]
+	if !ok {
+		deleted = sr.ModeReadWrite
+	}
+	delete(r.modes, "")
 	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
 }
 
@@ -847,13 +984,12 @@ func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Requ
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	subj, ok := r.subjects[subject]
-	if !ok || subj.mode == nil {
+	deleted, ok := r.modes[subject]
+	if !ok {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
-	deleted := *subj.mode
-	subj.mode = nil
+	delete(r.modes, subject)
 	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
 }
 
@@ -869,21 +1005,8 @@ func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 
 	r.mu.RLock()
 	ctxSet := map[string]bool{".": true}
-	for subject, subj := range r.subjects {
-		if subj.isDeleted {
-			continue
-		}
-		hasActive := false
-		for _, vd := range subj.versions {
-			if !vd.isDeleted {
-				hasActive = true
-				break
-			}
-		}
-		if !hasActive {
-			continue
-		}
-		ctxSet[subjectContext(subject)] = true
+	for c := range r.contexts {
+		ctxSet[c] = true
 	}
 	r.mu.RUnlock()
 
@@ -917,21 +1040,24 @@ func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 
 // handleDeleteContext emulates DELETE /contexts/{context}.
 func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request) {
-	ctx := req.PathValue("context")
+	ctx, ok := normalizeContext(req.PathValue("context"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, http.StatusBadRequest, fmt.Sprintf("Context name '%s' cannot contain a colon", ctx))
+		return
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// As in Confluent's registry, a soft-deleted subject keeps its context.
 	for subject, subj := range r.subjects {
-		if subj.isDeleted {
-			continue
-		}
-		if subjectContext(subject) == ctx {
+		if len(subj.versions) > 0 && subjectContext(subject) == ctx {
 			r.handleAPIError(w, errContextNotEmpty(ctx))
 			return
 		}
 	}
 
+	delete(r.contexts, ctx)
 	w.WriteHeader(http.StatusNoContent)
 }
 

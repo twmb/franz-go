@@ -12,5 +12,5 @@ func WithAuth(value string) Option {
 
 // WithGlobalCompat sets the default compatibility level returned by /config.
 func WithGlobalCompat(c sr.CompatibilityLevel) Option {
-	return func(r *Registry) { r.globalCompat = c }
+	return func(r *Registry) { r.defaultCompat = c }
 }
