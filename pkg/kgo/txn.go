@@ -1187,11 +1187,19 @@ func (cl *Client) recoverableProducerIDErr(err error) bool {
 		return true
 	}
 
+	// We should not receive TRANSACTION_ABORTABLE below EndTxn and
+	// AddOffsetsToTxn v4 (KIP-890), and Kafka's coordinator does not send
+	// it for either request. We treat it as abortable at every version
+	// anyway, as Java does, for brokers that send it.
+	if errors.Is(ke, kerr.TransactionAbortable) {
+		return true
+	}
+
 	if cl.producer.tx890p2.Load() {
 		// Under KIP-890 part 2 (transaction.version=2 in effect for
 		// this client's transactions), InvalidProducerIDMapping and
-		// InvalidProducerEpoch are not recoverable; only
-		// UnknownProducerID and TransactionAbortable are.
+		// InvalidProducerEpoch are not recoverable; UnknownProducerID
+		// is.
 		//
 		// We gate on the mode our transactions actually ran in, NOT
 		// on broker-advertised EndTxn versions: a 4.0+ broker
@@ -1200,7 +1208,7 @@ func (cl *Client) recoverableProducerIDErr(err error) bool {
 		// semantics hold and the KIP-360/KIP-588 re-init below is the
 		// recovery. Note that after a transaction timeout aborts our
 		// transaction, Kafka 2.6+ fences that re-init, which is fatal.
-		return errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.TransactionAbortable)
+		return errors.Is(ke, kerr.UnknownProducerID)
 	}
 	kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
 	kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
