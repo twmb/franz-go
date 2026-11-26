@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"hash/crc32"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -6085,4 +6086,265 @@ func TestKadmLogDirsRetriedShard(t *testing.T) {
 			t.Errorf("%s with a retried shard: %d replicas, err %v; want 4", test.key.Name(), n, err)
 		}
 	}
+}
+
+// TestIssue1597 verifies that KIP-360 InitProducerID with a stale epoch
+// fences a producer that was fenced by a newer producer or ended normally,
+// instead of bumping the epoch and fencing the newer producer, while still
+// allowing single-shot recovery after a transaction timeout bump.
+func TestIssue1597(t *testing.T) {
+	t.Parallel()
+
+	addPart := func(t *testing.T, cl *kgo.Client, txid, topic string, pid int64, epoch int16) {
+		t.Helper()
+		req := kmsg.NewAddPartitionsToTxnRequest()
+		req.TransactionalID = txid
+		req.ProducerID = pid
+		req.ProducerEpoch = epoch
+		rt := kmsg.NewAddPartitionsToTxnRequestTopic()
+		rt.Topic = topic
+		rt.Partitions = []int32{0}
+		req.Topics = append(req.Topics, rt)
+		resp, err := req.RequestWith(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("AddPartitionsToTxn: %v", err)
+		}
+		if ec := resp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+			t.Fatalf("AddPartitionsToTxn error: %v", kerr.ErrorForCode(ec))
+		}
+	}
+
+	waitTimeout := func(t *testing.T, c *Cluster, txid string, oldPID int64, oldEpoch int16) (int64, int16) {
+		t.Helper()
+		for start := time.Now(); ; {
+			if time.Since(start) > 5*time.Second {
+				t.Fatalf("transaction timeout never fired for %s", txid)
+			}
+			var done bool
+			var pid int64
+			var epoch int16
+			c.admin(func() {
+				p := c.pids.byTxid[txid]
+				if p != nil && !p.inTx && (p.id != oldPID || p.epoch > oldEpoch) {
+					done = true
+					pid = p.id
+					epoch = p.epoch
+				}
+			})
+			if done {
+				return pid, epoch
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	t.Run("fenced_by_newer_producer", func(t *testing.T) {
+		t.Parallel()
+		const topic = "issue-1597-fenced"
+		const txid = "txid-1597-fenced"
+		c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		raw := newPlainClient(t, c)
+		v3 := kversion.Stable()
+		v3.SetMaxKeyVersion(22, 3) // InitProducerID key = 22
+		rawV3 := newPlainClient(t, c, kgo.MaxVersions(v3))
+
+		// Producer A starts a transaction at (pid, epoch=0).
+		clA := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.TransactionalID(txid))
+		if err := clA.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		if err := clA.ProduceSync(ctx, kgo.StringRecord("from-A")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		var pidA int64
+		var epochA int16
+		c.admin(func() {
+			p := c.pids.byTxid[txid]
+			pidA, epochA = p.id, p.epoch
+		})
+
+		// Producer B initializes the same transactional ID, aborting A's
+		// transaction and bumping the epoch ahead of A.
+		clB := newPlainClient(t, c, kgo.DefaultProduceTopic(topic), kgo.TransactionalID(txid))
+		if err := clB.BeginTransaction(); err != nil {
+			t.Fatal(err)
+		}
+		var pidB int64
+		var epochB int16
+		c.admin(func() {
+			p := c.pids.byTxid[txid]
+			pidB, epochB = p.id, p.epoch
+		})
+		if pidB != pidA || epochB <= epochA {
+			t.Fatalf("expected B to fence A on pid %d (> %d), got pid=%d epoch=%d", pidA, epochA, pidB, epochB)
+		}
+
+		// A's stale KIP-360 InitProducerID must be fenced: PRODUCER_FENCED on
+		// v4+, INVALID_PRODUCER_EPOCH on v3.
+		if code := initProducerID(t, raw, txid, pidA, epochA, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("v4+ stale InitProducerID: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+		if code := initProducerID(t, rawV3, txid, pidA, epochA, 60000).ErrorCode; code != kerr.InvalidProducerEpoch.Code {
+			t.Fatalf("v3 stale InitProducerID: got %v, want INVALID_PRODUCER_EPOCH", kerr.ErrorForCode(code))
+		}
+
+		// B's epoch must be untouched and B's transaction must commit cleanly.
+		var epochNow int16
+		c.admin(func() { epochNow = c.pids.byTxid[txid].epoch })
+		if epochNow != epochB {
+			t.Fatalf("stale InitProducerID mutated B's epoch from %d to %d", epochB, epochNow)
+		}
+		if err := clB.ProduceSync(ctx, kgo.StringRecord("from-B")).FirstErr(); err != nil {
+			t.Fatalf("B produce: %v", err)
+		}
+		if err := clB.EndTransaction(ctx, kgo.TryCommit); err != nil {
+			t.Fatalf("B commit: %v", err)
+		}
+
+		// A fresh idle init (without an open txn) also fences the older epoch.
+		if code := initProducerID(t, raw, txid, -1, -1, 60000).ErrorCode; code != 0 {
+			t.Fatalf("fresh InitProducerID: %v", kerr.ErrorForCode(code))
+		}
+		if code := initProducerID(t, raw, txid, pidB, epochB, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("stale InitProducerID after idle init: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+
+		consumer := newPlainClient(t, c, kgo.ConsumeTopics(topic), kgo.FetchIsolationLevel(kgo.ReadCommitted()))
+		var vals []string
+		for len(vals) == 0 {
+			fs := consumer.PollFetches(ctx)
+			if err := fs.Err0(); err != nil {
+				t.Fatalf("consume: %v", err)
+			}
+			fs.EachRecord(func(r *kgo.Record) { vals = append(vals, string(r.Value)) })
+		}
+		if len(vals) != 1 || vals[0] != "from-B" {
+			t.Fatalf("read_committed saw %v, want [from-B]", vals)
+		}
+	})
+
+	t.Run("timeout_recovery_single_shot_and_overridden", func(t *testing.T) {
+		t.Parallel()
+		const topic = "issue-1597-timeout"
+		c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+		cl := newPlainClient(t, c)
+
+		// Single-shot timeout recovery: first stale InitProducerID recovers,
+		// second replay of that stale epoch is fenced.
+		const txid1 = "txid-1597-once"
+		r1 := initProducerID(t, cl, txid1, -1, -1, 1)
+		if r1.ErrorCode != 0 {
+			t.Fatalf("init: %v", kerr.ErrorForCode(r1.ErrorCode))
+		}
+		addPart(t, cl, txid1, topic, r1.ProducerID, r1.ProducerEpoch)
+		_, bumped := waitTimeout(t, c, txid1, r1.ProducerID, r1.ProducerEpoch)
+
+		rec := initProducerID(t, cl, txid1, r1.ProducerID, r1.ProducerEpoch, 60000)
+		if rec.ErrorCode != 0 || rec.ProducerEpoch <= bumped {
+			t.Fatalf("first timeout recovery: err=%v epoch=%d (want > %d)", kerr.ErrorForCode(rec.ErrorCode), rec.ProducerEpoch, bumped)
+		}
+		if code := initProducerID(t, cl, txid1, r1.ProducerID, r1.ProducerEpoch, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("second stale InitProducerID after recovery: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+
+		// If a new producer takes over after timeout before the timed-out
+		// producer recovers, the timed-out producer is fenced.
+		const txid2 = "txid-1597-overridden"
+		r2 := initProducerID(t, cl, txid2, -1, -1, 1)
+		if r2.ErrorCode != 0 {
+			t.Fatalf("init2: %v", kerr.ErrorForCode(r2.ErrorCode))
+		}
+		addPart(t, cl, txid2, topic, r2.ProducerID, r2.ProducerEpoch)
+		waitTimeout(t, c, txid2, r2.ProducerID, r2.ProducerEpoch)
+
+		takeover := initProducerID(t, cl, txid2, -1, -1, 60000)
+		if takeover.ErrorCode != 0 {
+			t.Fatalf("takeover init: %v", kerr.ErrorForCode(takeover.ErrorCode))
+		}
+		if code := initProducerID(t, cl, txid2, r2.ProducerID, r2.ProducerEpoch, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("stale InitProducerID after takeover: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+	})
+
+	t.Run("timeout_recovery_persists_across_restart", func(t *testing.T) {
+		t.Parallel()
+		const topic = "issue-1597-persist"
+		const txid = "txid-1597-persist"
+		mfs := newTestMemFS()
+		c := newCluster(t, NumBrokers(1), SeedTopics(1, topic), mfs.opt())
+		cl := newPlainClient(t, c)
+
+		r := initProducerID(t, cl, txid, -1, -1, 1)
+		if r.ErrorCode != 0 {
+			t.Fatalf("init: %v", kerr.ErrorForCode(r.ErrorCode))
+		}
+		addPart(t, cl, txid, topic, r.ProducerID, r.ProducerEpoch)
+		_, bumped := waitTimeout(t, c, txid, r.ProducerID, r.ProducerEpoch)
+
+		// Restart before recovery: timeout recovery must still succeed once.
+		c.Close()
+		c = newCluster(t, NumBrokers(1), mfs.opt())
+		cl = newPlainClient(t, c)
+		rec := initProducerID(t, cl, txid, r.ProducerID, r.ProducerEpoch, 60000)
+		if rec.ErrorCode != 0 || rec.ProducerEpoch <= bumped {
+			t.Fatalf("post-restart recovery: err=%v epoch=%d (want > %d)", kerr.ErrorForCode(rec.ErrorCode), rec.ProducerEpoch, bumped)
+		}
+
+		// Restart again after recovery: stale epoch must now be fenced.
+		c.Close()
+		c = newCluster(t, NumBrokers(1), mfs.opt())
+		cl = newPlainClient(t, c)
+		if code := initProducerID(t, cl, txid, r.ProducerID, r.ProducerEpoch, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("post-recovery replay after restart: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+	})
+
+	t.Run("epoch_overflow", func(t *testing.T) {
+		t.Parallel()
+		const topic = "issue-1597-overflow"
+		c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+		cl := newPlainClient(t, c)
+
+		// Timeout at math.MaxInt16-1 rotates the PID; KIP-360 recovery with
+		// the pre-rotation (pid, math.MaxInt16-1) succeeds once.
+		const txidTimeout = "txid-1597-ovf-timeout"
+		r1 := initProducerID(t, cl, txidTimeout, -1, -1, 1)
+		if r1.ErrorCode != 0 {
+			t.Fatalf("init1: %v", kerr.ErrorForCode(r1.ErrorCode))
+		}
+		const ovfEpoch = math.MaxInt16 - 1
+		c.admin(func() { c.pids.byTxid[txidTimeout].epoch = ovfEpoch })
+		addPart(t, cl, txidTimeout, topic, r1.ProducerID, ovfEpoch)
+		newPID, newEpoch := waitTimeout(t, c, txidTimeout, r1.ProducerID, ovfEpoch)
+		if newPID == r1.ProducerID || newEpoch != 0 {
+			t.Fatalf("expected PID rotation to epoch 0, got pid=%d epoch=%d", newPID, newEpoch)
+		}
+
+		rec := initProducerID(t, cl, txidTimeout, r1.ProducerID, ovfEpoch, 60000)
+		if rec.ErrorCode != 0 || rec.ProducerID != newPID || rec.ProducerEpoch <= newEpoch {
+			t.Fatalf("overflow timeout recovery: err=%v pid=%d epoch=%d", kerr.ErrorForCode(rec.ErrorCode), rec.ProducerID, rec.ProducerEpoch)
+		}
+		if code := initProducerID(t, cl, txidTimeout, r1.ProducerID, ovfEpoch, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("second overflow recovery: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+
+		// Fencing at math.MaxInt16-1 via another InitProducerID rotates the PID
+		// without permitting KIP-360 recovery from the pre-rotation (pid, epoch).
+		const txidFence = "txid-1597-ovf-fence"
+		r2 := initProducerID(t, cl, txidFence, -1, -1, 60000)
+		if r2.ErrorCode != 0 {
+			t.Fatalf("init2: %v", kerr.ErrorForCode(r2.ErrorCode))
+		}
+		c.admin(func() { c.pids.byTxid[txidFence].epoch = ovfEpoch })
+		takeover := initProducerID(t, cl, txidFence, -1, -1, 60000)
+		if takeover.ErrorCode != 0 || takeover.ProducerID == r2.ProducerID {
+			t.Fatalf("takeover at overflow: err=%v pid=%d", kerr.ErrorForCode(takeover.ErrorCode), takeover.ProducerID)
+		}
+		if code := initProducerID(t, cl, txidFence, r2.ProducerID, ovfEpoch, 60000).ErrorCode; code != kerr.ProducerFenced.Code {
+			t.Fatalf("stale InitProducerID after overflow fence: got %v, want PRODUCER_FENCED", kerr.ErrorForCode(code))
+		}
+	})
 }

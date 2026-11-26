@@ -440,14 +440,16 @@ type (
 	// a restart finishes the end if no init follows. "expire" drops the
 	// PID.
 	pidLogEntry struct {
-		Type    string          `json:"type"` // init, begin, prepare, expire
-		PID     int64           `json:"pid"`
-		Epoch   int16           `json:"epoch"`
-		TxID    string          `json:"txid,omitempty"`
-		Timeout int32           `json:"timeout,omitempty"`
-		Commit  *bool           `json:"commit,omitempty"`
-		PrevID  int64           `json:"prev,omitempty"`
-		Offsets stagedTxOffsets `json:"offsets,omitempty"`
+		Type         string          `json:"type"` // init, begin, prepare, expire
+		PID          int64           `json:"pid"`
+		Epoch        int16           `json:"epoch"`
+		TxID         string          `json:"txid,omitempty"`
+		Timeout      int32           `json:"timeout,omitempty"`
+		Commit       *bool           `json:"commit,omitempty"`
+		PrevID       int64           `json:"prev,omitempty"`
+		TimeoutID    int64           `json:"tpid,omitempty"`
+		TimeoutEpoch *int16          `json:"tepoch,omitempty"`
+		Offsets      stagedTxOffsets `json:"offsets,omitempty"`
 	}
 )
 
@@ -1844,6 +1846,11 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) (map[int64]pidLogEntry, error
 				txid:       entry.TxID,
 				txTimeout:  entry.Timeout,
 				lastActive: time.Now(),
+			}
+			if entry.TimeoutEpoch != nil {
+				pidinf.hasTimeout = true
+				pidinf.timeoutID = entry.TimeoutID
+				pidinf.timeoutEpoch = *entry.TimeoutEpoch
 			}
 			if entry.Commit != nil {
 				pidinf.ended = true

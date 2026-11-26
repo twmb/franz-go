@@ -1093,11 +1093,12 @@ func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch 
 func TestTxnInitProducerID(t *testing.T) {
 	t.Parallel()
 
-	c := newCluster(t, NumBrokers(1))
+	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t-init-stale"))
 	cl := newPlainClient(t, c)
 
-	// Init with a transactional ID.
-	resp := initProducerID(t, cl, "txid-stale", -1, -1, 60000)
+	// Init with a short timeout and open a transaction so the broker's
+	// timeout timer aborts it and bumps the epoch ahead of the client.
+	resp := initProducerID(t, cl, "txid-stale", -1, -1, 1)
 	if resp.ErrorCode != 0 {
 		t.Fatalf("init: %v", kerr.ErrorForCode(resp.ErrorCode))
 	}
@@ -1107,16 +1108,35 @@ func TestTxnInitProducerID(t *testing.T) {
 		t.Fatalf("expected epoch 0, got %d", epoch)
 	}
 
-	// Simulate a timeout bump: re-init with the same txid (creates
-	// existing entry), then bump epoch via another init. This gives
-	// us a server epoch that's ahead of the client.
-	resp2 := initProducerID(t, cl, "txid-stale", pid, epoch, 60000)
-	if resp2.ErrorCode != 0 {
-		t.Fatalf("bump: %v", kerr.ErrorForCode(resp2.ErrorCode))
+	addReq := kmsg.NewAddPartitionsToTxnRequest()
+	addReq.TransactionalID = "txid-stale"
+	addReq.ProducerID = pid
+	addReq.ProducerEpoch = epoch
+	addT := kmsg.NewAddPartitionsToTxnRequestTopic()
+	addT.Topic = "t-init-stale"
+	addT.Partitions = []int32{0}
+	addReq.Topics = append(addReq.Topics, addT)
+	if addResp, err := addReq.RequestWith(context.Background(), cl); err != nil {
+		t.Fatalf("add partitions: %v", err)
+	} else if ec := addResp.Topics[0].Partitions[0].ErrorCode; ec != 0 {
+		t.Fatalf("add partitions error: %v", kerr.ErrorForCode(ec))
 	}
-	serverEpoch := resp2.ProducerEpoch
-	if serverEpoch <= epoch {
-		t.Fatalf("expected bumped epoch > %d, got %d", epoch, serverEpoch)
+
+	var serverEpoch int16
+	for start := time.Now(); ; {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("transaction timeout never bumped epoch")
+		}
+		var inTx bool
+		c.admin(func() {
+			p := c.pids.byTxid["txid-stale"]
+			inTx = p.inTx
+			serverEpoch = p.epoch
+		})
+		if !inTx && serverEpoch > epoch {
+			break
+		}
+		time.Sleep(time.Millisecond)
 	}
 
 	// Now try to recover with the STALE epoch (the original one).

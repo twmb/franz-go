@@ -63,6 +63,15 @@ type (
 		// rotation.
 		prevID int64
 
+		// The (id, epoch) that a transaction timeout bumped away from,
+		// so a client recovering via KIP-360 InitProducerID with that
+		// stale epoch succeeds once. Any subsequent epoch bump clears
+		// hasTimeout.
+		hasTimeout   bool
+		timeoutID    int64
+		timeoutEpoch int16
+		timeoutAbort bool
+
 		txid         string
 		txTimeout    int32                        // millis
 		txParts      tps[partData]                // partitions in the transaction, if transactional
@@ -181,7 +190,12 @@ func (pids *pids) updateTimer() {
 			break
 		}
 		if minPid.ending != nil {
+			preID, preEpoch := minPid.id, minPid.epoch
+			wasTimeout := minPid.timeoutAbort
 			if p, ok := minPid.endTx(*minPid.ending, minPid.endEpoch); ok {
+				if wasTimeout {
+					p.hasTimeout, p.timeoutID, p.timeoutEpoch = true, preID, preEpoch
+				}
 				p.persist()
 			}
 			continue
@@ -192,8 +206,12 @@ func (pids *pids) updateTimer() {
 			minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
 		// The abort fences the producer, and Kafka writes its markers
 		// at the bumped epoch.
+		preID, preEpoch := minPid.id, minPid.epoch
 		if p, ok := minPid.endTx(false, minPid.epoch+1); ok {
+			p.hasTimeout, p.timeoutID, p.timeoutEpoch = true, preID, preEpoch
 			p.persist()
+		} else {
+			minPid.timeoutAbort = true
 		}
 	}
 
@@ -315,18 +333,14 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
-	// KIP-360 (v3+): the request's producer ID must be the transactional
-	// ID's, or the one an epoch overflow rotated away from. We accept
-	// the current or a stale epoch (recovery after a timeout bump) and
-	// reject only epochs above ours.
+	// KIP-360 (v3+): accept only the current (id, epoch), or the stale
+	// (id, epoch) that a transaction timeout bumped away from. Any other
+	// stale epoch was fenced by a newer producer or ended normally and
+	// must fail with PRODUCER_FENCED.
 	if req.ProducerID != -1 {
 		switch {
-		case req.ProducerID == pidinf.id:
-			if req.ProducerEpoch > pidinf.epoch {
-				resp.ErrorCode = kerr.ProducerFenced.Code
-				return resp
-			}
-		case req.ProducerID == pidinf.prevID && req.ProducerEpoch >= math.MaxInt16-1:
+		case req.ProducerID == pidinf.id && req.ProducerEpoch == pidinf.epoch:
+		case pidinf.hasTimeout && req.ProducerID == pidinf.timeoutID && req.ProducerEpoch == pidinf.timeoutEpoch:
 		default:
 			resp.ErrorCode = kerr.ProducerFenced.Code
 			return resp
@@ -382,6 +396,10 @@ func (pidinf *pidinfo) logEntry() pidLogEntry {
 		TxID:    pidinf.txid,
 		Timeout: pidinf.txTimeout,
 		PrevID:  pidinf.prevID,
+	}
+	if pidinf.hasTimeout {
+		e.TimeoutID = pidinf.timeoutID
+		e.TimeoutEpoch = &pidinf.timeoutEpoch
 	}
 	if pidinf.ended {
 		e.Commit = &pidinf.lastWasCommit
@@ -873,6 +891,7 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 		return newPidinf
 	}
 	pidinf.epoch++
+	pidinf.hasTimeout = false
 	return pidinf
 }
 
@@ -1036,6 +1055,7 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.txPartBytes = nil
 	pidinf.inTx = false
 	pidinf.ending = nil
+	pidinf.timeoutAbort = false
 	pidinf.ended = true
 	pidinf.lastWasCommit = wasCommit
 	pidinf.lastActive = time.Now()

@@ -42,7 +42,7 @@ Assignors: uniform (default, maps to kgo sticky balancer) and range.
 - State is `inTx` + `ending` + `ended` + `lastWasCommit` (Ongoing; PrepareCommit or PrepareAbort; Empty; CompleteCommit or CompleteAbort), not a state machine. Completion is synchronous unless a marker fails to write: the transaction then stays open with `ending` set, coordinator requests answer CONCURRENT_TRANSACTIONS, and a retry of the end, an InitProducerID, or the transaction timer writes the rest.
 - All txn coordinator epoch errors use PRODUCER_FENCED, mapped to INVALID_PRODUCER_EPOCH for request versions that predate it in the handlers; the produce path and TxnOffsetCommit (group coordinator) use INVALID_PRODUCER_EPOCH.
 - Coordinator requests look the producer up by transactional ID (`txnPid`), never by producer ID alone.
-- InitProducerID accepts epoch <= server epoch, so a stale epoch from a timeout bump recovers instead of retrying forever. Idempotent (nil txid) and unknown (expired) txids get a fresh PID.
+- InitProducerID accepts only the current epoch, or the stale (id, epoch) that a transaction timeout bumped away from so timeout recovery succeeds once while older fenced producers fail with PRODUCER_FENCED. Idempotent (nil txid) and unknown (expired) txids get a fresh PID.
 - Persistence: pids.log `init` entries carry the full producer state; `begin` marks an open transaction. `prepare` records an EndTxn's decision before its markers. A crash restart ends a transaction that session state does not restore as its `prepare` entry decided, else aborts it with a bump that fences the producer.
 - KIP-447: OffsetFetch with `RequireStable=true` returns `UNSTABLE_OFFSET_COMMIT` for each partition an open transaction commits (`pids.hasUnstableOffset`).
 
