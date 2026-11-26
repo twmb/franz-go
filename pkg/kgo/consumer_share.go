@@ -189,7 +189,7 @@ type (
 		ackType     int8 // uniform type for the entire range
 
 		// For a gap, the acquisition lock deadline of the gap's fetch:
-		// expire drops a gap past it. A range built for a request has
+		// expire drops a gap past it. A range built from a record has
 		// none.
 		deadline int64
 	}
@@ -796,7 +796,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 		"piggybacked_ack_records", nLive,
 	)
 
-	// nil ctx on brokerOrErr is intentional: this matches the
+	// nil ctx on shareBroker is intentional: this matches the
 	// classic killSessionOnClose idiom (source.go's
 	// killSessionOnClose). We want to find the broker without
 	// getting stuck waiting on a broker-lookup ctx; the actual
@@ -1857,7 +1857,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 		kmove     kip951move
 		brokers   []BrokerMetadata
 		requeued  int64
-		retry     bool // we requeued acks that a caller may be waiting on
+		retry     bool // we requeued acks
 		now       = time.Now().UnixNano()
 		backoff   time.Duration // of the retry, set at the first retryable partition error
 		renewed   int64         // the lock deadline of the records this request renewed
@@ -1907,17 +1907,13 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 					// record in a request fails the acks of its
 					// whole partition, so those acks fail here.
 					// A gap past its deadline is dropped. The other
-					// gaps go back with the records, or alone; no
-					// caller waits on a gap. If every record
-					// expired, the gaps are dropped with them.
+					// gaps go back with the records, or alone.
 					if backoff == 0 {
 						backoff = sc.cfg.retryBackoff(s.share.ackRequeues + 1)
 					}
 					expired := drained.expire(now + backoff.Nanoseconds())
-					if len(drained.entries) > 0 || len(expired) == 0 {
-						retry = drained.requeue(sc) || retry
-						requeued += int64(len(drained.entries))
-					}
+					retry = drained.requeue(sc) || retry
+					requeued += int64(len(drained.entries))
 					if len(expired) == 0 {
 						continue
 					}
@@ -1984,9 +1980,10 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	sc.enqueueCallback(results, nAcks-requeued)
 
 	// Nothing else sends requeued acks again: with a fetch buffered or
-	// nothing to fetch, the loop sends no request, and FlushAcks would
-	// wait for good. One timer per source signals a flush after the
-	// backoff.
+	// nothing to fetch, the loop sends no request. FlushAcks would wait
+	// for good, and a gap's offsets would stay locked on the broker
+	// until their lock ends. One timer per source signals a flush after
+	// the backoff.
 	if !retry {
 		s.share.ackRequeues = 0
 		return
@@ -2134,11 +2131,10 @@ func (st *shareAckState) deadline() int64 {
 // PurgeTopics), entries fire the left-group callback; gaps are
 // silently dropped.
 //
-// We signal the cursor's source when a caller's acks go back, and return
-// whether any did. The cursor can have moved to another source while the
-// request was in flight, and a source that has a fetch buffered sends
-// nothing until a poll or a signal. Gaps alone get no signal: no caller
-// waits on a gap, so the gaps go out with the source's next request.
+// We signal the cursor's source when anything goes back, and return whether
+// anything did. The cursor can have moved to another source while the
+// request was in flight, and a source that has a fetch buffered, or nothing
+// to fetch, sends nothing until a poll or a signal.
 func (d *cursorAckDrain) requeue(sc *shareConsumer) (requeued bool) {
 	c := d.cursor
 	c.ackMu.Lock()
@@ -2152,10 +2148,11 @@ func (d *cursorAckDrain) requeue(sc *shareConsumer) (requeued bool) {
 	c.pendingAcks = append(c.pendingAcks, d.entries...)
 	c.pendingGaps = append(c.pendingGaps, d.gaps...)
 	c.ackMu.Unlock()
-	if len(d.entries) > 0 {
-		c.source.Load().signalShareAcks()
+	if len(d.entries) == 0 && len(d.gaps) == 0 {
+		return false
 	}
-	return len(d.entries) > 0
+	c.source.Load().signalShareAcks()
+	return true
 }
 
 // enqueueGaps appends gap/release ranges to the cursor's pendingGaps.
@@ -2693,10 +2690,10 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 // alone, so a request from the old source would change the new source's
 // session.
 //
-// Closing dead ends the source's loop wherever the loop waits, and from then
-// on createShareReq builds nothing and shareBroker finds no broker. We then
-// drop the buffered fetch: its records can no longer be acked through this
-// source.
+// Closing dead ends the source's loop wherever the loop waits. After dead is
+// closed, createShareReq builds nothing and shareBroker finds no broker. We
+// drop the buffered fetch after closing dead: its records can no longer be
+// acked through this source.
 //
 // The loop can also be waiting on a response while we run. If the loop
 // buffers that fetch after we look, the loop sees dead and drops the fetch
@@ -2908,13 +2905,11 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, ackErr})
 				} else {
 					// The acks of a record past its deadline fail,
-					// and the others go back with the next fetch.
+					// and the others go back onto the cursor.
 					pa := piggybackAcks[pi]
 					expired := pa.expire(time.Now().UnixNano())
-					if len(pa.entries) > 0 || len(expired) == 0 {
-						pa.requeue(sc)
-						ackRequeued += int64(len(pa.entries))
-					}
+					pa.requeue(sc)
+					ackRequeued += int64(len(pa.entries))
 					if len(expired) > 0 {
 						ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, fmt.Errorf("%w: %w", errShareAckDeadline, ackErr)})
 					}

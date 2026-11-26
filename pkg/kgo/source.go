@@ -3238,8 +3238,9 @@ func (s *source) addShareCursor(add *shareCursor) {
 	//     concurrent c.source-read+signal is a harmless duplicate.
 	//
 	// Either way, every appended entry is followed by a signal to
-	// the cursor's current source. The same reasoning covers
-	// pendingGaps via enqueueGaps' signal.
+	// the cursor's current source. enqueueGaps sends no signal: a gap
+	// goes out with the source's next request, and the check below
+	// signals for the gaps pending now.
 	add.ackMu.Lock()
 	hasPending := len(add.pendingAcks) > 0 || len(add.pendingGaps) > 0
 	add.ackMu.Unlock()
