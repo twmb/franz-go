@@ -589,8 +589,8 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 		ID      *int `json:"id"`
 		Version *int `json:"version"`
 	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
+	if err := decodeJSONRequest(req.Body, &body, errInvalidSchema); err != nil {
+		r.handleAPIError(w, err)
 		return
 	}
 	reqID, reqVersion := -1, 0
@@ -746,8 +746,8 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
 
 	var body sr.Schema
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
+	if err := decodeJSONRequest(req.Body, &body, errInvalidSchema); err != nil {
+		r.handleAPIError(w, err)
 		return
 	}
 
@@ -787,8 +787,8 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 func (r *Registry) handleCheckCompatibility(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
 	var schema sr.Schema
-	if err := decodeJSONRequest(req.Body, &schema); err != nil {
-		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
+	if err := decodeJSONRequest(req.Body, &schema, errInvalidSchema); err != nil {
+		r.handleAPIError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]bool{"is_compatible": true})
@@ -854,14 +854,14 @@ func (r *Registry) putConfig(w http.ResponseWriter, req *http.Request, subject s
 		Compatibility json.RawMessage `json:"compatibility"`
 	}
 	var level sr.CompatibilityLevel
-	err := decodeJSONRequest(req.Body, &body)
+	err := decodeJSONRequest(req.Body, &body, func(string) *registryError { return errInvalidCompatLevel() })
 	if err == nil && body.Compatibility != nil && string(body.Compatibility) != "null" {
-		if err = json.Unmarshal(body.Compatibility, &level); err == nil && level.String() == "" {
+		if json.Unmarshal(body.Compatibility, &level) != nil || level.String() == "" {
 			err = errInvalidCompatLevel()
 		}
 	}
 	if err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel())
+		r.handleAPIError(w, err)
 		return
 	}
 	if err := validateSubject(subject, true); err != nil {
@@ -986,8 +986,8 @@ func (r *Registry) putMode(w http.ResponseWriter, req *http.Request, subject str
 	var body struct {
 		Mode *sr.Mode `json:"mode"`
 	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidMode(err.Error()))
+	if err := decodeJSONRequest(req.Body, &body, errInvalidMode); err != nil {
+		r.handleAPIError(w, err)
 		return
 	}
 	if err := validateSubject(subject, true); err != nil {

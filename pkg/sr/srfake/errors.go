@@ -84,10 +84,6 @@ func errInvalidSchema(msg string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "%s", msg)
 }
 
-func errInvalidSchemaWithCause(_ error, msg string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "%s", msg)
-}
-
 func errInvalidVersion(version string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidVersion.Code, "The specified version '%s' is not a valid version id. Allowed values are between [1, 2^31-1] and the string \"latest\"", version)
 }
