@@ -51,7 +51,7 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			case "/config/foo":
 				switch r.Method {
 				case http.MethodDelete:
-					output = SetCompatibility{Level: CompatFull}
+					output = SetCompatibility{Level: CompatFull, Normalize: true}
 				default:
 					output = CompatibilityResult{Subject: dummySchema.Subject, Level: CompatFull}
 				}
@@ -311,7 +311,7 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		{
 			name:     "reset subject compatibility",
 			fn:       func() (any, error) { return c.ResetCompatibility(ctx, dummySchema.Subject), nil },
-			expected: `[{"compatibilityLevel":"FULL","alias":"","normalize":false,"compatibilityGroup":"","defaultMetadata":null,"overrideMetadata":null,"defaultRuleSet":null,"overrideRuleSet":null}]`,
+			expected: `[{"compatibilityLevel":"FULL","alias":"","normalize":true,"compatibilityGroup":"","defaultMetadata":null,"overrideMetadata":null,"defaultRuleSet":null,"overrideRuleSet":null}]`,
 		},
 		{
 			name: "check schema compatibility",
