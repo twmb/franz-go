@@ -1096,8 +1096,8 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 		// advertises EndTxn v5 even while the cluster's
 		// transaction.version is still 0 or 1, where the pre-890p2
 		// semantics hold and the KIP-360/KIP-588 re-init below is the
-		// designed recovery (e.g. after a transaction-timeout abort
-		// bumped our epoch).
+		// recovery. Note that after a transaction timeout aborts our
+		// transaction, Kafka 2.6+ fences that re-init, which is fatal.
 		recoverable = errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.TransactionAbortable)
 	} else {
 		kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
@@ -1132,9 +1132,10 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 //  2. anyAdded gating stays for TV1: EndTxn on an empty TV1 transaction is
 //     INVALID_TXN_STATE. The TV2 abort-when-every-produce-failed path is
 //     TV2-only and attempted-only; idle Begin/End cycles issue no requests.
-//  3. PRODUCER_FENCED from coordinator paths is not recoverable. Only the
-//     timeout-abort InvalidProducerEpoch-on-produce path is, and only under
-//     TV1 semantics.
+//  3. PRODUCER_FENCED from coordinator paths is not recoverable. We treat
+//     InvalidProducerEpoch from a produce as recoverable only under TV1
+//     semantics, and Kafka 2.6+ fences that re-init after a transaction
+//     timeout aborts our transaction.
 //
 // Two known divergences from Java: we commit whatever succeeded if the
 // caller asks (Java blocks the commit after any failed produce), and we do
