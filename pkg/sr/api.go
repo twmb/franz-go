@@ -780,6 +780,7 @@ func (cl *Client) ResetCompatibility(ctx context.Context, subjects ...string) []
 				Subject:          subject,
 				Level:            c.Level,
 				Alias:            c.Alias,
+				Normalize:        c.Normalize,
 				Group:            c.Group,
 				DefaultMetadata:  c.DefaultMetadata,
 				OverrideMetadata: c.OverrideMetadata,
