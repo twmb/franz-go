@@ -20,22 +20,25 @@ func requestContext(req *http.Request) string {
 	return v
 }
 
-// Returns the context that req looks schema IDs up in, and the subject query
-// parameter. As Confluent's registry does, a subject with a context selects
-// that context, and a context path adds its context to a subject without one.
-func idContext(req *http.Request) (ctx, subject string) {
-	ctx = requestContext(req)
-	if ctx == "" {
-		ctx = "."
+// Returns the subject query parameter of a schema ID lookup, and whether the
+// lookup has one. As in Confluent's registry, a context path adds its context
+// to a subject without one, and gives a lookup without a subject the context
+// as its subject.
+func idSubject(req *http.Request) (string, bool) {
+	q := req.URL.Query()
+	subject, ok := q.Get("subject"), q.Has("subject")
+	if ctx := requestContext(req); ctx != "" {
+		if !hasContext(subject) {
+			subject = qualifiedContext(ctx) + subject
+		}
+		ok = true
 	}
-	subject = req.URL.Query().Get("subject")
-	if strings.HasPrefix(subject, ":.") {
-		return subjectContext(subject), subject
-	}
-	if subject != "" {
-		subject = qualifiedContext(ctx) + subject
-	}
-	return ctx, subject
+	return subject, ok
+}
+
+// Reports whether subject names its context, or the wildcard context.
+func hasContext(subject string) bool {
+	return strings.HasPrefix(subject, ":.") || strings.HasPrefix(subject, ":*:")
 }
 
 /* -------------------------------------------------------------------------
@@ -107,7 +110,7 @@ func (*Registry) contextMiddleware(next http.Handler) http.Handler {
 		var qualifyNext, rootConfig bool
 		for i, seg := range segs {
 			if qualifyNext {
-				if s, _ := url.PathUnescape(seg); !strings.HasPrefix(s, ":.") && !strings.HasPrefix(s, ":*:") {
+				if s, _ := url.PathUnescape(seg); !hasContext(s) {
 					segs[i] = prefix + seg
 				}
 				qualifyNext = false
@@ -158,24 +161,19 @@ func qualifiedContext(ctx string) string {
 	return ":" + ctx + ":"
 }
 
-// Caller must hold r.mu (at least RLock).
-func (r *Registry) schemaInContext(id int, ctx string) bool {
-	for subject, subj := range r.subjects {
-		if subj.isDeleted || subjectContext(subject) != ctx {
-			continue
-		}
-		for _, vd := range subj.versions {
-			if !vd.isDeleted && vd.schema.ID == id {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 /* -------------------------------------------------------------------------
    Handlers – Schemas
    ------------------------------------------------------------------------- */
+
+// idSchema is the body of GET /schemas/ids/{id}. As in Confluent's registry,
+// it has the GUID of the schema, and the subject and version of the schema when
+// the lookup has a subject.
+type idSchema struct {
+	Subject string `json:"subject,omitempty"`
+	Version int    `json:"version,omitempty"`
+	GUID    string `json:"guid,omitempty"`
+	sr.Schema
+}
 
 // handleGetSchemaByID emulates GET /schemas/ids/{id} to retrieve a full schema
 // definition by its ID.
@@ -185,24 +183,20 @@ func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request)
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-	ctx, subject := idContext(req)
+	subject, hasSubject := idSubject(req)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	sch, ok := r.schemasByID[schemaID{ctx, id}]
+	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
 	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
-	if requestContext(req) != "" && !r.schemaInContext(id, ctx) {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
+	body := idSchema{GUID: ss.GUID, Schema: ss.Schema}
+	if hasSubject {
+		body.Subject, body.Version = ss.Subject, ss.Version
 	}
-	if subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-	respondJSON(w, http.StatusOK, sch)
+	respondJSON(w, http.StatusOK, body)
 }
 
 // handleGetRawSchemaByID emulates GET /schemas/ids/{id}/schema to retrieve
@@ -213,24 +207,16 @@ func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Reque
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-	ctx, subject := idContext(req)
+	subject, hasSubject := idSubject(req)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	sch, ok := r.schemasByID[schemaID{ctx, id}]
+	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
 	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
-	if requestContext(req) != "" && !r.schemaInContext(id, ctx) {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-	if subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-	respondJSON(w, http.StatusOK, sch.Schema)
+	respondJSON(w, http.StatusOK, ss.Schema.Schema)
 }
 
 // handleGetSchemaVersionsByID emulates GET /schemas/ids/{id}/versions to retrieve
@@ -241,46 +227,17 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-
-	ctx, subjectParam := idContext(req)
-	del := parseDeleted(req)
+	subject, hasSubject := idSubject(req)
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if schema exists
-	if _, ok := r.schemasByID[schemaID{ctx, id}]; !ok {
+	usages, ok := r.idUsagesLocked(id, subject, hasSubject, deleted)
+	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
-
-	// Find all subject-version pairs that use this schema ID
-	var usages []map[string]any
-	for subject, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
-			continue
-		}
-		if subjectContext(subject) != ctx {
-			continue
-		}
-		if subjectParam != "" && subject != subjectParam {
-			continue
-		}
-		for version, versionData := range subj.versions {
-			if versionData.schema.ID == id && del.keep(versionData.isDeleted) {
-				usages = append(usages, map[string]any{
-					"subject": subject,
-					"version": version,
-				})
-			}
-		}
-	}
-
-	if requestContext(req) != "" && len(usages) == 0 {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-
 	respondJSON(w, http.StatusOK, usages)
 }
 
@@ -291,49 +248,56 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-
-	ctx, subjectParam := idContext(req)
-	del := parseDeleted(req)
+	subject, hasSubject := idSubject(req)
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if _, ok := r.schemasByID[schemaID{ctx, id}]; !ok {
+	usages, ok := r.idUsagesLocked(id, subject, hasSubject, deleted)
+	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
+	subjects := make([]string, 0, len(usages))
+	for _, u := range usages {
+		if len(subjects) == 0 || subjects[len(subjects)-1] != u.Subject {
+			subjects = append(subjects, u.Subject)
+		}
+	}
+	respondJSON(w, http.StatusOK, subjects)
+}
 
-	subjectSet := make(map[string]bool)
-	for subject, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
+// Returns the versions that carry id in the context that a lookup of id
+// resolves to, sorted by subject and then version. As in Confluent's registry,
+// the subject query parameter selects the context and does not filter the
+// subjects. As in Confluent's registry, soft-deleted versions are listed only
+// with ?deleted=true, and ?deletedOnly is not supported. The caller must hold
+// the lock.
+func (r *Registry) idUsagesLocked(id int, subject string, hasSubject, deleted bool) ([]sr.SubjectVersion, bool) {
+	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
+	if !ok {
+		return nil, false
+	}
+	ctx := subjectContext(ss.Subject)
+	usages := make([]sr.SubjectVersion, 0)
+	for s, subj := range r.subjects {
+		if subjectContext(s) != ctx {
 			continue
 		}
-		if subjectContext(subject) != ctx {
-			continue
-		}
-		if subjectParam != "" && subject != subjectParam {
-			continue
-		}
-		for _, vd := range subj.versions {
-			if del.keep(vd.isDeleted) && vd.schema.ID == id {
-				subjectSet[subject] = true
-				break
+		for v, vd := range subj.versions {
+			if vd.schema.ID == id && (deleted || !subj.isDeleted && !vd.isDeleted) {
+				usages = append(usages, sr.SubjectVersion{Subject: s, Version: v})
 			}
 		}
 	}
-
-	if requestContext(req) != "" && len(subjectSet) == 0 {
-		r.handleAPIError(w, errSchemaNotFound())
-		return
-	}
-
-	subjects := make([]string, 0, len(subjectSet))
-	for s := range subjectSet {
-		subjects = append(subjects, s)
-	}
-	sort.Strings(subjects)
-
-	respondJSON(w, http.StatusOK, subjects)
+	sort.Slice(usages, func(i, j int) bool {
+		if usages[i].Subject != usages[j].Subject {
+			return usages[i].Subject < usages[j].Subject
+		}
+		return usages[i].Version < usages[j].Version
+	})
+	return usages, true
 }
 
 // handleGetSchemaByGUID emulates GET /schemas/guids/{guid} to retrieve a schema

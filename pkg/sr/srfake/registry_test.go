@@ -135,6 +135,37 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"id": 1}`,
 		},
 		{
+			name:   "POST /subjects/{s}/versions - reuses the ID last seeded for the schema",
+			method: "POST",
+			path:   "/subjects/d/versions",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 2, userSchema)
+				r.SeedSchema("c", 1, 3, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 3}`,
+		},
+		{
+			name:   "POST /subjects/{s}/versions - reuses the ID last soft-deleted for the schema",
+			method: "POST",
+			path:   "/subjects/c/versions",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 2, userSchema)
+				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/a/versions/1", http.NoBody)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("setup failed: could not delete version: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
 			name:       "POST /subjects/{s}/versions - bad request body",
 			method:     "POST",
 			path:       "/subjects/user-topic-value/versions",
@@ -543,21 +574,32 @@ func TestSubjectQueryParamOnSchemaByID(t *testing.T) {
 	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("user-value")), 1); err != nil {
 		t.Errorf("SchemaByID scoped to owning subject: %v", err)
 	}
-	// Scoped to a different subject: not found.
-	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("other-value")), 1); err == nil {
-		t.Error("expected SchemaByID scoped to a non-owning subject to fail")
+	// Scoped to a subject of another context: not found.
+	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject(":.other:user-value")), 1); err == nil {
+		t.Error("expected SchemaByID scoped to another context to fail")
+	}
+	// Scoped to a different subject of the default context: as in Confluent's
+	// registry, any subject of the default context with the ID answers.
+	if _, err := cl.SchemaByID(sr.WithParams(ctx, sr.Subject("other-value")), 1); err != nil {
+		t.Errorf("SchemaByID scoped to a non-owning subject: %v", err)
 	}
 }
 
 func TestSchemaHandlers(t *testing.T) {
-	reg := srfake.New()
-	t.Cleanup(reg.Close)
 	client := &http.Client{}
-	reg.SeedSchema("user-topic", 1, 123, userSchema)
+	del := func(r *srfake.Registry, path string) {
+		req, _ := http.NewRequest(http.MethodDelete, r.URL()+path, http.NoBody)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("setup failed: DELETE %s: %v", path, err)
+		}
+		resp.Body.Close()
+	}
 
 	testCases := []struct {
 		name       string
 		path       string
+		setup      func(*srfake.Registry) // after user-topic is seeded at ID 123
 		wantStatus int
 		wantBody   string
 	}{
@@ -565,7 +607,7 @@ func TestSchemaHandlers(t *testing.T) {
 			name:       "GET /schemas/ids/{id} - found",
 			path:       "/schemas/ids/123",
 			wantStatus: http.StatusOK,
-			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:       "GET /schemas/ids/{id} - not found",
@@ -585,10 +627,65 @@ func TestSchemaHandlers(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
 		},
+		{
+			name: "GET /schemas/ids/{id} - hard-deleted schema returns 404",
+			path: "/schemas/ids/123",
+			setup: func(r *srfake.Registry) {
+				del(r, "/subjects/user-topic/versions/1")
+				del(r, "/subjects/user-topic/versions/1?permanent=true")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+		},
+		{
+			name:       "GET /schemas/ids/{id}?subject={s} - subject of another context answers",
+			path:       "/schemas/ids/1?subject=topic-value",
+			setup:      func(r *srfake.Registry) { r.SeedSchema(":.myctx:topic-value", 1, 1, productSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"guid":"3e3328fa-a65f-8325-b14d-93ec4ea81772","schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"sku\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:       "GET /schemas/ids/{id}/versions?subject={s} - every subject of the context",
+			path:       "/schemas/ids/123/versions?subject=user-topic",
+			setup:      func(r *srfake.Registry) { r.RegisterSchema("other-topic", userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"other-topic","version":1},{"subject":"user-topic","version":1}]`,
+		},
+		{
+			name:       "GET /schemas/ids/{id}/subjects?subject={s} - every subject of the context",
+			path:       "/schemas/ids/123/subjects?subject=user-topic",
+			setup:      func(r *srfake.Registry) { r.RegisterSchema("other-topic", userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `["other-topic","user-topic"]`,
+		},
+		{
+			name:       "GET /schemas/ids/{id}/subjects - one ID seeded in two subjects",
+			path:       "/schemas/ids/123/subjects",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("other-topic", 1, 123, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `["other-topic","user-topic"]`,
+		},
+		{
+			name: "GET /schemas/ids/{id}/versions?deletedOnly=true - deletedOnly is not supported",
+			path: "/schemas/ids/123/versions?deletedOnly=true",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("other-topic", userSchema)
+				del(r, "/subjects/other-topic/versions/1")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"user-topic","version":1}]`,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			reg := srfake.New()
+			t.Cleanup(reg.Close)
+			reg.SeedSchema("user-topic", 1, 123, userSchema)
+			if tc.setup != nil {
+				tc.setup(reg)
+			}
+
 			req, _ := http.NewRequest(http.MethodGet, reg.URL()+tc.path, http.NoBody)
 			resp, err := client.Do(req)
 			if err != nil {
@@ -2164,7 +2261,7 @@ func TestContextHandlers(t *testing.T) {
 				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:   "GET /contexts/.myctx/schemas/ids/{id} - schema not in context returns 404",
@@ -2185,7 +2282,23 @@ func TestContextHandlers(t *testing.T) {
 				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id} - soft-deleted schema",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/:.myctx:topic-value/versions/1", http.NoBody)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("setup failed: could not delete version: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:   "GET /schemas/ids/{id} - ID only in .myctx returns 404",
@@ -2205,7 +2318,7 @@ func TestContextHandlers(t *testing.T) {
 				r.RegisterSchema(":.myctx:topic-value", userSchema)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:   "GET /contexts/.myctx/schemas/ids/{id}?subject={s} - adds .myctx to the subject",
@@ -2216,7 +2329,7 @@ func TestContextHandlers(t *testing.T) {
 				r.RegisterSchema(":.myctx:topic-value", userSchema)
 			},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"subject":":.myctx:topic-value","version":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 
 		// GET /contexts/{context}/schemas/ids/{id}/versions

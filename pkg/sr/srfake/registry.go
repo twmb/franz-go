@@ -74,9 +74,14 @@ type Registry struct {
 
 	mu sync.RWMutex
 	// Consolidated state
-	subjects    map[string]*subjectData
-	schemasByID map[schemaID]sr.Schema
-	highestID   map[string]int // the highest schema ID ever used in each context
+	subjects  map[string]*subjectData
+	highestID map[string]int // the highest schema ID ever used in each context
+
+	// idsByGUID is the ID that a registration of a schema GUID in a context
+	// reuses, while a version still carries the ID. As in Confluent's
+	// registry, it is the ID of the last version seeded, registered, or
+	// soft-deleted with the GUID.
+	idsByGUID map[contextGUID]int
 
 	// Global/unrelated state
 	globalCompat sr.CompatibilityLevel
@@ -88,11 +93,9 @@ type Registry struct {
 	ictMu        sync.RWMutex
 }
 
-// schemaID is a schema ID in a context. Each context has its own IDs, so one
-// ID can name a different schema in each context.
-type schemaID struct {
-	ctx string
-	id  int
+// contextGUID is a schema GUID in a context.
+type contextGUID struct {
+	ctx, guid string
 }
 
 // Interceptor gets the first opportunity to handle a request. If it writes a
@@ -119,8 +122,8 @@ func NewRegistry(opts ...Option) *Registry {
 	r := &Registry{
 		// Simplified state initialization
 		subjects:     make(map[string]*subjectData),
-		schemasByID:  make(map[schemaID]sr.Schema),
 		highestID:    make(map[string]int),
+		idsByGUID:    make(map[contextGUID]int),
 		globalCompat: sr.CompatBackward,
 		globalMode:   sr.ModeReadWrite,
 	}
@@ -222,8 +225,9 @@ func (r *Registry) ClearInterceptors() {
 }
 
 // SeedSchema inserts an existing schema at subject/version/id. It panics if the
-// slot or the id in the subject's context is already populated, or if the
-// schema is invalid.
+// slot is already populated, if the id in the subject's context carries a
+// different schema, or if the schema is invalid. As in Confluent's registry,
+// one id can carry an equal schema in several subjects.
 func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 	if err := r.validateSchema(sch); err != nil {
 		panic(fmt.Sprintf("invalid schema: %v", err))
@@ -232,8 +236,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := schemaID{subjectContext(subject), id}
-	if _, ok := r.schemasByID[key]; ok {
+	ctx := subjectContext(subject)
+	if ss, ok := r.versionByIDLocked(ctx, id, ""); ok && !r.schemasEqual(ss.Schema, sch) {
 		panic(fmt.Sprintf("schema id %d already seeded", id))
 	}
 
@@ -248,9 +252,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 		panic(fmt.Sprintf("invalid references: %v", err))
 	}
 
-	// Store schema by its ID in the subject's context
-	r.schemasByID[key] = sch
 	guid := schemaGUID(sch)
+	r.idsByGUID[contextGUID{ctx, guid}] = id
 
 	// Store schema version data
 	subj.versions[version] = &versionData{
@@ -271,8 +274,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 	if version > subj.highestVersion {
 		subj.highestVersion = version
 	}
-	if id > r.highestID[key.ctx] {
-		r.highestID[key.ctx] = id
+	if id > r.highestID[ctx] {
+		r.highestID[ctx] = id
 	}
 }
 
@@ -312,11 +315,8 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 
 	// reuse id from other subject in the same context?
 	ctx := subjectContext(subject)
-	for key, existing := range r.schemasByID {
-		if key.ctx != ctx || !r.schemasEqual(existing, schema) {
-			continue
-		}
-		existingID := key.id
+	guid := schemaGUID(schema)
+	if existingID, ok := r.idsByGUID[contextGUID{ctx, guid}]; ok && r.idInUseLocked(ctx, existingID) {
 		version = subj.highestVersion + 1
 
 		// Check for circular dependencies before storing the schema
@@ -330,7 +330,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 				Subject: subject,
 				Version: version,
 				ID:      existingID,
-				GUID:    schemaGUID(schema),
+				GUID:    guid,
 				Schema:  schema,
 			},
 			isDeleted: false,
@@ -350,9 +350,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 		return 0, 0, err
 	}
 
-	// Store schema by its ID in the subject's context
-	r.schemasByID[schemaID{ctx, id}] = schema
-	guid := schemaGUID(schema)
+	r.idsByGUID[contextGUID{ctx, guid}] = id
 
 	// Store schema version data
 	subj.versions[version] = &versionData{
@@ -418,8 +416,8 @@ func (r *Registry) Reset() {
 	defer r.mu.Unlock()
 
 	r.subjects = make(map[string]*subjectData)
-	r.schemasByID = make(map[schemaID]sr.Schema)
 	r.highestID = make(map[string]int)
+	r.idsByGUID = make(map[contextGUID]int)
 	r.globalCompat = sr.CompatBackward
 }
 
@@ -440,19 +438,70 @@ func (r *Registry) getSchemaBySubjectVersionLocked(subject string, version int, 
 	return versionData.schema, true
 }
 
-// schemaIDInSubjectLocked reports whether schema id is registered under subject.
-// Caller must hold the lock.
-func (r *Registry) schemaIDInSubjectLocked(id int, subject string) bool {
-	subj, ok := r.subjects[subject]
-	if !ok {
-		return false
-	}
-	for _, vd := range subj.versions {
-		if vd.schema.ID == id {
-			return true
+// Reports whether a version in ctx, soft-deleted or not, carries id. A schema
+// ID stops resolving once every version that carries it is hard-deleted. The
+// caller must hold the lock.
+func (r *Registry) idInUseLocked(ctx string, id int) bool {
+	_, ok := r.versionByIDLocked(ctx, id, "")
+	return ok
+}
+
+// Returns the latest version in ctx that carries id, of subject if subject is
+// not empty, else of the first such subject in sorted order. Soft-deleted
+// versions count. The caller must hold the lock.
+func (r *Registry) versionByIDLocked(ctx string, id int, subject string) (sr.SubjectSchema, bool) {
+	var found sr.SubjectSchema
+	ok := false
+	for s, subj := range r.subjects {
+		if subjectContext(s) != ctx || subject != "" && s != subject {
+			continue
+		}
+		if ok && s > found.Subject {
+			continue // a lower subject carries id
+		}
+		for _, vd := range subj.versions {
+			if vd.schema.ID == id && (!ok || s != found.Subject || vd.schema.Version > found.Version) {
+				found, ok = vd.schema, true
+			}
 		}
 	}
-	return false
+	return found, ok
+}
+
+// Returns the version that a lookup of schema id resolves to, as Confluent's
+// registry resolves it. Without a subject, the ID is in the default context.
+// A subject with a context but no name means any subject of the context. A
+// subject of the default context that does not carry the ID is tried in every
+// other context, and then any subject of the default context with the ID
+// answers. The caller must hold the lock.
+func (r *Registry) schemaByIDLocked(id int, subject string, hasSubject bool) (sr.SubjectSchema, bool) {
+	if !hasSubject {
+		return r.versionByIDLocked(".", id, "")
+	}
+	ctx, name := splitSubject(subject)
+	if name == "" {
+		return r.versionByIDLocked(ctx, id, "")
+	}
+	if ss, ok := r.versionByIDLocked(ctx, id, subject); ok || ctx != "." {
+		return ss, ok
+	}
+	contexts := make(map[string]bool)
+	for s := range r.subjects {
+		if c := subjectContext(s); c != "." {
+			contexts[c] = true
+		}
+	}
+	sorted := make([]string, 0, len(contexts))
+	for c := range contexts {
+		sorted = append(sorted, c)
+	}
+	sort.Strings(sorted)
+	for _, c := range sorted {
+		if ss, ok := r.versionByIDLocked(c, id, qualifiedContext(c)+name); ok {
+			return ss, true
+		}
+	}
+	return r.versionByIDLocked(".", id, "")
 }
 
 // isSchemaReferenced checks if the given schema version is referenced by any other schemas.
@@ -519,6 +568,11 @@ func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) 
 	} else {
 		// Soft delete - mark subject as deleted
 		subj.isDeleted = true
+		for _, v := range versions {
+			if vd := subj.versions[v]; !vd.isDeleted {
+				r.idsByGUID[contextGUID{subjectContext(subject), vd.schema.GUID}] = vd.schema.ID
+			}
+		}
 	}
 
 	return versions, nil
@@ -548,6 +602,7 @@ func (r *Registry) deleteVersion(subject string, version int, permanent bool) er
 	} else {
 		// Soft delete - mark version as deleted
 		versionData.isDeleted = true
+		r.idsByGUID[contextGUID{subjectContext(subject), versionData.schema.GUID}] = versionData.schema.ID
 	}
 
 	// Recalculate latest version if we deleted the current latest
@@ -742,6 +797,19 @@ func subjectContext(subject string) string {
 		}
 	}
 	return "."
+}
+
+// Returns the context and the name of subject, as Confluent's registry splits
+// it: ":.ctx:name", or ":.ctx" for a context without a name. Any other subject
+// is a name in the default context.
+func splitSubject(subject string) (ctx, name string) {
+	if !strings.HasPrefix(subject, ":.") {
+		return ".", subject
+	}
+	if i := strings.Index(subject[2:], ":"); i >= 0 {
+		return subject[1 : i+2], subject[i+3:]
+	}
+	return subject[1:], ""
 }
 
 // Returns the subject that a reference named ref in a schema of subject
