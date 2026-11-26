@@ -841,6 +841,14 @@ func (s *sink) firstRespCheck(idempotent bool, version int16) {
 // handleReqClientErr is called when the client errors before receiving a
 // produce response.
 func (s *sink) handleReqClientErr(req *produceRequest, err error) {
+	// A record's context ended. Nothing is wrong with the broker, so we
+	// retry the other batches without a metadata update.
+	if isContextErr(err) {
+		s.cl.cfg.logger.Log(LogLevelDebug, "produce request failed with a context error, retrying without a metadata update", "broker", logID(s.nodeID), "err", err)
+		s.handleRetryBatches(req.batches, nil, req.backoffSeq, false, false, "produce request failed with a context error")
+		return
+	}
+
 	switch {
 	default:
 		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", logID(s.nodeID), "err", err)
