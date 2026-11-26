@@ -189,7 +189,7 @@ type (
 		ackType     int8 // uniform type for the entire range
 
 		// For a gap, the acquisition lock deadline of the gap's fetch:
-		// expire drops a gap past it. A range built for a request has
+		// expire drops a gap past it. A range built from a record has
 		// none.
 		deadline int64
 	}
@@ -796,7 +796,7 @@ func (s *source) closeShareSession(ctx context.Context) {
 		"piggybacked_ack_records", nLive,
 	)
 
-	// nil ctx on brokerOrErr is intentional: this matches the
+	// nil ctx on shareBroker is intentional: this matches the
 	// classic killSessionOnClose idiom (source.go's
 	// killSessionOnClose). We want to find the broker without
 	// getting stuck waiting on a broker-lookup ctx; the actual
@@ -2690,10 +2690,10 @@ func (s *source) shareFetch(doneFetch chan<- bool) (fetched, acked bool) {
 // alone, so a request from the old source would change the new source's
 // session.
 //
-// Closing dead ends the source's loop wherever the loop waits, and from then
-// on createShareReq builds nothing and shareBroker finds no broker. We then
-// drop the buffered fetch: its records can no longer be acked through this
-// source.
+// Closing dead ends the source's loop wherever the loop waits. After dead is
+// closed, createShareReq builds nothing and shareBroker finds no broker. We
+// drop the buffered fetch after closing dead: its records can no longer be
+// acked through this source.
 //
 // The loop can also be waiting on a response while we run. If the loop
 // buffers that fetch after we look, the loop sees dead and drops the fetch
@@ -2905,7 +2905,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, ackErr})
 				} else {
 					// The acks of a record past its deadline fail,
-					// and the others go back with the next fetch.
+					// and the others go back onto the cursor.
 					pa := piggybackAcks[pi]
 					expired := pa.expire(time.Now().UnixNano())
 					pa.requeue(sc)
