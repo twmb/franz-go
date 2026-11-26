@@ -1702,6 +1702,8 @@ func TestProduceBatch(t *testing.T) {
 		// the batch, and one byte more than its fields take pads it.
 		{name: "record-length", configs: map[string]string{"cleanup.policy": "compact"}, rec: kvRecord(), mod: func(b []byte) []byte { b[61] = 0x7e; return sealBatch(b) }, want: kerr.InvalidRecord},
 		{name: "record-padding", configs: map[string]string{"cleanup.policy": "compact"}, rec: kvRecord(), mod: func(b []byte) []byte { b[61] += 2; return sealBatch(append(b, 0)) }, want: kerr.InvalidRecord},
+		{name: "empty", rec: kvRecord(), mod: func([]byte) []byte { return []byte{} }, want: kerr.InvalidRecord},
+		{name: "null", rec: kvRecord(), mod: func([]byte) []byte { return nil }, want: kerr.InvalidRecord},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1733,7 +1735,7 @@ func TestProduceBatch(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
 			wantStart := int64(0)
-			if tc.want == kerr.CorruptMessage || tc.want == kerr.KafkaStorageError {
+			if tc.want == kerr.CorruptMessage || tc.want == kerr.KafkaStorageError || len(batch) == 0 {
 				wantStart = -1
 			}
 			if p.LogStartOffset != wantStart {
