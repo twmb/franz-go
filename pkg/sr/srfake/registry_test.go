@@ -2044,6 +2044,16 @@ func TestDeletionWithReferences(t *testing.T) {
 }
 
 func TestContextHandlers(t *testing.T) {
+	// The order subject of .myctx references the product subject without a
+	// context.
+	withOrder := func(r *srfake.Registry) {
+		r.SeedSchema(":.myctx:product", 1, 1, productSchema)
+		r.RegisterSchema(":.myctx:order", sr.Schema{
+			Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+			References: []sr.SchemaReference{{Name: "Product", Subject: "product", Version: 1}},
+		})
+	}
+
 	testCases := []struct {
 		name       string
 		method     string
@@ -2370,6 +2380,113 @@ func TestContextHandlers(t *testing.T) {
 			},
 			wantStatus: http.StatusOK,
 			wantBody:   `"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"`,
+		},
+
+		// Subjects in context paths
+		{
+			name:   "POST /contexts/.myctx/subjects/{s}/versions - subject without a context goes into .myctx",
+			method: "POST",
+			path:   "/contexts/.myctx/subjects/topic-value/versions",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("topic-value", 1, 1, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/mode/{s} - subject without a context is in .myctx",
+			method: "GET",
+			path:   "/contexts/.myctx/mode/topic-value",
+			setup: func(r *srfake.Registry) {
+				r.SetMode(":.myctx:topic-value", sr.ModeReadOnly)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"mode": "READONLY"}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/config - the context is the subject",
+			method: "GET",
+			path:   "/contexts/.myctx/config",
+			setup: func(r *srfake.Registry) {
+				r.SetCompat(":.myctx:", sr.CompatFull)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibilityLevel": "FULL"}`,
+		},
+
+		// Context names
+		{
+			name:   "GET /contexts/myctx/subjects - name without a leading dot",
+			method: "GET",
+			path:   "/contexts/myctx/subjects",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[":.myctx:topic-value"]`,
+		},
+		{
+			name:   "GET /contexts/:.:/subjects - the default context",
+			method: "GET",
+			path:   "/contexts/:.:/subjects",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["plain-topic"]`,
+		},
+		{
+			name:       "GET /contexts/a:b/subjects - colon inside the name returns 400",
+			method:     "GET",
+			path:       "/contexts/a:b/subjects",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error_code": 400, "message": "Context name 'a:b' cannot contain a colon"}`,
+		},
+		{
+			name:   "DELETE /contexts/myctx - name without a leading dot",
+			method: "DELETE",
+			path:   "/contexts/myctx",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusConflict,
+		},
+
+		// References without a context in a context
+		{
+			name:       "POST /subjects/:.myctx:{s}/versions - reference resolves in .myctx",
+			method:     "POST",
+			path:       "/subjects/:.myctx:order/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"Order\",\"fields\":[{\"name\":\"p\",\"type\":\"Product\"}]}","references":[{"name":"Product","subject":"product","version":1}]}`,
+			setup:      func(r *srfake.Registry) { r.SeedSchema(":.myctx:product", 1, 1, productSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 2}`,
+		},
+		{
+			name:       "GET /subjects/:.myctx:{s}/versions/{v}/referencedby - reference in .myctx",
+			method:     "GET",
+			path:       "/subjects/:.myctx:product/versions/1/referencedby",
+			setup:      withOrder,
+			wantStatus: http.StatusOK,
+			wantBody:   `[2]`,
+		},
+		{
+			name:       "DELETE /subjects/:.myctx:{s}/versions/{v} - referenced in .myctx",
+			method:     "DELETE",
+			path:       "/subjects/:.myctx:product/versions/1",
+			setup:      withOrder,
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:       "POST /subjects/:.myctx:{s}/versions - reference cycle in .myctx",
+			method:     "POST",
+			path:       "/subjects/:.myctx:product/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"o\",\"type\":\"Order\"}]}","references":[{"name":"Order","subject":"order","version":1}]}`,
+			setup:      withOrder,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42201, "message": "circular dependency detected: subject :.myctx:product is referenced in a cycle"}`,
 		},
 	}
 

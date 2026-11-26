@@ -244,7 +244,7 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 		panic(fmt.Sprintf("subject %q version %d already seeded", subject, version))
 	}
 
-	if err := r.validateReferences(sch); err != nil {
+	if err := r.validateReferences(subject, sch); err != nil {
 		panic(fmt.Sprintf("invalid references: %v", err))
 	}
 
@@ -291,7 +291,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	defer r.mu.Unlock()
 
 	// Validate references under write lock to prevent dangling references
-	if err = r.validateReferences(schema); err != nil {
+	if err = r.validateReferences(subject, schema); err != nil {
 		return 0, 0, err
 	}
 
@@ -460,7 +460,7 @@ func (r *Registry) schemaIDInSubjectLocked(id int, subject string) bool {
 func (r *Registry) isSchemaReferenced(targetSubject string, targetVersion int) (bool, []int) {
 	var referencingIDs []int
 
-	for _, subj := range r.subjects {
+	for subject, subj := range r.subjects {
 		// Skip soft-deleted subjects
 		if subj.isDeleted {
 			continue
@@ -474,7 +474,7 @@ func (r *Registry) isSchemaReferenced(targetSubject string, targetVersion int) (
 
 			// Check if this schema references our target
 			for _, ref := range versionData.schema.References {
-				if ref.Subject == targetSubject && ref.Version == targetVersion {
+				if refSubject(subject, ref.Subject) == targetSubject && ref.Version == targetVersion {
 					referencingIDs = append(referencingIDs, versionData.schema.ID)
 					break // Only add each schema ID once
 				}
@@ -661,7 +661,7 @@ func (*Registry) validateSchema(s sr.Schema) error {
 	return nil
 }
 
-func (r *Registry) validateReferences(s sr.Schema) error {
+func (r *Registry) validateReferences(subject string, s sr.Schema) error {
 	for _, ref := range s.References {
 		if ref.Name == "" {
 			return errInvalidSchema("reference missing name")
@@ -675,7 +675,7 @@ func (r *Registry) validateReferences(s sr.Schema) error {
 
 		// Check if the referenced schema exists and is not soft-deleted
 		// This assumes the caller already holds the necessary lock
-		subj, ok := r.subjects[ref.Subject]
+		subj, ok := r.subjects[refSubject(subject, ref.Subject)]
 		if !ok || subj.isDeleted {
 			return errInvalidReference(ref)
 		}
@@ -713,14 +713,15 @@ func (r *Registry) detectCycle(schema sr.Schema, subject string, version int, vi
 
 	// Visit all references
 	for _, ref := range schema.References {
-		refKey := fmt.Sprintf("%s:%d", ref.Subject, ref.Version)
+		refName := refSubject(subject, ref.Subject)
+		refKey := fmt.Sprintf("%s:%d", refName, ref.Version)
 
 		// If not visited, recursively check this reference
 		if !visited[refKey] {
 			// Get the referenced schema
-			if refSubject, ok := r.subjects[ref.Subject]; ok {
-				if refVersionData, ok := refSubject.versions[ref.Version]; ok {
-					if err := r.detectCycle(refVersionData.schema.Schema, ref.Subject, ref.Version, visited, subjectStack); err != nil {
+			if refSubj, ok := r.subjects[refName]; ok {
+				if refVersionData, ok := refSubj.versions[ref.Version]; ok {
+					if err := r.detectCycle(refVersionData.schema.Schema, refName, ref.Version, visited, subjectStack); err != nil {
 						return err
 					}
 				}
@@ -741,6 +742,16 @@ func subjectContext(subject string) string {
 		}
 	}
 	return "."
+}
+
+// Returns the subject that a reference named ref in a schema of subject
+// resolves to. As in Confluent's registry, a ref without a context is in the
+// context of subject.
+func refSubject(subject, ref string) string {
+	if ctx := subjectContext(subject); ctx != "." && subjectContext(ref) == "." {
+		return qualifiedContext(ctx) + ref
+	}
+	return ref
 }
 
 // schemaGUID deterministically derives a schema's GUID from its canonical

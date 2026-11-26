@@ -3,7 +3,9 @@ package srfake
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,8 +32,8 @@ func idContext(req *http.Request) (ctx, subject string) {
 	if strings.HasPrefix(subject, ":.") {
 		return subjectContext(subject), subject
 	}
-	if subject != "" && ctx != "." {
-		subject = ":" + ctx + ":" + subject
+	if subject != "" {
+		subject = qualifiedContext(ctx) + subject
 	}
 	return ctx, subject
 }
@@ -69,39 +71,91 @@ func (r *Registry) interceptorMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// contextMiddleware serves a /contexts/{context}/... request as the path after
+// the context, as Confluent's registry does. The request context carries the
+// context's name. A subject without a context after /subjects in the path gets
+// the context, and so does the subject of a root /config or /mode. A root
+// /config or /mode without a subject gets the context itself as its subject.
 func (*Registry) contextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		p := req.URL.Path
-		if !strings.HasPrefix(p, "/contexts/") {
+		rest, ok := strings.CutPrefix(req.URL.EscapedPath(), "/contexts/")
+		if !ok {
 			next.ServeHTTP(w, req)
 			return
 		}
-
-		rest := p[len("/contexts/"):]
-		slash := strings.IndexByte(rest, '/')
-		if slash < 0 {
+		rawName, rest, ok := strings.Cut(rest, "/")
+		if !ok {
 			next.ServeHTTP(w, req)
 			return
 		}
+		name, err := url.PathUnescape(rawName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		name, ok = normalizeContext(name)
+		if !ok {
+			writeError(w, http.StatusBadRequest, http.StatusBadRequest, fmt.Sprintf("Context name '%s' cannot contain a colon", name))
+			return
+		}
 
-		name := rest[:slash]
-		remaining := rest[slash:]
-
-		ctx := context.WithValue(req.Context(), ctxKey{}, name)
-		req = req.WithContext(ctx)
-		req.URL.Path = remaining
-		if req.URL.RawPath != "" {
-			raw := req.URL.RawPath
-			if strings.HasPrefix(raw, "/contexts/") {
-				rawRest := raw[len("/contexts/"):]
-				if i := strings.IndexByte(rawRest, '/'); i >= 0 {
-					req.URL.RawPath = rawRest[i:]
+		prefix := url.PathEscape(qualifiedContext(name))
+		segs := strings.Split(rest, "/")
+		for len(segs) > 0 && segs[len(segs)-1] == "" {
+			segs = segs[:len(segs)-1]
+		}
+		var qualifyNext, rootConfig bool
+		for i, seg := range segs {
+			if qualifyNext {
+				if s, _ := url.PathUnescape(seg); !strings.HasPrefix(s, ":.") && !strings.HasPrefix(s, ":*:") {
+					segs[i] = prefix + seg
 				}
+				qualifyNext = false
+				continue
 			}
+			root := i == 0 && (seg == "config" || seg == "mode")
+			qualifyNext = seg == "subjects" || root
+			rootConfig = rootConfig || root
 		}
+		if rootConfig && qualifyNext && prefix != "" {
+			segs = append(segs, prefix)
+		}
+
+		escaped := "/" + strings.Join(segs, "/")
+		path, err := url.PathUnescape(escaped)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, name))
+		req.URL.Path, req.URL.RawPath = path, escaped
 
 		next.ServeHTTP(w, req)
 	})
+}
+
+// Returns name as a context, without surrounding colons and with a leading
+// dot, as Confluent's registry normalizes it. A colon inside the name makes it
+// invalid.
+func normalizeContext(name string) (string, bool) {
+	name = strings.TrimPrefix(name, ":")
+	name = strings.TrimSuffix(name, ":")
+	if strings.Contains(name, ":") {
+		return name, false
+	}
+	if !strings.HasPrefix(name, ".") {
+		name = "." + name
+	}
+	return name, true
+}
+
+// Returns the prefix that puts a subject into ctx: empty for the default
+// context, ":ctx:" otherwise.
+func qualifiedContext(ctx string) string {
+	if ctx == "." {
+		return ""
+	}
+	return ":" + ctx + ":"
 }
 
 // Caller must hold r.mu (at least RLock).
@@ -562,7 +616,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 
 	// Find all schemas that reference this target schema
 	referencingIDs := make([]int, 0) // Initialize as empty slice, not nil
-	for _, subj := range r.subjects {
+	for referrer, subj := range r.subjects {
 		if !del.keep(subj.isDeleted) {
 			continue
 		}
@@ -574,7 +628,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 
 			// Check if this schema references our target
 			for _, ref := range versionData.schema.References {
-				if ref.Subject == subject && ref.Version == version {
+				if refSubject(referrer, ref.Subject) == subject && ref.Version == version {
 					referencingIDs = append(referencingIDs, versionData.schema.ID)
 					break // Only add each schema ID once
 				}
@@ -931,7 +985,11 @@ func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 
 // handleDeleteContext emulates DELETE /contexts/{context}.
 func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request) {
-	ctx := req.PathValue("context")
+	ctx, ok := normalizeContext(req.PathValue("context"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, http.StatusBadRequest, fmt.Sprintf("Context name '%s' cannot contain a colon", ctx))
+		return
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
