@@ -2166,6 +2166,48 @@ func TestContextHandlers(t *testing.T) {
 			},
 			wantStatus: http.StatusNotFound,
 		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id} - same ID in the default context",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, productSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:   "GET /schemas/ids/{id} - ID only in .myctx returns 404",
+			method: "GET",
+			path:   "/schemas/ids/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:   "GET /schemas/ids/{id}?subject=:.myctx:{s} - looks the ID up in .myctx",
+			method: "GET",
+			path:   "/schemas/ids/1?subject=:.myctx:topic-value",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("topic-value", productSchema)
+				r.RegisterSchema(":.myctx:topic-value", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:   "GET /contexts/.myctx/schemas/ids/{id}?subject={s} - adds .myctx to the subject",
+			method: "GET",
+			path:   "/contexts/.myctx/schemas/ids/1?subject=topic-value",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("topic-value", productSchema)
+				r.RegisterSchema(":.myctx:topic-value", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
 
 		// GET /contexts/{context}/schemas/ids/{id}/versions
 		{
@@ -2187,6 +2229,17 @@ func TestContextHandlers(t *testing.T) {
 			},
 			wantStatus: http.StatusNotFound,
 		},
+		{
+			name:   "GET /schemas/ids/{id}/versions - versions in the default context only",
+			method: "GET",
+			path:   "/schemas/ids/1/versions",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("plain-topic", userSchema)
+				r.RegisterSchema(":.myctx:topic-value", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"plain-topic","version":1}]`,
+		},
 
 		// GET /contexts/{context}/schemas/ids/{id}/subjects
 		{
@@ -2207,6 +2260,17 @@ func TestContextHandlers(t *testing.T) {
 				r.SeedSchema("plain-topic", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:   "GET /schemas/ids/{id}/subjects - subjects in the default context only",
+			method: "GET",
+			path:   "/schemas/ids/1/subjects",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("plain-topic", userSchema)
+				r.RegisterSchema(":.myctx:topic-value", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["plain-topic"]`,
 		},
 
 		// GET /contexts/{context}/subjects
@@ -2243,6 +2307,18 @@ func TestContextHandlers(t *testing.T) {
 			path:       "/contexts/.myctx/subjects/:.myctx:topic-value/versions",
 			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 			setup:      func(r *srfake.Registry) {},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:   "POST /contexts/.myctx/subjects/{s}/versions - IDs separate from the default context",
+			method: "POST",
+			path:   "/contexts/.myctx/subjects/:.myctx:topic-value/versions",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, productSchema)
+				r.SeedSchema("plain-topic", 2, 2, userSchema)
+			},
 			wantStatus: http.StatusOK,
 			wantBody:   `{"id": 1}`,
 		},

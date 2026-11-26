@@ -18,6 +18,24 @@ func requestContext(req *http.Request) string {
 	return v
 }
 
+// Returns the context that req looks schema IDs up in, and the subject query
+// parameter. As Confluent's registry does, a subject with a context selects
+// that context, and a context path adds its context to a subject without one.
+func idContext(req *http.Request) (ctx, subject string) {
+	ctx = requestContext(req)
+	if ctx == "" {
+		ctx = "."
+	}
+	subject = req.URL.Query().Get("subject")
+	if strings.HasPrefix(subject, ":.") {
+		return subjectContext(subject), subject
+	}
+	if subject != "" && ctx != "." {
+		subject = ":" + ctx + ":" + subject
+	}
+	return ctx, subject
+}
+
 /* -------------------------------------------------------------------------
    Middleware
    ------------------------------------------------------------------------- */
@@ -106,28 +124,27 @@ func (r *Registry) schemaInContext(id int, ctx string) bool {
    ------------------------------------------------------------------------- */
 
 // handleGetSchemaByID emulates GET /schemas/ids/{id} to retrieve a full schema
-// definition by its global ID.
+// definition by its ID.
 func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request) {
 	id, err := strconv.Atoi(req.PathValue("id"))
 	if err != nil {
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
+	ctx, subject := idContext(req)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	sch, ok := r.schemasByID[id]
+	sch, ok := r.schemasByID[schemaID{ctx, id}]
 	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
-	if ctx := requestContext(req); ctx != "" {
-		if !r.schemaInContext(id, ctx) {
-			r.handleAPIError(w, errSchemaNotFound())
-			return
-		}
+	if requestContext(req) != "" && !r.schemaInContext(id, ctx) {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
 	}
-	if subject := req.URL.Query().Get("subject"); subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
+	if subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
@@ -135,28 +152,27 @@ func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request)
 }
 
 // handleGetRawSchemaByID emulates GET /schemas/ids/{id}/schema to retrieve
-// only the schema string by its global ID.
+// only the schema string by its ID.
 func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Request) {
 	id, err := strconv.Atoi(req.PathValue("id"))
 	if err != nil {
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
+	ctx, subject := idContext(req)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	sch, ok := r.schemasByID[id]
+	sch, ok := r.schemasByID[schemaID{ctx, id}]
 	if !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
-	if ctx := requestContext(req); ctx != "" {
-		if !r.schemaInContext(id, ctx) {
-			r.handleAPIError(w, errSchemaNotFound())
-			return
-		}
+	if requestContext(req) != "" && !r.schemaInContext(id, ctx) {
+		r.handleAPIError(w, errSchemaNotFound())
+		return
 	}
-	if subject := req.URL.Query().Get("subject"); subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
+	if subject != "" && !r.schemaIDInSubjectLocked(id, subject) {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
@@ -172,15 +188,14 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		return
 	}
 
-	ctx := requestContext(req)
+	ctx, subjectParam := idContext(req)
 	del := parseDeleted(req)
-	subjectParam := req.URL.Query().Get("subject")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	// Check if schema exists
-	if _, ok := r.schemasByID[id]; !ok {
+	if _, ok := r.schemasByID[schemaID{ctx, id}]; !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
@@ -191,7 +206,7 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		if !del.keep(subj.isDeleted) {
 			continue
 		}
-		if ctx != "" && subjectContext(subject) != ctx {
+		if subjectContext(subject) != ctx {
 			continue
 		}
 		if subjectParam != "" && subject != subjectParam {
@@ -207,7 +222,7 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		}
 	}
 
-	if ctx != "" && len(usages) == 0 {
+	if requestContext(req) != "" && len(usages) == 0 {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
@@ -223,14 +238,13 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	ctx := requestContext(req)
+	ctx, subjectParam := idContext(req)
 	del := parseDeleted(req)
-	subjectParam := req.URL.Query().Get("subject")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if _, ok := r.schemasByID[id]; !ok {
+	if _, ok := r.schemasByID[schemaID{ctx, id}]; !ok {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}
@@ -240,7 +254,7 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 		if !del.keep(subj.isDeleted) {
 			continue
 		}
-		if ctx != "" && subjectContext(subject) != ctx {
+		if subjectContext(subject) != ctx {
 			continue
 		}
 		if subjectParam != "" && subject != subjectParam {
@@ -254,7 +268,7 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 		}
 	}
 
-	if ctx != "" && len(subjectSet) == 0 {
+	if requestContext(req) != "" && len(subjectSet) == 0 {
 		r.handleAPIError(w, errSchemaNotFound())
 		return
 	}

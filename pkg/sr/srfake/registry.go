@@ -75,8 +75,8 @@ type Registry struct {
 	mu sync.RWMutex
 	// Consolidated state
 	subjects    map[string]*subjectData
-	schemasByID map[int]sr.Schema
-	nextID      int
+	schemasByID map[schemaID]sr.Schema
+	highestID   map[string]int // the highest schema ID ever used in each context
 
 	// Global/unrelated state
 	globalCompat sr.CompatibilityLevel
@@ -86,6 +86,13 @@ type Registry struct {
 	expectedAuth string
 	interceptors []Interceptor
 	ictMu        sync.RWMutex
+}
+
+// schemaID is a schema ID in a context. Each context has its own IDs, so one
+// ID can name a different schema in each context.
+type schemaID struct {
+	ctx string
+	id  int
 }
 
 // Interceptor gets the first opportunity to handle a request. If it writes a
@@ -112,8 +119,8 @@ func NewRegistry(opts ...Option) *Registry {
 	r := &Registry{
 		// Simplified state initialization
 		subjects:     make(map[string]*subjectData),
-		schemasByID:  make(map[int]sr.Schema),
-		nextID:       1,
+		schemasByID:  make(map[schemaID]sr.Schema),
+		highestID:    make(map[string]int),
 		globalCompat: sr.CompatBackward,
 		globalMode:   sr.ModeReadWrite,
 	}
@@ -215,7 +222,8 @@ func (r *Registry) ClearInterceptors() {
 }
 
 // SeedSchema inserts an existing schema at subject/version/id. It panics if the
-// slot or id is already populated or if the schema is invalid.
+// slot or the id in the subject's context is already populated, or if the
+// schema is invalid.
 func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 	if err := r.validateSchema(sch); err != nil {
 		panic(fmt.Sprintf("invalid schema: %v", err))
@@ -224,7 +232,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, ok := r.schemasByID[id]; ok {
+	key := schemaID{subjectContext(subject), id}
+	if _, ok := r.schemasByID[key]; ok {
 		panic(fmt.Sprintf("schema id %d already seeded", id))
 	}
 
@@ -239,8 +248,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 		panic(fmt.Sprintf("invalid references: %v", err))
 	}
 
-	// Store schema globally
-	r.schemasByID[id] = sch
+	// Store schema by its ID in the subject's context
+	r.schemasByID[key] = sch
 	guid := schemaGUID(sch)
 
 	// Store schema version data
@@ -262,8 +271,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 	if version > subj.highestVersion {
 		subj.highestVersion = version
 	}
-	if id >= r.nextID {
-		r.nextID = id + 1
+	if id > r.highestID[key.ctx] {
+		r.highestID[key.ctx] = id
 	}
 }
 
@@ -301,11 +310,13 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 		}
 	}
 
-	// reuse id from other subject?
-	for existingID, existing := range r.schemasByID {
-		if !r.schemasEqual(existing, schema) {
+	// reuse id from other subject in the same context?
+	ctx := subjectContext(subject)
+	for key, existing := range r.schemasByID {
+		if key.ctx != ctx || !r.schemasEqual(existing, schema) {
 			continue
 		}
+		existingID := key.id
 		version = subj.highestVersion + 1
 
 		// Check for circular dependencies before storing the schema
@@ -330,8 +341,8 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	}
 
 	// brand-new schema
-	id = r.nextID
-	r.nextID++
+	r.highestID[ctx]++
+	id = r.highestID[ctx]
 	version = subj.highestVersion + 1
 
 	// Check for circular dependencies before storing the schema
@@ -339,8 +350,8 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 		return 0, 0, err
 	}
 
-	// Store schema globally
-	r.schemasByID[id] = schema
+	// Store schema by its ID in the subject's context
+	r.schemasByID[schemaID{ctx, id}] = schema
 	guid := schemaGUID(schema)
 
 	// Store schema version data
@@ -407,8 +418,8 @@ func (r *Registry) Reset() {
 	defer r.mu.Unlock()
 
 	r.subjects = make(map[string]*subjectData)
-	r.schemasByID = make(map[int]sr.Schema)
-	r.nextID = 1
+	r.schemasByID = make(map[schemaID]sr.Schema)
+	r.highestID = make(map[string]int)
 	r.globalCompat = sr.CompatBackward
 }
 
