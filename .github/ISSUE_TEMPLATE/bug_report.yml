@@ -1,0 +1,45 @@
+name: Bug report
+description: Something does not work as documented, or as Kafka does.
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What your program saw, with logs if you have them, and what you expected instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: found
+    attributes:
+      label: How did you find this?
+      options:
+        - In production or staging
+        - In a test against a broker or kfake
+        - Reading the code
+        - An automated or AI-assisted audit
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: A program, or a test against kfake (pkg/kfake), that shows the problem. kfake runs a broker in-process, so most triggers are easy to reproduce.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: The franz-go packages and versions, and the broker (Kafka version, Redpanda, kfake, ...). If you are not on the latest release, check that the latest release still has the problem; it may already be fixed.
+    validations:
+      required: true
+  - type: checkboxes
+    id: evaluated
+    attributes:
+      label: Evaluation
+      description: An obvious failure, such as a panic or no output, in long-released code would likely have been reported already. If you found this by reading the code or with an audit, say who hits it in practice.
+      options:
+        - label: The latest release still has this problem.
+          required: true
+        - label: I evaluated this myself. I think it matters to real users, and it is not intended or documented behavior.
+          required: true
