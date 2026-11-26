@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose new behavior or a new API.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What you are trying to do, and why the current API does not do it.
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: API proposal
+      description: The exported functions, types, options, and fields you propose, with their doc comments, and an example of how you would use them (not needed for a config option). Agree on the proposal here before implementing it.
+    validations:
+      required: true

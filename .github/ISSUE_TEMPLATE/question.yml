@@ -1,0 +1,9 @@
+name: Question
+description: Ask how something works.
+body:
+  - type: textarea
+    id: ask
+    attributes:
+      label: What is your question?
+    validations:
+      required: true
