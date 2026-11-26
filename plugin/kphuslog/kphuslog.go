@@ -36,7 +36,8 @@ func (l *Logger) Level() kgo.LogLevel {
 		return kgo.LogLevelWarn
 	case log.InfoLevel:
 		return kgo.LogLevelInfo
-	case log.TraceLevel, log.DebugLevel:
+	// A logger with an unset level (0) logs everything.
+	case 0, log.TraceLevel, log.DebugLevel:
 		return kgo.LogLevelDebug
 	default:
 		return kgo.LogLevelNone
