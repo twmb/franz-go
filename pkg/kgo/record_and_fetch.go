@@ -247,6 +247,8 @@ func (r *Record) DeliveryCount() int32 {
 // time. Returns the zero time for records that are not from a share group
 // fetch.
 //
+// After a successful AckRenew of the record, this is the renewed deadline.
+//
 // Note this is computed from the acquisition timeout millis in the Kafka
 // ShareFetch response when the client decodes the response. The milliseconds
 // are computed on the broker, and the timeout begins before the fetch is sent
@@ -260,6 +262,13 @@ func (r *Record) AcquisitionDeadline() time.Time {
 	slab, _ := r.Context.Value(shareAckKey).(*shareAckSlab)
 	if slab == nil {
 		return time.Time{}
+	}
+	// A record that was not acquired has a state with no slab, and a copy
+	// of a record has no state we can find: both read the batch's deadline.
+	if st := shareAckFromCtx(r); st != nil {
+		if renewed := st.renewedDeadline.Load(); renewed != 0 {
+			return time.Unix(0, renewed)
+		}
 	}
 	return time.Unix(0, slab.acqLockDeadlineNanos)
 }

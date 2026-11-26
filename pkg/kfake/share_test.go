@@ -1240,6 +1240,7 @@ func TestShareGroupAckRenew(t *testing.T) {
 	// the gap between renews bounded by sleep + FlushAcks latency,
 	// not by ticker drift when FlushAcks stalls.
 	renewCount := 0
+	firstDeadline := acquired.AcquisitionDeadline()
 	deadline := time.Now().Add(900 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		acquired.Ack(kgo.AckRenew)
@@ -1267,6 +1268,9 @@ func TestShareGroupAckRenew(t *testing.T) {
 	// true correctness check is the "no redelivery on cl2" below.
 	if renewCount < 1 {
 		t.Fatalf("expected >=1 renew, got %d", renewCount)
+	}
+	if d := acquired.AcquisitionDeadline(); !d.After(firstDeadline) {
+		t.Errorf("AcquisitionDeadline is %v after %d renews, want later than the first deadline %v", d, renewCount, firstDeadline)
 	}
 
 	acquired.Ack(kgo.AckAccept)

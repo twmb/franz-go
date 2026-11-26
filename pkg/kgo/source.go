@@ -69,6 +69,13 @@ type sourceShare struct {
 	buffered     shareBufferedFetch // decoded share fetch waiting for poll
 	purgedAcks   []cursorAckDrain   // acks drained from purged cursors, sent with the next request
 	dead         chan struct{}      // closed by kill: the loop exits, and the source builds, buffers, and sends nothing more
+
+	// After a ShareAcknowledge sent by itself has acks requeued, we send
+	// acks by themselves again only at ackRetryAt. Only the loop uses
+	// these three.
+	ackRequeues  int         // consecutive requeues, for the backoff
+	ackRetryAt   time.Time   // shareAck drains nothing before this
+	ackRetryWake *time.Timer // signals a flush at ackRetryAt
 }
 
 func (cl *Client) newSource(nodeID int32) *source {

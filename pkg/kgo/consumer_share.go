@@ -187,9 +187,14 @@ type (
 		source      *source
 		sessionGen  uint32
 		ackType     int8 // uniform type for the entire range
+
+		// For a gap, the acquisition lock deadline of the gap's fetch:
+		// expire drops a gap past it. A range built for a request has
+		// none.
+		deadline int64
 	}
 
-	// shareAckState is per-record ack state (24 bytes), used as
+	// shareAckState is per-record ack state (32 bytes), used as
 	// the ack handle directly: pendingAcks, lastPolled, and the
 	// cursorsAcks accumulator all hold *shareAckState. offset and
 	// slab are populated only for ACQUIRED records (set at slab
@@ -222,6 +227,11 @@ type (
 		deliveryCount int32         // broker's delivery count for this record (>= 1)
 		offset        int64         // record's Kafka offset
 		slab          *shareAckSlab // back-ref: gives ackSource, sessionGen, cursor
+
+		// renewedDeadline is the record's acquisition lock deadline
+		// after a successful AckRenew, which renews one record and not
+		// its batch. It is 0 before the first renew; see deadline.
+		renewedDeadline atomic.Int64
 	}
 
 	// shareAckSlab holds the per-record shareAckState array for one
@@ -1705,6 +1715,20 @@ func (s *sourceShare) takeNBuffered(paused pausedTopics, n int) (Fetch, int, boo
 func (s *source) shareAck(predrained []cursorAckDrain) {
 	sc := s.share.sc
 
+	// After a requeue below, we wait out a backoff before we send acks
+	// by themselves again. Without the wait, every flush, ack timer,
+	// and round of a source with nothing to fetch would send the
+	// requeued acks again before the backoff ends.
+	//
+	// shareFetch passes predrained when the acks it drained include a
+	// renew. A renew cannot go in a ShareFetch, so shareFetch has us send
+	// the drained acks first. We send predrained acks without waiting
+	// until ackRetryAt, which is fine; we don't want to block a fetch,
+	// the end result is we retry acks early.
+	if predrained == nil && time.Until(s.share.ackRetryAt) > 0 {
+		return
+	}
+
 	var drains []cursorAckDrain
 	s.share.mu.Lock() // guard concurrent cursor movement
 	epoch := s.share.sessionEpoch
@@ -1717,6 +1741,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	s.share.mu.Unlock()
 
 	if len(drains) == 0 {
+		s.share.ackRequeues = 0 // a fetch took the requeued acks along
 		return
 	}
 
@@ -1832,8 +1857,15 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 		kmove     kip951move
 		brokers   []BrokerMetadata
 		requeued  int64
-		leaderErr bool // a leader error with no hint we can act on
+		retry     bool // we requeued acks that a caller may be waiting on
+		now       = time.Now().UnixNano()
+		backoff   time.Duration // of the retry, set at the first retryable partition error
+		renewed   int64         // the lock deadline of the records this request renewed
+		leaderErr bool          // a leader error with no hint we can act on
 	)
+	if ms := resp.AcquisitionLockTimeoutMillis; req.IsRenewAck && ms > 0 {
+		renewed = now + int64(ms)*int64(time.Millisecond)
+	}
 	for _, ep := range resp.NodeEndpoints {
 		brokers = append(brokers, BrokerMetadata{
 			NodeID: ep.NodeID,
@@ -1867,9 +1899,30 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 					leaderErr = true
 				}
 				if isShareAckRetryable(partErr) {
-					drained.requeue(sc)
-					requeued += int64(len(drained.entries))
-					continue
+					// The broker neither took nor refused the acks.
+					// We retry the acks of each record that can
+					// still be acked when the retry goes out. Past
+					// a record's acquisition lock deadline, the
+					// broker has released the record, and one such
+					// record in a request fails the acks of its
+					// whole partition, so those acks fail here.
+					// A gap past its deadline is dropped. The other
+					// gaps go back with the records, or alone; no
+					// caller waits on a gap. If every record
+					// expired, the gaps are dropped with them.
+					if backoff == 0 {
+						backoff = sc.cfg.retryBackoff(s.share.ackRequeues + 1)
+					}
+					expired := drained.expire(now + backoff.Nanoseconds())
+					if len(drained.entries) > 0 || len(expired) == 0 {
+						retry = drained.requeue(sc) || retry
+						requeued += int64(len(drained.entries))
+					}
+					if len(expired) == 0 {
+						continue
+					}
+					drained.entries = expired // reported below
+					partErr = fmt.Errorf("%w: %w", errShareAckDeadline, partErr)
 				}
 			}
 
@@ -1880,10 +1933,20 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 			// no-op on every entry.
 			if req.IsRenewAck {
 				for _, e := range drained.entries {
-					e.status.CompareAndSwap(int32(AckRenew), 0)
+					if e.status.CompareAndSwap(int32(AckRenew), 0) && partErr == nil && renewed != 0 {
+						e.renewedDeadline.Store(renewed)
+					}
 				}
 			}
 
+			// NOTE: Kafka refuses a partition's acks together when
+			// one record is no longer acquired, so the ack of a
+			// record whose lock ended fails the acks sent with it
+			// for records that are still acquired, and those
+			// records are delivered again. We accept this: it is
+			// unlikely acks have different deadlines; AckRenew is
+			// meant for the case of processing one record at a
+			// time, and you need to renew that one specific record.
 			results = append(results, ShareAckResult{
 				Topic:     drained.cursor.topic,
 				Partition: rp.Partition,
@@ -1914,11 +1977,27 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	}
 	sc.applyMoves(s, kmove)
 	sc.enqueueCallback(results, nAcks-requeued)
+
+	// Nothing else sends requeued acks again: with a fetch buffered or
+	// nothing to fetch, the loop sends no request, and FlushAcks would
+	// wait for good. One timer per source signals a flush after the
+	// backoff.
+	if !retry {
+		s.share.ackRequeues = 0
+		return
+	}
+	s.share.ackRequeues++
+	s.share.ackRetryAt = time.Now().Add(backoff)
+	if s.share.ackRetryWake == nil {
+		s.share.ackRetryWake = time.AfterFunc(backoff, s.signalShareAckFlush)
+	} else {
+		s.share.ackRetryWake.Reset(backoff)
+	}
 }
 
 // releaseUndeliverable releases records that were "acquired" but for which the
 // broker gave us no record data (i.e. protocol violation).
-func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, gen uint32) {
+func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.ShareFetchResponseTopicPartitionAcquiredRecord, gen uint32, deadline int64) {
 	if len(acquired) == 0 {
 		return
 	}
@@ -1933,6 +2012,7 @@ func (s *source) releaseUndeliverable(cursor *shareCursor, acquired []kmsg.Share
 			source:      s,
 			sessionGen:  gen,
 			ackType:     int8(AckRelease),
+			deadline:    deadline,
 		})
 	}
 	cursor.enqueueGaps(releases)
@@ -2017,11 +2097,44 @@ func (sc *shareConsumer) drainCallbacks(entry shareCallbackEntry) {
 	}
 }
 
+// Removes and returns the entries whose record's acquisition lock deadline
+// is not ahead of `at`, and drops the gaps whose deadline is not ahead of
+// `at`. The drain keeps the others.
+func (d *cursorAckDrain) expire(at int64) (expired []*shareAckState) {
+	var live []*shareAckState // a new slice: the caller's slice shares our backing array
+	for _, e := range d.entries {
+		if e.deadline() > at {
+			live = append(live, e)
+		} else {
+			expired = append(expired, e)
+		}
+	}
+	d.entries = live
+	// A clone, for the same reason live is a new slice.
+	d.gaps = slices.DeleteFunc(slices.Clone(d.gaps), func(g shareAckRange) bool { return g.deadline <= at })
+	return expired
+}
+
+// Returns the record's acquisition lock deadline: its batch's, or its own
+// after a renew.
+func (st *shareAckState) deadline() int64 {
+	if d := st.renewedDeadline.Load(); d != 0 {
+		return d
+	}
+	return st.slab.acqLockDeadlineNanos
+}
+
 // requeue puts a drain's entries and gaps back onto its cursor in
 // one mutex acquisition. If the cursor is closed (e.g. after
 // PurgeTopics), entries fire the left-group callback; gaps are
 // silently dropped.
-func (d *cursorAckDrain) requeue(sc *shareConsumer) {
+//
+// We signal the cursor's source when a caller's acks go back, and return
+// whether any did. The cursor can have moved to another source while the
+// request was in flight, and a source that has a fetch buffered sends
+// nothing until a poll or a signal. Gaps alone get no signal: no caller
+// waits on a gap, so the gaps go out with the source's next request.
+func (d *cursorAckDrain) requeue(sc *shareConsumer) (requeued bool) {
 	c := d.cursor
 	c.ackMu.Lock()
 	if c.closed {
@@ -2029,11 +2142,15 @@ func (d *cursorAckDrain) requeue(sc *shareConsumer) {
 		if len(d.entries) > 0 {
 			sc.enqueueCallback(ShareAckResults{{c.topic, c.partition, errShareConsumerLeft}}, int64(len(d.entries)))
 		}
-		return
+		return false
 	}
 	c.pendingAcks = append(c.pendingAcks, d.entries...)
 	c.pendingGaps = append(c.pendingGaps, d.gaps...)
 	c.ackMu.Unlock()
+	if len(d.entries) > 0 {
+		c.source.Load().signalShareAcks()
+	}
+	return len(d.entries) > 0
 }
 
 // enqueueGaps appends gap/release ranges to the cursor's pendingGaps.
@@ -2782,12 +2899,20 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 						"partition", rp.Partition,
 						"err", ackErr,
 					)
-				} else if isShareAckRetryable(ackErr) {
-					pa := piggybackAcks[pi]
-					pa.requeue(sc)
-					ackRequeued += int64(len(pa.entries))
-				} else {
+				} else if !isShareAckRetryable(ackErr) {
 					ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, ackErr})
+				} else {
+					// The acks of a record past its deadline fail,
+					// and the others go back with the next fetch.
+					pa := piggybackAcks[pi]
+					expired := pa.expire(time.Now().UnixNano())
+					if len(pa.entries) > 0 || len(expired) == 0 {
+						pa.requeue(sc)
+						ackRequeued += int64(len(pa.entries))
+					}
+					if len(expired) > 0 {
+						ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, fmt.Errorf("%w: %w", errShareAckDeadline, ackErr)})
+					}
 				}
 			} else if hadAcks {
 				ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, nil})
@@ -2858,7 +2983,7 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					"partition", rp.Partition,
 					"acquired_ranges", len(rp.AcquiredRecords),
 				)
-				s.releaseUndeliverable(cursor, rp.AcquiredRecords, gen)
+				s.releaseUndeliverable(cursor, rp.AcquiredRecords, gen, acqLockDeadlineNanos)
 				continue
 			}
 
@@ -3067,6 +3192,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 					source:      s,
 					sessionGen:  sessionGen,
 					ackType:     gapType,
+					deadline:    acqLockDeadlineNanos,
 				})
 			}
 			slab := r.Context.Value(shareAckKey).(*shareAckSlab)
@@ -3092,6 +3218,7 @@ func (s *source) processSharePartition(topicName string, cursor *shareCursor, se
 				source:      s,
 				sessionGen:  sessionGen,
 				ackType:     gapType,
+				deadline:    acqLockDeadlineNanos,
 			})
 		}
 	}

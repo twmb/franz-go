@@ -1127,3 +1127,24 @@ func TestDrainPurgedAcksLiveCursor(t *testing.T) {
 		t.Fatalf("got %d drains, want 1 under the live cursor", len(drains))
 	}
 }
+
+// A drain is split by each record's own deadline, which is the renewed
+// deadline for a record that was renewed. A gap past its deadline is dropped.
+func TestCursorAckDrainExpire(t *testing.T) {
+	t.Parallel()
+	slab := &shareAckSlab{acqLockDeadlineNanos: 100, states: make([]shareAckState, 3)}
+	d := cursorAckDrain{gaps: []shareAckRange{{deadline: 100}, {deadline: 300}}}
+	for i := range slab.states {
+		slab.states[i].slab = slab
+		slab.states[i].offset = int64(i)
+		d.entries = append(d.entries, &slab.states[i])
+	}
+	slab.states[2].renewedDeadline.Store(300)
+	expired := d.expire(200)
+	if len(expired) != 2 || len(d.entries) != 1 || d.entries[0].offset != 2 {
+		t.Errorf("expire(200) left %d entries and returned %d, want the renewed record left and the other two returned", len(d.entries), len(expired))
+	}
+	if len(d.gaps) != 1 || d.gaps[0].deadline != 300 {
+		t.Errorf("expire(200) left %d gaps, want only the gap whose deadline is 300", len(d.gaps))
+	}
+}

@@ -517,6 +517,10 @@ type errApiVersionsReset struct {
 // should treat this as fatal-for-this-record and not retry.
 var errShareConsumerLeft = errors.New("share consumer has left the group; ack will not be delivered")
 
+// The broker answered an ack with a retryable error until no retry could go
+// out before the acquisition lock deadline of the ack's records.
+var errShareAckDeadline = errors.New("unable to acknowledge before the record's acquisition lock deadline")
+
 // errBrokerOmittedAckPartition is reported via shareAckCallback when
 // the broker's ShareFetch or ShareAcknowledge response did not echo a
 // partition we sent acks for. The broker did not return a Kafka error
