@@ -482,6 +482,31 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 
+		// GUIDs
+		{
+			name:   "GET /schemas/guids/{guid}/ids - soft-deleted version keeps its ID",
+			method: "GET",
+			path:   "/schemas/guids/5e7f40ce-ba13-8394-ab4a-c4e82c0ededd/ids",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value/versions/1")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"context":".","id":1}]`,
+		},
+		{
+			name:   "GET /schemas/guids/{guid}/ids - hard-deleted version keeps its ID",
+			method: "GET",
+			path:   "/schemas/guids/5e7f40ce-ba13-8394-ab4a-c4e82c0ededd/ids",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value/versions/1")
+				del(r, "/subjects/user-topic-value/versions/1?permanent=true")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"context":".","id":1}]`,
+		},
+
 		// Config and mode
 		{
 			name:       "GET /config/{s} - subject without a level returns 40408",
@@ -1157,10 +1182,10 @@ func TestSchemaByGUIDHandlers(t *testing.T) {
 			wantBody:   `[{"context":".","id":123}]`,
 		},
 		{
-			name:       "GET /schemas/guids/{guid}/ids - not found",
+			name:       "GET /schemas/guids/{guid}/ids - unknown GUID returns an empty list",
 			path:       "/schemas/guids/" + missing + "/ids",
-			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "Schema not found"}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
 		},
 	}
 

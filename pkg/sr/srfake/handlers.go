@@ -336,35 +336,22 @@ func (r *Registry) handleGetSchemaByGUID(w http.ResponseWriter, req *http.Reques
 
 // handleGetSchemaIDsByGUID emulates GET /schemas/guids/{guid}/ids to retrieve the
 // (context, schema ID) pairs that the GUID resolves to. A GUID is global, so
-// every context is searched; each context that contains the schema contributes
-// its own ID.
+// every known context is searched, in sorted order; each context that has the
+// GUID contributes its own ID. As in Confluent's registry, that is the ID last
+// seeded, registered, or soft-deleted with the GUID, which a permanent delete
+// does not remove, and an unknown GUID returns an empty list.
 func (r *Registry) handleGetSchemaIDsByGUID(w http.ResponseWriter, req *http.Request) {
 	guid := req.PathValue("guid")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	byContext := make(map[string]int)
-	for subject, subj := range r.subjects {
-		if !subj.active() {
-			continue
-		}
-		for _, vd := range subj.versions {
-			if !vd.isDeleted && vd.schema.GUID == guid {
-				byContext[subjectContext(subject)] = vd.schema.ID
-				break
-			}
+	ids := make([]sr.ContextID, 0)
+	for _, c := range append([]string{"."}, r.sortedContextsLocked()...) {
+		if id, ok := r.idsByGUID[contextGUID{c, guid}]; ok {
+			ids = append(ids, sr.ContextID{Context: c, ID: id})
 		}
 	}
-	if len(byContext) == 0 {
-		r.handleAPIError(w, errSchemaNotFound(""))
-		return
-	}
-	ids := make([]sr.ContextID, 0, len(byContext))
-	for c, id := range byContext {
-		ids = append(ids, sr.ContextID{Context: c, ID: id})
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i].Context < ids[j].Context })
 	respondJSON(w, http.StatusOK, ids)
 }
 
