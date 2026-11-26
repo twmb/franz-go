@@ -484,10 +484,11 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	// OperationNotAttempted will be returned at most once.
 	//
 	// UnknownServerError should not be returned, but some brokers do
-	// (e.g. Redpanda in certain versions). It leaves the commit/abort
-	// unconfirmed: the broker may or may not have completed it. We
-	// retry as an abort (see the arm below) rather than reporting a
-	// commit we cannot confirm.
+	// (e.g. Redpanda in certain versions). After UnknownServerError, we do
+	// not know whether the broker completed the commit or abort. We call
+	// EndTransaction again with the same TransactionEndTry (see the case
+	// below), which resends the same EndTxn, and we report a commit only
+	// if a resent commit succeeds.
 	var tries int
 retry:
 	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
@@ -504,19 +505,11 @@ retry:
 			willTryCommit = false
 			goto retry
 
-		case errors.Is(endTxnErr, kerr.UnknownServerError):
-			// We must downgrade to an abort exactly like the two arms
-			// above. EndTransaction already consumed inTxn on the
-			// erroring call, so re-calling it returns nil at its !inTxn
-			// guard without issuing another EndTxn: we cannot actually
-			// re-commit. If willTryCommit stayed true, that nil would
-			// look like a successful commit below and advance the
-			// consumer offsets even though the broker may have aborted
-			// the transaction: silent data loss. Retrying as an abort
-			// reports not-committed and rewinds to the last committed
-			// offsets, so the caller reprocesses.
-			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction returned an unknown server error; the commit is unconfirmed, retrying as abort to avoid reporting a false commit")
-			willTryCommit = false
+		case errors.Is(endTxnErr, kerr.UnknownServerError) && s.cl.producer.endUnconfirmed.Load() != nil:
+			// We still do not know whether the commit or abort
+			// happened. EndTransaction resends the same EndTxn only for
+			// the same TransactionEndTry, as Java does.
+			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction returned an unknown server error and did not learn whether the commit or abort happened; resending the same EndTxn", "commit", willTryCommit)
 			goto retry
 		}
 	}
@@ -577,6 +570,14 @@ retry:
 // BeginTransaction sets the client to a transactional state, erroring if there
 // is no transactional ID, or if the producer is currently in a fatal
 // (unrecoverable) state, or if the client is already in a transaction.
+//
+// After EndTransaction returns one of these errors, BeginTransaction may
+// recover the producer ID:
+//
+//   - InvalidProducerIDMapping and InvalidProducerEpoch, against Kafka <4.0 or
+//     a cluster that has not enabled transaction.version 2
+//   - UnknownProducerID, against Kafka 2.5+
+//   - TransactionAbortable, after the abort
 //
 // This must not be called concurrently with other client functions.
 func (cl *Client) BeginTransaction() error {
@@ -725,48 +726,41 @@ func errRecreatedInTxn(topics []string) error {
 	return fmt.Errorf("the transaction produced to %v before the topic was deleted and recreated; the records the old topic acknowledged are gone, abort the transaction: %w, %w", topics, kerr.TransactionAbortable, kerr.UnknownTopicID)
 }
 
-// EndTransaction ends a transaction and resets the client's internal state to
-// not be in a transaction.
+// Neither TryCommit nor TryAbort is safe: a resent commit would commit offsets
+// for records that are gone, and an abort cannot tell the caller whether the
+// commit happened.
+func errUnconfirmedRecreated(topics []string) error {
+	return fmt.Errorf("the transaction produced to %v before the topic was deleted and recreated, and EndTransaction did not learn whether the last commit happened; neither TryCommit nor TryAbort is safe, close the client", topics)
+}
+
+// EndTransaction commits or aborts the current transaction.
 //
-// Flush and CommitOffsetsForTransaction must be called before this function;
-// this function does not flush and does not itself ensure that all buffered
-// records are flushed. If no record yet has caused a partition to be added to
-// the transaction, this function does nothing and returns nil. Alternatively,
-// AbortBufferedRecords should be called before aborting a transaction to
-// ensure that any buffered records not yet flushed will not be a part of a new
-// transaction.
+// EndTransaction does not flush: call Flush before committing, or
+// AbortBufferedRecords before aborting, so that no buffered record joins the
+// next transaction. If no record has added a partition to the transaction,
+// EndTransaction does nothing and returns nil.
 //
-// If the producer ID has an error and you are trying to commit, this will
-// return with kerr.OperationNotAttempted. If this happened, retry
-// EndTransaction with TryAbort. If this returns kerr.TransactionAbortable, you
-// can retry with TryAbort. If a commit attempt's outcome is unconfirmed (a
-// transport error, or the broker replied UNKNOWN_SERVER_ERROR), the error is
-// returned and you should also retry with TryAbort: the retry aborts by
-// reloading the producer ID, which bumps the epoch and fence-aborts anything
-// still ongoing broker-side; retrying with TryCommit instead is refused, since
-// the prior outcome is unknowable. You should not retry this function on any
-// other error.
+// TryCommit returns kerr.OperationNotAttempted if the producer ID has an
+// error, and kerr.TransactionAbortable if the transaction must abort; for
+// either, call EndTransaction again with TryAbort. TryCommit also returns an
+// error wrapping kerr.TransactionAbortable and kerr.UnknownTopicID if a topic
+// the transaction produced to was deleted and recreated; abort, and produce
+// the records again in a new transaction.
 //
-// It may be possible for the client to recover in a new transaction via
-// BeginTransaction if an error is returned from this function:
+// If the context ends, the client closes, or the coordinator answers
+// UNKNOWN_SERVER_ERROR, EndTransaction returns that error without learning
+// whether the commit or abort happened. You can call EndTransaction again with
+// the same TransactionEndTry to resend the same commit or abort, or close the
+// client. Until EndTransaction learns the outcome, any other TransactionEndTry
+// is refused, and ProducerID returns an error. If a resent commit returns
+// kerr.InvalidTxnState, the commit did not happen.
 //
-//   - When transactions are not running under KIP-890 part 2 (the cluster's
-//     transaction.version feature is below 2), InvalidProducerIDMapping and
-//     InvalidProducerEpoch are recoverable
-//   - UnknownProducerID is recoverable for Kafka 2.5+
-//   - TransactionAbortable is always recoverable (after aborting)
+// The gist is, do not retry EndTransaction after any error other than:
 //
-// A transaction that produced to a topic which was then deleted and
-// recreated cannot commit: the records the old topic acknowledged are gone
-// with it, while the offsets the transaction consumed would be committed.
-// TryCommit is refused with an error wrapping TransactionAbortable and
-// UnknownTopicID and the transaction stays open; abort it, and produce the
-// records again in a new transaction.
-//
-// Note that canceling the context will likely leave the client in an
-// undesirable state, because canceling the context may cancel the in-flight
-// EndTransaction request, making it impossible to know whether the commit or
-// abort was successful. It is recommended to not cancel the context.
+//   - kerr.OperationNotAttempted or kerr.TransactionAbortable: retry with
+//     TryAbort
+//   - the context ending, the client closing, or kerr.UnknownServerError:
+//     retry with the same TransactionEndTry
 func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) error {
 	cl.producer.txnMu.Lock()
 	defer cl.producer.txnMu.Unlock()
@@ -776,17 +770,13 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 	if commit {
 		if topics := cl.producer.topicsRecreatedInTxn(); len(topics) > 0 {
+			if u := cl.producer.endUnconfirmed.Load(); u != nil && u.commit {
+				return errUnconfirmedRecreated(topics)
+			}
 			return errRecreatedInTxn(topics)
 		}
 	}
 	cl.producer.inTxn = false
-
-	// If a prior EndTxn attempt's outcome was unconfirmed, this call is the
-	// documented TryAbort retry (state was restored so we could get here).
-	// Remember and clear; restored again below if this attempt also fails
-	// before confirming anything.
-	unconfirmed := cl.producer.endUnconfirmed
-	cl.producer.endUnconfirmed = false
 
 	cl.producer.producingTxn.Store(false) // forbid any new produces while ending txn
 
@@ -823,11 +813,28 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		anyAdded = true
 	}
 
+	// restore puts back the transaction state this call consumed, for the
+	// documented retry. producingTxn stays false: produces before the retry
+	// fail fast with errNotInTransaction.
+	restore := func() {
+		for _, rb := range addedSwapped {
+			rb.addedToTxn.Store(true)
+		}
+		if offsetsWereAdded {
+			g.offsetsAddedToTxn = true
+		}
+		cl.producer.inTxn = true
+	}
+
 	// If no partition was added to a transaction, then we have nothing to commit.
 	//
 	// Note that anyAdded is true if the producer ID was failed, meaning we will
 	// get to the potential recovery logic below if necessary.
-	if !anyAdded {
+	//
+	// After a commit that we do not know happened, we resend the commit
+	// below even if no partition is left in the transaction, such as after
+	// a purge.
+	if u := cl.producer.endUnconfirmed.Load(); !anyAdded && (u == nil || !u.commit) {
 		// Under KIP-890 part 2, a produce request registers its
 		// partition in the broker-side transaction before the data
 		// append, and the registration is durable even if the append
@@ -851,26 +858,66 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		commit = TryAbort
 	}
 
+	// After an EndTxn that we do not know happened, a later EndTransaction
+	// with the same TransactionEndTry resends the same EndTxn, at the
+	// producer ID and epoch the first EndTxn used, and sends no
+	// InitProducerID. Aborting by reloading the producer ID instead would
+	// abort the transaction of another producer that took over our
+	// transactional ID. Without KIP-890 part 2, if the lost EndTxn never
+	// reached the coordinator, the reload's abort would also clear the
+	// epoch the reload retries from, and the coordinator would fence us.
+	if u := cl.producer.endUnconfirmed.Load(); u != nil {
+		// As Java does, we resend only for the same TransactionEndTry:
+		// TryAbort after a commit that we do not know happened cannot
+		// tell the caller whether the commit happened.
+		if bool(commit) != u.commit {
+			restore()
+			if !u.commit {
+				return errors.New("EndTransaction did not learn whether the last abort happened; call it again with TryAbort")
+			}
+			if topics := cl.producer.topicsRecreatedInTxn(); len(topics) > 0 {
+				return errUnconfirmedRecreated(topics)
+			}
+			return errors.New("EndTransaction did not learn whether the last commit happened; call it again with TryCommit, or close the client")
+		}
+
+		stored := cl.producer.id.Load().(*producerID)
+		err := cl.endTxn(ctx, u.id, u.epoch, commit)
+		if err == nil {
+			// Without KIP-890 part 2, the end leaves the producer ID
+			// and epoch as they are. With KIP-890 part 2, endTxn stored
+			// the ID and epoch the end bumped to, and the swap fails.
+			if errors.Is(stored.err, errReloadProducerID) {
+				cl.producer.id.CompareAndSwap(stored, &producerID{id: u.id, epoch: u.epoch})
+			}
+			cl.producer.endUnconfirmed.Store(nil)
+			return nil
+		}
+		// As after an EndTxn below, a definitive answer, INVALID_TXN_STATE
+		// included, fails the producer ID with that answer, and anything
+		// else leaves the producer ID failed for reload. Either way, the
+		// next retry sees the transaction state.
+		if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+			cl.producer.id.CompareAndSwap(stored, &producerID{id: u.id, epoch: u.epoch, err: err})
+		}
+		restore()
+		if bool(commit) && errors.Is(err, kerr.InvalidTxnState) {
+			return fmt.Errorf("the resent commit did not happen: %w", err)
+		}
+		return err
+	}
+
 	id, epoch, err := cl.producerID(ctx2fn(ctx))
 	if err != nil {
 		if commit {
 			// We are not attempting the commit: restore everything this
-			// call consumed (inTxn, addedToTxn, offsetsAddedToTxn). The
-			// documented retry is TryAbort, and that retry must still
-			// see the transaction state to issue the EndTxn abort;
-			// consuming the state here would turn the retry into a
-			// no-op that leaves the broker-side transaction ongoing
-			// until the transaction timeout aborts it. producingTxn
-			// stays false: produces between the failed commit and the
-			// abort retry fail fast with errNotInTransaction.
-			for _, rb := range addedSwapped {
-				rb.addedToTxn.Store(true)
-			}
-			if offsetsWereAdded {
-				g.offsetsAddedToTxn = true
-			}
-			cl.producer.inTxn = true
-			cl.producer.endUnconfirmed = unconfirmed
+			// call consumed. The documented retry is TryAbort, and that
+			// retry must still see the transaction state to issue the
+			// EndTxn abort; consuming the state here would turn the
+			// retry into a no-op that leaves the broker-side
+			// transaction ongoing until the transaction timeout aborts
+			// it.
+			restore()
 			return kerr.OperationNotAttempted
 		}
 
@@ -884,28 +931,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		}
 	}
 
-	// This is the retry after an unconfirmed EndTxn outcome, and the
-	// producerID call above succeeded -- which, with the ID failed as
-	// errReloadProducerID, means it re-ran InitProducerID at our prior
-	// id/epoch: the broker bumped the epoch and fence-aborted anything
-	// still ongoing from the unconfirmed attempt. That reload IS the
-	// abort; issuing EndTxn now would end an empty transaction at the
-	// fresh epoch, which pre-KIP-890p2 brokers reject with
-	// INVALID_TXN_STATE. A commit retry is refused: the prior outcome is
-	// unknowable and the reload above may have just aborted it, so
-	// "success" here would lie to the caller.
-	if unconfirmed {
-		if commit {
-			return errors.New("cannot retry a commit whose outcome is unconfirmed: the transaction may already be aborted; retry with TryAbort")
-		}
-		cl.cfg.logger.Log(LogLevelInfo, "aborting an unconfirmed transaction via producer id reload; the epoch bump fence-aborted anything still ongoing",
-			"transactional_id", *cl.cfg.txnID,
-			"id", id,
-			"epoch", epoch,
-		)
-		return nil
-	}
-
 	cl.cfg.logger.Log(LogLevelInfo, "ending transaction",
 		"transactional_id", *cl.cfg.txnID,
 		"commit", commit,
@@ -913,7 +938,43 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		"epoch", epoch,
 	)
 
-	err = cl.doWithConcurrentTransactions(ctx, "EndTxn", func() error {
+	err = cl.endTxn(ctx, id, epoch, commit)
+
+	// After an EndTxn error, we fail the producer ID, so that nothing
+	// produces at this id and epoch into a transaction that may still be
+	// open.
+	//
+	// How we fail the id depends on what we know. A non-retryable Kafka
+	// error (fenced, invalid mapping, etc.) is a definitive broker
+	// answer: fail with that error so recovery flows through
+	// maybeRecoverProducerID. Everything else (a transport error or a
+	// retryable error when ctx ended or the client closed,
+	// UNKNOWN_SERVER_ERROR) leaves the commit or abort unconfirmed: fail
+	// with errReloadProducerID, and save what the EndTxn sent, which the
+	// documented retry in the same direction resends. Until then, nothing
+	// reloads the producer ID (see producerID).
+	//
+	// failProducerID only swaps over an error-free id, so this cannot
+	// clobber an already-fatal producer state. We also restore
+	// everything this call consumed, so that the retry re-enters with the
+	// transaction state intact.
+	if err != nil {
+		cl.producer.endUnconfirmed.Store(&sentEndTxn{id: id, epoch: epoch, commit: bool(commit)})
+		if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+			cl.failProducerID(id, epoch, err)
+		} else {
+			cl.failProducerID(id, epoch, errReloadProducerID)
+		}
+		restore()
+	}
+
+	return err
+}
+
+// Sends EndTxn until the coordinator answers, and on success stores the
+// producer ID the end leaves us with.
+func (cl *Client) endTxn(ctx context.Context, id int64, epoch int16, commit TransactionEndTry) error {
+	return cl.doWithConcurrentTransactions(ctx, "EndTxn", func() error {
 		req := kmsg.NewPtrEndTxnRequest()
 		req.TransactionalID = *cl.cfg.txnID
 		req.ProducerID = id
@@ -923,11 +984,22 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		if !cl.producer.tx890p2.Load() {
 			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
 		}
-		resp, err := req.RequestWith(ctx, cl)
-		if err != nil {
-			return err
+		// If we stop resending an EndTxn, we do not know whether it happened,
+		// so we resend until the coordinator answers, as produce does under
+		// idempotency.
+		var resp *kmsg.EndTxnResponse
+		var err error
+		for tries := 1; ; tries++ {
+			if resp, err = req.RequestWith(ctx, cl); err == nil {
+				err = kerr.ErrorForCode(resp.ErrorCode)
+			}
+			resend := kerr.IsRetriable(err) || isRetryableBrokerErr(err) || isAnyDialErr(err)
+			if !resend || !cl.waitTries(ctx, cl.cfg.retryBackoff(tries)) {
+				break
+			}
+			cl.cfg.logger.Log(LogLevelInfo, "resending EndTxn until the coordinator answers", "transactional_id", *cl.cfg.txnID, "tries", tries, "err", err)
 		}
-		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		if err != nil {
 			return err
 		}
 		if resp.Version >= 5 && resp.ProducerID >= 0 {
@@ -966,56 +1038,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		}
 		return nil
 	})
-
-	// Any error after an attempted EndTxn must fail the producer ID.
-	// Otherwise: EndTxn(commit) dies on a transport error, so the
-	// request may never have reached the broker and the broker
-	// transaction is still ongoing; the documented TryAbort retry
-	// returns nil at the !inTxn guard above without sending anything;
-	// the next BeginTransaction succeeds (the id is error-free) and
-	// produces run at the same id/epoch, so under KIP-890p2 they
-	// implicitly join the still-ongoing transaction; the next commit
-	// then also commits the prior "failed" transaction's records, which
-	// the caller already rewound and reprocessed.
-	//
-	// How we fail the id depends on what we know. A non-retryable Kafka
-	// error (fenced, invalid mapping, etc.) is a definitive broker
-	// answer: fail with that error so recovery flows through
-	// maybeRecoverProducerID. Everything else (a transport error, a
-	// retryable error that outlived retries, UNKNOWN_SERVER_ERROR)
-	// leaves the commit or abort unconfirmed: fail with
-	// errReloadProducerID, so the next produce or BeginTransaction
-	// re-runs InitProducerID at our current id/epoch, which bumps the
-	// epoch and fence-aborts any transaction still ongoing broker-side
-	// (the same KIP-360 heal maybeRecoverProducerID relies on). If the
-	// EndTxn did complete, the re-init is harmless; either way the
-	// caller saw an error and reprocesses.
-	//
-	// failProducerID only swaps over an error-free id, so this cannot
-	// clobber an already-fatal producer state. We also restore
-	// everything this call consumed and mark the outcome unconfirmed, so
-	// the documented TryAbort retry heals immediately: it re-enters with
-	// transaction state intact, its producerID call reloads the failed
-	// id, and the retry returns nil above without sending an EndTxn.
-	// producingTxn stays false: produces between the failure and the
-	// retry fail fast rather than buffering against a failed id.
-	if err != nil {
-		if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
-			cl.failProducerID(id, epoch, err)
-		} else {
-			cl.failProducerID(id, epoch, errReloadProducerID)
-		}
-		for _, rb := range addedSwapped {
-			rb.addedToTxn.Store(true)
-		}
-		if offsetsWereAdded {
-			g.offsetsAddedToTxn = true
-		}
-		cl.producer.inTxn = true
-		cl.producer.endUnconfirmed = true
-	}
-
-	return err
 }
 
 // Clears addedToTxn on every partition and returns the buffers it was set on.

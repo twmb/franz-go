@@ -87,13 +87,19 @@ type producer struct {
 
 	txnMu xsync.Mutex
 	inTxn bool
-	// endUnconfirmed, guarded by txnMu, is set when an attempted EndTxn
-	// outcome is unconfirmed (transport error, retries exhausted, or
-	// UNKNOWN_SERVER_ERROR). EndTransaction restores the transaction
-	// state it consumed so the documented TryAbort retry can heal via
-	// producer id reload; this flag tells the retry that the reload is
-	// the abort and no EndTxn should be sent.
-	endUnconfirmed bool
+	// endUnconfirmed is non-nil while an attempted EndTxn's outcome is
+	// unconfirmed (ctx ended or the client closed before an answer, or
+	// UNKNOWN_SERVER_ERROR), and is what that EndTxn sent. EndTransaction
+	// restores the transaction state it consumed, and the documented
+	// retry in the same direction resends the same EndTxn.
+	//
+	// producerID loads the producer ID, then endUnconfirmed, and does not
+	// reload the producer ID while endUnconfirmed is set. EndTransaction
+	// sets endUnconfirmed before EndTransaction fails the producer ID for
+	// reload, and clears endUnconfirmed after EndTransaction replaces that
+	// failed producer ID, so a producerID call running at the same time
+	// does not reload that producer ID.
+	endUnconfirmed atomic.Pointer[sentEndTxn]
 	tx890p2        atomic.Bool
 
 	// producedInTxn is set when a record is buffered within the current
@@ -1029,7 +1035,8 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 
 // ProducerID returns, loading if necessary, the current producer ID and epoch.
 // This returns an error if the producer ID could not be loaded, if the
-// producer ID has fatally errored, or if the context is canceled.
+// producer ID has fatally errored, if the context is canceled, or while
+// EndTransaction does not know whether its last commit or abort happened.
 func (cl *Client) ProducerID(ctx context.Context) (int64, int16, error) {
 	var (
 		id    int64
@@ -1058,7 +1065,12 @@ type producerID struct {
 	err   error
 }
 
-var errReloadProducerID = errors.New("producer id needs reloading")
+// The producer ID, epoch, and direction of an EndTxn.
+type sentEndTxn struct {
+	id     int64
+	epoch  int16
+	commit bool
+}
 
 // producerID returns, loading if necessary, the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
@@ -1067,6 +1079,12 @@ func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error)
 	p := &cl.producer
 
 	id := p.id.Load().(*producerID)
+	// As in Java, nothing reloads the producer ID while we do not know
+	// whether an EndTxn happened: the reload's InitProducerID would abort a
+	// transaction whose commit the caller can still resend.
+	if p.endUnconfirmed.Load() != nil {
+		return id.id, id.epoch, errEndTxnUnconfirmed
+	}
 	if errors.Is(id.err, errReloadProducerID) {
 		p.idMu.Lock()
 		defer p.idMu.Unlock()

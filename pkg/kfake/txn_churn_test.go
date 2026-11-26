@@ -8,6 +8,7 @@ package kfake
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -182,13 +183,17 @@ func TestAuditTxnV2MaxVersionsPinnedProduce(t *testing.T) {
 
 // Coordinator-churn sound guard: an EndTxn that lands on a moved coordinator
 // gets NOT_COORDINATOR; the coordinator-request wrapper must delete the
-// cached coordinator, re-look it up, and retry, so a single NOT_COORDINATOR
-// never fails a commit. This holds today; keep it holding.
+// cached coordinator, re-look it up, and retry, so a NOT_COORDINATOR never
+// fails a commit. EndTransaction resends EndTxn past RequestRetries, so the
+// commit survives more NOT_COORDINATOR answers than RequestRetries allows.
 func TestAuditTxnEndTxnNotCoordinatorRetried(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-endtxn-nc"))
 
-	cl := newPlainClient(t, c, kgo.TransactionalID("audit-endtxn-nc"))
+	cl := newPlainClient(t, c, kgo.TransactionalID("audit-endtxn-nc"),
+		kgo.RequestRetries(1),
+		kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond }),
+	)
 	if err := cl.BeginTransaction(); err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
@@ -197,12 +202,12 @@ func TestAuditTxnEndTxnNotCoordinatorRetried(t *testing.T) {
 		t.Fatalf("ProduceSync: %v", err)
 	}
 
-	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.NotCoordinator})
+	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.NotCoordinator, Count: 3})
 
 	if err := cl.EndTransaction(context.Background(), kgo.TryCommit); err != nil {
-		t.Fatalf("EndTransaction did not survive one NOT_COORDINATOR (injected %d): %v", injected.Hits(), err)
+		t.Fatalf("EndTransaction did not survive three NOT_COORDINATOR (injected %d): %v", injected.Hits(), err)
 	}
-	if injected.Hits() != 1 {
-		t.Fatalf("expected exactly one injected NOT_COORDINATOR, got %d", injected.Hits())
+	if injected.Hits() != 3 {
+		t.Fatalf("expected exactly three injected NOT_COORDINATOR, got %d", injected.Hits())
 	}
 }

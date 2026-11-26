@@ -3544,92 +3544,6 @@ func TestProduceUnknownFailLimitNotResetByOtherErrors(t *testing.T) {
 	}
 }
 
-// TestEndTxnUnconfirmedErrorNoSilentJoin: an EndTxn(commit) that fails with
-// an unconfirmed outcome (here UNKNOWN_SERVER_ERROR intercepting the request
-// before the broker processes it) must not leave the client able to silently
-// join the still-ongoing broker transaction. Pre-fix, EndTransaction consumed
-// the client txn state without failing the producer ID: the documented
-// TryAbort retry no-op'd at the !inTxn guard, the next transaction produced
-// at the same pid/epoch into the ongoing transaction, and its commit
-// committed BOTH transactions' records. Post-fix, the producer ID is flagged
-// for reload; the next BeginTransaction re-inits (KIP-360), which bumps the
-// epoch and fence-aborts the ongoing transaction, so a read_committed
-// consumer sees only the second transaction's record.
-func TestEndTxnUnconfirmedErrorNoSilentJoin(t *testing.T) {
-	t.Parallel()
-	const testTopic = "txn-unconfirmed-endtxn"
-
-	c := newCluster(t,
-		NumBrokers(1),
-		SeedTopics(1, testTopic),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	// Fail the FIRST EndTxn with UNKNOWN_SERVER_ERROR without kfake ever
-	// processing it, leaving the broker-side transaction ongoing.
-	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
-
-	cl := newPlainClient(t, c,
-		kgo.DefaultProduceTopic(testTopic),
-		kgo.TransactionalID("txn-unconfirmed"),
-	)
-
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.ProduceSync(ctx, kgo.StringRecord("txn1")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
-		t.Fatal("expected EndTransaction to fail from the controlled UNKNOWN_SERVER_ERROR")
-	}
-	// The documented recovery: retry as an abort. This is a client-side
-	// no-op (state was consumed), but the producer ID is now flagged for
-	// reload.
-	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("abort retry errored: %v", err)
-	}
-
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("begin after unconfirmed end errored: %v", err)
-	}
-	if err := cl.ProduceSync(ctx, kgo.StringRecord("txn2")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
-		t.Fatalf("second commit errored: %v", err)
-	}
-
-	consumer := newPlainClient(t, c,
-		kgo.ConsumeTopics(testTopic),
-		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-	)
-
-	// The topic has one partition: if txn1's record were committed it
-	// would arrive before txn2's. Seeing txn2 first proves txn1 aborted.
-	for {
-		fs := consumer.PollFetches(ctx)
-		if errs := fs.Errors(); len(errs) > 0 {
-			t.Fatalf("fetch errors: %v", errs)
-		}
-		var done bool
-		fs.EachRecord(func(r *kgo.Record) {
-			switch string(r.Value) {
-			case "txn1":
-				t.Error("read_committed consumer saw txn1's record; the unconfirmed transaction was silently committed by txn2")
-			case "txn2":
-				done = true
-			}
-		})
-		if done || t.Failed() {
-			break
-		}
-	}
-}
-
 // reentrantDisconnectHook re-enters the client from OnBrokerDisconnect.
 // Hooks are not documented as forbidden from doing this; pre-fix, brokers
 // were stopped while holding the brokersMu write lock, so the re-entry
@@ -4188,133 +4102,166 @@ func TestApiVersionsSoftwareNameValidation(t *testing.T) {
 	}
 }
 
-// An EndTxn whose outcome is unconfirmed (transport error, retries exhausted,
-// or UNKNOWN_SERVER_ERROR) restores the client's transaction state so the
-// documented retry with TryAbort heals immediately: the retry reloads the
-// producer ID, whose epoch bump fence-aborts anything still ongoing broker
-// side, and sends no second EndTxn. Previously the retry was a silent no-op
-// and the broker transaction lingered until the next transaction began (or
-// the transaction timeout fired), stalling read_committed consumers.
-func TestEndTxnUnconfirmedAbortRetry(t *testing.T) {
+// An EndTxn whose outcome is unconfirmed (here UNKNOWN_SERVER_ERROR) restores
+// the client's transaction state, so BeginTransaction fails, and each
+// documented retry in the same direction resends the EndTxn at the epoch it
+// used, with no InitProducerID; a retry in the other direction is refused.
+// Until then, ProducerID fails without reloading. INVALID_TXN_STATE answering
+// the resend is definitive. Another producer that took over the
+// transactional ID fences the retry and keeps its transaction.
+func TestEndTxnUnconfirmedRetry(t *testing.T) {
 	t.Parallel()
-	const topic = "txn-unconfirmed-abort"
+	for _, test := range []struct {
+		name     string
+		tv1      bool // pin EndTxn to v4, on a cluster at transaction.version 1
+		commit   bool // the EndTxn and its retry commit, rather than abort
+		flip     bool // the retry goes in the other direction
+		purge    bool // the client purges the topic before the retry
+		failProd bool // the transaction's produce fails, so no partition is added
+		// Before the retry: the coordinator committed or aborted at our
+		// epoch, another producer took over, or the client asked for its
+		// producer ID.
+		committed, aborted, takeover, askedID bool
 
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
+		wantErr  error  // what the retry returns; nil means it heals
+		wantMsg  string // if non-empty, the retry is refused with this text
+		wantEnds int    // EndTxn requests the retry sends
+	}{
+		{name: "lost", wantEnds: 1},
+		{name: "tv1-lost", tv1: true, wantEnds: 1},
+		{name: "aborted", aborted: true, wantEnds: 1},
+		{name: "takeover", takeover: true, wantErr: kerr.ProducerFenced, wantEnds: 1},
+		{name: "asked-id", askedID: true, wantEnds: 1},
+		{name: "committed", committed: true, wantErr: kerr.InvalidTxnState, wantEnds: 1},
+		{name: "commit-lost", commit: true, wantEnds: 1},
+		{name: "commit-committed", commit: true, committed: true, wantEnds: 1},
+		{name: "commit-takeover", commit: true, takeover: true, wantErr: kerr.ProducerFenced, wantEnds: 1},
+		{name: "commit-asked-id", commit: true, askedID: true, wantEnds: 1},
+		{name: "tv1-commit-aborted", tv1: true, commit: true, aborted: true, wantErr: kerr.InvalidTxnState, wantEnds: 1},
+		{name: "commit-then-abort", commit: true, flip: true, wantMsg: "again with TryCommit"},
+		{name: "abort-then-commit", flip: true, wantMsg: "again with TryAbort"},
+		{name: "tv1-commit-purged", tv1: true, commit: true, purge: true, wantEnds: 1},
+		{name: "commit-failed-produce", commit: true, failProd: true, wantEnds: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			const topic = "txn-unconfirmed-abort"
 
-	// The observers go in first: a faulted request hits every fault it
-	// matches, and only the erroring one answers.
-	endTxns := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Observe: true, Count: -1})
-	initPIDs := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Observe: true, Count: -1})
-	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+			// The observers go in first: a faulted request hits every
+			// fault it matches, and only the erroring one answers.
+			endTxns := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Observe: true, Count: -1})
+			initPIDs := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Observe: true, Count: -1})
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
 
-	cl := newPlainClient(t, c,
-		kgo.TransactionalID("txn-unconfirmed-abort"),
-		kgo.DefaultProduceTopic(topic),
-	)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
 
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.ProduceSync(ctx, kgo.StringRecord("first")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
-		t.Fatal("expected an error from the hijacked EndTxn commit")
-	}
+			opts := []kgo.Opt{
+				kgo.TransactionalID("txn-unconfirmed-abort"),
+				kgo.DefaultProduceTopic(topic),
+			}
+			if test.tv1 {
+				v := kversion.Stable()
+				v.SetMaxKeyVersion(int16(kmsg.EndTxn), 4)
+				opts = append(opts, kgo.MaxVersions(v))
+				c.admin(func() { c.features["transaction.version"] = 1 })
+			}
+			cl := newPlainClient(t, c, opts...)
 
-	preInits := initPIDs.Hits()
-	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("abort retry after unconfirmed commit errored: %v", err)
-	}
-	if got := endTxns.Hits(); got != 1 {
-		t.Errorf("abort retry sent an EndTxn (saw %d total); the producer id reload is the abort", got)
-	}
-	if got := initPIDs.Hits(); got != preInits+1 {
-		t.Errorf("abort retry did not reload the producer id (%d inits before, %d after)", preInits, got)
-	}
+			if err := cl.BeginTransaction(); err != nil {
+				t.Fatal(err)
+			}
+			if test.failProd {
+				c.Fault(Fault{Keys: []kmsg.Key{kmsg.Produce}, Topic: topic, Err: kerr.MessageTooLarge})
+			}
+			if err := cl.ProduceSync(ctx, kgo.StringRecord("first")).FirstErr(); (err != nil) != test.failProd {
+				t.Fatalf("produce: got %v, want an error %v", err, test.failProd)
+			}
+			pid, epoch, _ := cl.ProducerID(ctx)
+			if err := cl.EndTransaction(ctx, kgo.TransactionEndTry(test.commit)); err == nil {
+				t.Fatal("expected an error from the hijacked EndTxn")
+			}
+			if test.purge {
+				cl.PurgeTopicsFromClient(topic)
+			}
+			var other *kgo.Client
+			switch {
+			case test.committed, test.aborted:
+				faultReq(t, cl, 0, &kmsg.EndTxnRequest{TransactionalID: topic, ProducerID: pid, ProducerEpoch: epoch, Commit: test.committed})
+			case test.takeover:
+				other = newPlainClient(t, c, opts...)
+				if err := other.BeginTransaction(); err != nil || other.ProduceSync(ctx, kgo.StringRecord("other")).FirstErr() != nil {
+					t.Fatal("the new producer did not open a transaction")
+				}
+			case test.askedID:
+				pre := initPIDs.Hits()
+				if _, _, err := cl.ProducerID(ctx); err == nil || initPIDs.Hits() != pre {
+					t.Fatalf("ProducerID got err %v after %d InitProducerID, want an error after none", err, initPIDs.Hits()-pre)
+				}
+			}
+			if err := cl.BeginTransaction(); err == nil {
+				t.Fatal("began a transaction before the client learned whether the last EndTxn happened")
+			}
 
-	// The next transaction runs cleanly at the bumped epoch.
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("begin after healed abort: %v", err)
-	}
-	if err := cl.ProduceSync(ctx, kgo.StringRecord("second")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
-		t.Fatalf("commit after healed abort: %v", err)
-	}
+			preEnds, preInits := endTxns.Hits(), initPIDs.Hits()
+			err := cl.EndTransaction(ctx, kgo.TransactionEndTry(test.commit != test.flip))
+			if test.wantMsg != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantMsg) {
+					t.Fatalf("retry: got %v, want a refusal with %q", err, test.wantMsg)
+				}
+			} else if !errors.Is(err, test.wantErr) {
+				t.Fatalf("retry: got %v, want %v", err, test.wantErr)
+			}
+			if got := endTxns.Hits() - preEnds; got != test.wantEnds {
+				t.Errorf("retry sent %d EndTxn, want %d", got, test.wantEnds)
+			}
+			if got := initPIDs.Hits() - preInits; got != 0 {
+				t.Errorf("retry sent %d InitProducerID, want none", got)
+			}
+			if other != nil && other.EndTransaction(ctx, kgo.TryCommit) != nil {
+				t.Fatal("the new producer's transaction did not commit")
+			}
+			if test.wantErr != nil || test.wantMsg != "" || test.committed || test.purge {
+				return
+			}
 
-	// read_committed sees only the second transaction: the first was
-	// fence-aborted by the reload.
-	consumer := newPlainClient(t, c,
-		kgo.ConsumeTopics(topic),
-		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-		kgo.FetchMaxWait(250*time.Millisecond),
-	)
+			// The next transaction runs cleanly.
+			if err := cl.BeginTransaction(); err != nil {
+				t.Fatalf("begin after healed abort: %v", err)
+			}
+			if err := cl.ProduceSync(ctx, kgo.StringRecord("second")).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+			if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
+				t.Fatalf("commit after healed abort: %v", err)
+			}
 
-	var vals []string
-	for len(vals) == 0 {
-		fs := consumer.PollFetches(ctx)
-		if err := fs.Err0(); err != nil {
-			t.Fatalf("consume: %v", err)
-		}
-		fs.EachRecord(func(r *kgo.Record) { vals = append(vals, string(r.Value)) })
-	}
-	if len(vals) != 1 || vals[0] != "second" {
-		t.Errorf("read_committed consumed %v, want only [second]", vals)
-	}
-}
+			// read_committed sees the first transaction only if the
+			// retry committed it.
+			consumer := newPlainClient(t, c,
+				kgo.ConsumeTopics(topic),
+				kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+				kgo.FetchMaxWait(250*time.Millisecond),
+			)
 
-// Retrying a commit whose outcome is unconfirmed is refused: the prior
-// outcome is unknowable, and the retry's producer id reload may have just
-// fence-aborted it, so returning success would lie. The caller must retry
-// with TryAbort, per EndTransaction's docs.
-func TestEndTxnUnconfirmedCommitRetryRefused(t *testing.T) {
-	t.Parallel()
-	const topic = "txn-unconfirmed-commit"
-
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
-
-	c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cl := newPlainClient(t, c,
-		kgo.TransactionalID("txn-unconfirmed-commit"),
-		kgo.DefaultProduceTopic(topic),
-	)
-
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.ProduceSync(ctx, kgo.StringRecord("v")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err == nil {
-		t.Fatal("expected an error from the hijacked EndTxn commit")
-	}
-	err := cl.EndTransaction(ctx, kgo.TryCommit)
-	if err == nil || !strings.Contains(err.Error(), "unconfirmed") {
-		t.Fatalf("commit retry: got %v, want an unconfirmed-refusal error", err)
-	}
-
-	// The refusal's reload already aborted everything; a follow-up abort
-	// is a truthful no-op, and the next transaction runs cleanly.
-	if err := cl.EndTransaction(ctx, kgo.TryAbort); err != nil {
-		t.Fatalf("abort after refused commit retry: %v", err)
-	}
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.ProduceSync(ctx, kgo.StringRecord("v2")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cl.EndTransaction(ctx, kgo.TryCommit); err != nil {
-		t.Fatalf("commit after heal: %v", err)
+			want := []string{"second"}
+			if test.commit && !test.failProd {
+				want = []string{"first", "second"}
+			}
+			var vals []string
+			for len(vals) < len(want) {
+				fs := consumer.PollFetches(ctx)
+				if err := fs.Err0(); err != nil {
+					t.Fatalf("consume: %v", err)
+				}
+				fs.EachRecord(func(r *kgo.Record) { vals = append(vals, string(r.Value)) })
+			}
+			if !slices.Equal(vals, want) {
+				t.Errorf("read_committed consumed %v, want %v", vals, want)
+			}
+		})
 	}
 }
 

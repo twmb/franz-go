@@ -465,6 +465,9 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 			return true // whatever caused our produce, we did nothing, so keep going
 		case errors.Is(err, ErrClientClosed):
 			s.cl.failBufferedRecords(err)
+		case errors.Is(err, errEndTxnUnconfirmed):
+			s.cl.cfg.logger.Log(LogLevelWarn, "failing records buffered across EndTransaction because the last EndTransaction did not learn whether its commit or abort happened", "broker", logID(s.nodeID))
+			s.cl.failBufferedRecords(err)
 		default:
 			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", logID(s.nodeID), "err", err)
 			s.cl.failBufferedRecords(err)

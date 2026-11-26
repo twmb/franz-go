@@ -250,6 +250,14 @@ var (
 	// Returned when trying to produce a record outside of a transaction.
 	errNotInTransaction = errors.New("cannot produce record transactionally if not in a transaction")
 
+	// Stored as the producer ID's error when the producer ID must be
+	// reloaded before its next use.
+	errReloadProducerID = errors.New("producer id needs reloading")
+
+	// Returned when loading the producer ID while we do not know whether
+	// the last EndTxn happened: a reload could abort the transaction.
+	errEndTxnUnconfirmed = errors.New("the last EndTransaction did not learn whether its commit or abort happened; call EndTransaction again with the same TransactionEndTry, or close the client")
+
 	errNoTopic = errors.New("cannot produce record with no topic and no default topic")
 
 	// Returned for all buffered produce records when a user purges topics.
