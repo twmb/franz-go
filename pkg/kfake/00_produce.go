@@ -203,6 +203,14 @@ func (c *Cluster) handleProduce(creq *clientReq) (kmsg.Response, error) {
 				donep(rt, rp, kerr.UnknownTopicOrPartition.Code, "Unknown topic or partition.")
 				continue
 			}
+			// Kafka answers INVALID_RECORD for empty records before it
+			// checks leadership. Kafka 3.8+ never answers null records
+			// (KAFKA-21676); we answer null records the same as empty
+			// records.
+			if len(rp.Records) == 0 {
+				donep(rt, rp, kerr.InvalidRecord.Code, "")
+				continue
+			}
 			if pd.leader != b {
 				p := donep(rt, rp, kerr.NotLeaderForPartition.Code, "Not leader for partition.")
 				p.CurrentLeader.LeaderID = pd.leader.node
