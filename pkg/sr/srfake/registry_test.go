@@ -482,6 +482,32 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 
+		// Subjects in paths are normalized
+		{
+			name:       "GET /subjects/:.:{s}/versions - subject that names the default context",
+			method:     "GET",
+			path:       "/subjects/:.:user-topic-value/versions",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("user-topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[1]`,
+		},
+		{
+			name:       "GET /config - PUT /config/:.: sets the global level",
+			method:     "GET",
+			path:       "/config",
+			setup:      func(r *srfake.Registry) { put(r, "/config/:.:", `{"compatibility": "FULL"}`) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibilityLevel": "FULL"}`,
+		},
+		{
+			name:       "GET /mode/:.{ctx} - context without its closing colon",
+			method:     "GET",
+			path:       "/mode/:.myctx",
+			setup:      func(r *srfake.Registry) { r.SetMode(":.myctx:", sr.ModeReadOnly) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"mode": "READONLY"}`,
+		},
+
 		// GUIDs
 		{
 			name:   "GET /schemas/guids/{guid}/ids - soft-deleted version keeps its ID",

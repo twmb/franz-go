@@ -1007,6 +1007,17 @@ func splitSubject(subject string) (ctx, name string) {
 	return subject[1:], ""
 }
 
+// Returns subject normalized as Confluent's registry normalizes it: the
+// default context is dropped, so ":.:foo" is foo, and a context without a
+// name gets its closing colon, so ":.ctx" is ":.ctx:".
+func normalizeSubject(subject string) string {
+	if !strings.HasPrefix(subject, ":.") {
+		return subject
+	}
+	ctx, name := splitSubject(subject)
+	return qualifiedContext(ctx) + name
+}
+
 // Returns the subject that a reference named ref in a schema of subject
 // resolves to. As in Confluent's registry, a ref without a context is in the
 // context of subject.

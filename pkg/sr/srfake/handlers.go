@@ -96,62 +96,89 @@ func (r *Registry) interceptorMiddleware(next http.Handler) http.Handler {
 // context's name. A subject without a context after /subjects in the path gets
 // the context, and so does the subject of a root /config or /mode. A root
 // /config or /mode without a subject gets the context itself as its subject.
+// Every subject in a path, with or without a context path, is then normalized
+// as rewriteSubjects describes.
 func (*Registry) contextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		rest, ok := strings.CutPrefix(req.URL.EscapedPath(), "/contexts/")
-		if !ok {
-			next.ServeHTTP(w, req)
-			return
-		}
-		rawName, rest, ok := strings.Cut(rest, "/")
-		if !ok {
-			next.ServeHTTP(w, req)
-			return
-		}
-		name, err := url.PathUnescape(rawName)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
-			return
-		}
-		name, ok = normalizeContext(name)
-		if !ok {
-			writeError(w, http.StatusBadRequest, http.StatusBadRequest, fmt.Sprintf("Context name '%s' cannot contain a colon", name))
-			return
-		}
-
-		prefix := url.PathEscape(qualifiedContext(name))
-		segs := strings.Split(rest, "/")
-		for len(segs) > 0 && segs[len(segs)-1] == "" {
-			segs = segs[:len(segs)-1]
-		}
-		var qualifyNext, rootConfig bool
-		for i, seg := range segs {
-			if qualifyNext {
-				if s, _ := url.PathUnescape(seg); !hasContext(s) {
-					segs[i] = prefix + seg
-				}
-				qualifyNext = false
-				continue
+		escaped := req.URL.EscapedPath()
+		var ctx string
+		if rest, ok := strings.CutPrefix(escaped, "/contexts/"); ok {
+			rawName, after, ok := strings.Cut(rest, "/")
+			if !ok {
+				next.ServeHTTP(w, req)
+				return
 			}
-			root := i == 0 && (seg == "config" || seg == "mode")
-			qualifyNext = seg == "subjects" || root
-			rootConfig = rootConfig || root
-		}
-		if rootConfig && qualifyNext && prefix != "" {
-			segs = append(segs, prefix)
+			name, err := url.PathUnescape(rawName)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+				return
+			}
+			name, ok = normalizeContext(name)
+			if !ok {
+				writeError(w, http.StatusBadRequest, http.StatusBadRequest, fmt.Sprintf("Context name '%s' cannot contain a colon", name))
+				return
+			}
+			ctx, escaped = name, "/"+strings.TrimRight(after, "/")
+			req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, name))
 		}
 
-		escaped := "/" + strings.Join(segs, "/")
-		path, err := url.PathUnescape(escaped)
+		rewritten := "/" + strings.Join(rewriteSubjects(strings.Split(escaped[1:], "/"), ctx), "/")
+		if ctx == "" && rewritten == escaped {
+			next.ServeHTTP(w, req)
+			return
+		}
+		path, err := url.PathUnescape(rewritten)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, http.StatusBadRequest, err.Error())
 			return
 		}
-		req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, name))
-		req.URL.Path, req.URL.RawPath = path, escaped
+		req.URL.Path, req.URL.RawPath = path, rewritten
 
 		next.ServeHTTP(w, req)
 	})
+}
+
+// Returns the escaped path segments segs with each subject as Confluent's
+// registry reads it. A subject is the segment after "subjects", or after a root
+// "config" or "mode". When ctx is not empty, a subject without a context gets
+// ctx, and a root config or mode without a subject gets ctx as its subject.
+// Each subject is then normalized: ":.:foo" is foo, and ":.ctx" is ":.ctx:". A
+// root config or mode whose subject is the default context loses its subject,
+// which makes it the global route.
+func rewriteSubjects(segs []string, ctx string) []string {
+	out := make([]string, 0, len(segs)+1)
+	var subjectNext, rootConfig bool
+	for i, seg := range segs {
+		if !subjectNext {
+			root := i == 0 && (seg == "config" || seg == "mode")
+			subjectNext = seg == "subjects" || root
+			rootConfig = rootConfig || root
+			out = append(out, seg)
+			continue
+		}
+		subjectNext = false
+		orig, err := url.PathUnescape(seg)
+		if err != nil {
+			out = append(out, seg)
+			continue
+		}
+		s := orig
+		if ctx != "" && !hasContext(s) {
+			s = qualifiedContext(ctx) + s
+		}
+		s = normalizeSubject(s)
+		switch {
+		case s == "" && rootConfig:
+		case s == orig || s == "":
+			out = append(out, seg)
+		default:
+			out = append(out, url.PathEscape(s))
+		}
+	}
+	if rootConfig && subjectNext && ctx != "" && qualifiedContext(ctx) != "" {
+		out = append(out, url.PathEscape(qualifiedContext(ctx)))
+	}
+	return out
 }
 
 // Returns name as a context, without surrounding colons and with a leading
