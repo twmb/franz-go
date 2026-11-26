@@ -344,21 +344,28 @@ func (r *Registry) idUsagesLocked(id int, subject string, hasSubject, deleted bo
 	return usages, true
 }
 
-// handleGetSchemaByGUID emulates GET /schemas/guids/{guid} to retrieve a schema
-// by its globally unique GUID. The GUID identifies a schema across all contexts,
-// so the lookup is not scoped to the request context.
+// handleGetSchemaByGUID emulates GET /schemas/guids/{guid}. As in Confluent's
+// registry, the GUID resolves to its ID in the default context, else in the
+// first other context that has it, a soft-deleted version answers, and the
+// answer has no subject, version, or ID.
 func (r *Registry) handleGetSchemaByGUID(w http.ResponseWriter, req *http.Request) {
 	guid := req.PathValue("guid")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	ss, ok := r.subjectSchemaByGUIDLocked(guid)
-	if !ok {
-		r.handleAPIError(w, errSchemaNotFound(guid))
-		return
+	for _, c := range append([]string{"."}, r.sortedContextsLocked()...) {
+		id, ok := r.idsByGUID[contextGUID{c, guid}]
+		if !ok {
+			continue
+		}
+		if ss, ok := r.versionByIDLocked(c, id, ""); ok {
+			respondJSON(w, http.StatusOK, idSchema{GUID: guid, Schema: ss.Schema})
+			return
+		}
+		break
 	}
-	respondJSON(w, http.StatusOK, ss)
+	r.handleAPIError(w, errSchemaNotFound(guid))
 }
 
 // handleGetSchemaIDsByGUID emulates GET /schemas/guids/{guid}/ids to retrieve the
@@ -729,21 +736,7 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
-
-	resp := map[string]any{
-		"subject": match.Subject,
-		"version": match.Version,
-		"id":      match.ID,
-		"guid":    match.GUID,
-		"schema":  match.Schema.Schema,
-	}
-	if match.Type != sr.TypeAvro {
-		resp["schemaType"] = match.Type.String()
-	}
-	if len(match.References) > 0 {
-		resp["references"] = match.References
-	}
-	respondJSON(w, http.StatusOK, resp)
+	respondJSON(w, http.StatusOK, match)
 }
 
 // handleCheckCompatibility emulates POST /compatibility/subjects/{subject}/versions/{version}
@@ -938,8 +931,9 @@ func (r *Registry) handlePutSubjectMode(w http.ResponseWriter, req *http.Request
 	r.putMode(w, req, req.PathValue("subject"))
 }
 
-// Serves PUT /mode and PUT /mode/{subject}. As in Confluent's registry, a body
-// without a mode removes the mode that is set.
+// Serves PUT /mode and PUT /mode/{subject}. As in Confluent's registry, a null
+// mode removes the mode that is set, and the answer has the null mode. A body
+// without a mode does the same.
 func (r *Registry) putMode(w http.ResponseWriter, req *http.Request, subject string) {
 	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
 	var body struct {
@@ -955,7 +949,7 @@ func (r *Registry) putMode(w http.ResponseWriter, req *http.Request, subject str
 
 	if body.Mode == nil {
 		delete(r.modes, subject)
-		respondJSON(w, http.StatusOK, map[string]sr.Mode{})
+		respondJSON(w, http.StatusOK, map[string]any{"mode": nil})
 		return
 	}
 	r.modes[subject] = *body.Mode

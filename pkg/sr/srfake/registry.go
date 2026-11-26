@@ -1055,45 +1055,6 @@ func schemaGUID(s sr.Schema) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// subjectSchemaByGUIDLocked returns a representative active SubjectSchema for the
-// given GUID. A GUID identifies a schema globally, so all contexts are searched;
-// a default-context match is preferred, otherwise the lowest-sorted subject and
-// version wins. The caller must hold the lock.
-func (r *Registry) subjectSchemaByGUIDLocked(guid string) (sr.SubjectSchema, bool) {
-	subjects := make([]string, 0, len(r.subjects))
-	for s := range r.subjects {
-		subjects = append(subjects, s)
-	}
-	sort.Strings(subjects)
-
-	var fallback sr.SubjectSchema
-	haveFallback := false
-	for _, s := range subjects {
-		subj := r.subjects[s]
-		if !subj.active() {
-			continue
-		}
-		versions := make([]int, 0, len(subj.versions))
-		for v := range subj.versions {
-			versions = append(versions, v)
-		}
-		sort.Ints(versions)
-		for _, v := range versions {
-			vd := subj.versions[v]
-			if vd.isDeleted || vd.schema.GUID != guid {
-				continue
-			}
-			if subjectContext(s) == "." {
-				return vd.schema, true
-			}
-			if !haveFallback {
-				fallback, haveFallback = vd.schema, true
-			}
-		}
-	}
-	return fallback, haveFallback
-}
-
 func normalizeSchema(raw string, t sr.SchemaType) (string, error) {
 	switch t {
 	case sr.TypeAvro, sr.TypeJSON:

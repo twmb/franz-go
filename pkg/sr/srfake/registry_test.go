@@ -463,6 +463,21 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"error_code": 40403, "message": "Schema not found"}`,
 		},
 		{
+			name:   "POST /subjects/{s} - answer has the metadata and rule set",
+			method: "POST",
+			path:   "/subjects/user-topic-value",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("user-topic-value", sr.Schema{
+					Schema:         userSchema.Schema,
+					SchemaMetadata: &sr.SchemaMetadata{Properties: map[string]string{"owner": "team"}},
+					SchemaRuleSet:  &sr.SchemaRuleSet{DomainRules: []sr.SchemaRule{{Name: "r", Type: "CEL"}}},
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":"user-topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}","metadata":{"properties":{"owner":"team"}},"ruleSet":{"domainRules":[{"name":"r","kind":"TRANSFORM","mode":"UPGRADE","type":"CEL","tags":null,"expr":""}]}}`,
+		},
+		{
 			name:   "POST /subjects/{s} - soft-deleted subject",
 			method: "POST",
 			path:   "/subjects/user-topic-value",
@@ -627,13 +642,13 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"compatibilityLevel": "BACKWARD"}`,
 		},
 		{
-			name:       "PUT /mode/{s} - body without a mode",
+			name:       "PUT /mode/{s} - null mode",
 			method:     "PUT",
 			path:       "/mode/user-topic-value",
-			body:       `{}`,
+			body:       `{"mode": null}`,
 			setup:      func(r *srfake.Registry) { r.SetMode("user-topic-value", sr.ModeReadOnly) },
 			wantStatus: http.StatusOK,
-			wantBody:   `{}`,
+			wantBody:   `{"mode": null}`,
 		},
 		{
 			name:   "GET /mode/{s} - body without a mode removes the mode",
@@ -1186,6 +1201,13 @@ func TestSchemaHandlers(t *testing.T) {
 			wantStatus: http.StatusOK,
 			wantBody:   `[{"subject":"user-topic","version":1}]`,
 		},
+		{
+			name:       "GET /schemas/guids/{guid} - soft-deleted version answers",
+			path:       "/schemas/guids/5e7f40ce-ba13-8394-ab4a-c4e82c0ededd",
+			setup:      func(r *srfake.Registry) { del(r, "/subjects/user-topic/versions/1") },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1235,7 +1257,7 @@ func TestSchemaByGUIDHandlers(t *testing.T) {
 			name:       "GET /schemas/guids/{guid} - found",
 			path:       "/schemas/guids/" + guid,
 			wantStatus: http.StatusOK,
-			wantBody:   `{"subject":"user-topic","version":1,"id":123,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:       "GET /schemas/guids/{guid} - not found",
@@ -1305,8 +1327,8 @@ func TestSchemaGUIDClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaByGUID: %v", err)
 	}
-	if byGUID.Subject != "user-value" || byGUID.Version != 1 || byGUID.ID != 7 || byGUID.GUID != got.GUID {
-		t.Errorf("SchemaByGUID = %+v, want subject=user-value version=1 id=7 guid=%s", byGUID, got.GUID)
+	if want := (sr.SubjectSchema{GUID: got.GUID, Schema: userSchema}); !reflect.DeepEqual(byGUID, want) {
+		t.Errorf("SchemaByGUID = %+v, want %+v", byGUID, want)
 	}
 
 	ids, err := cl.SchemaIDsByGUID(ctx, got.GUID)
@@ -1351,7 +1373,7 @@ func TestSchemaGUIDCrossContext(t *testing.T) {
 	}
 
 	// get-by-guid is global and prefers the default-context representative.
-	if got, want := do("/schemas/guids/"+guid), `{"subject":"user-topic","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`; !jsonEqual(got, want) {
+	if got, want := do("/schemas/guids/"+guid), `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`; !jsonEqual(got, want) {
 		t.Errorf("schema mismatch:\ngot:  %s\nwant: %s", got, want)
 	}
 }
