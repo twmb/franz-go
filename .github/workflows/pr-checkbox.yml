@@ -1,0 +1,43 @@
+name: pr-checkbox
+
+# Closes a pull request from an outside contributor whose description lacks
+# the checked evaluation box from the pull request template, and reopens it
+# once the box is checked. This reads only the pull request's metadata and
+# never checks out its code, so pull_request_target is safe here.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  check:
+    if: >-
+      github.event.pull_request.user.type != 'Bot' &&
+      !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          STATE: ${{ github.event.pull_request.state }}
+          ACTION: ${{ github.event.action }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s\n' "$BODY" | grep -qiE '^[[:space:]]*-[[:space:]]*\[x\][[:space:]]*I evaluated this change myself'; then
+            closer=$(gh api "repos/$REPO/issues/$NUMBER" --jq '.closed_by.login // ""')
+            if [ "$STATE" = closed ] && [ "$closer" = "github-actions[bot]" ]; then
+              gh pr reopen "$NUMBER" --repo "$REPO"
+            fi
+            exit 0
+          fi
+          if [ "$STATE" != open ]; then
+            exit 0
+          fi
+          if [ "$ACTION" = opened ]; then
+            gh pr close "$NUMBER" --repo "$REPO" --comment "Pull requests from outside contributors need the checked box from the pull request template: \"- [x] I evaluated this change myself.\" Please read the template in .github/pull_request_template.md, then edit this description to include the checked box, and this pull request reopens."
+          else
+            gh pr close "$NUMBER" --repo "$REPO"
+          fi
