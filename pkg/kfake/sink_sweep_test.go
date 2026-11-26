@@ -126,63 +126,77 @@ func addPartitionsErrResp(req kmsg.Request, code int16) *kmsg.AddPartitionsToTxn
 // commit that returned nil, would be silently discarded.
 func TestAuditTxnV1AddPartitionsFatalKeepsEarlierAdds(t *testing.T) {
 	t.Parallel()
-	const (
-		topicP = "audit-v1-keep-p"
-		topicQ = "audit-v1-keep-q"
-	)
-	c := newCluster(t, NumBrokers(1), SeedTopics(1, topicP, topicQ))
-	downgradeToTxnV0(t, c)
+	for _, test := range []struct {
+		name    string
+		err     *kerr.Error // what the failing AddPartitionsToTxn answers
+		wantErr error       // what the failed produces get
+	}{
+		{"auth", kerr.TopicAuthorizationFailed, kerr.TopicAuthorizationFailed},
+		// Kafka answers a fenced AddPartitionsToTxn below v2 with
+		// INVALID_PRODUCER_EPOCH, which is a fence.
+		{"invalid-epoch", kerr.InvalidProducerEpoch, kerr.ProducerFenced},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			const (
+				topicP = "audit-v1-keep-p"
+				topicQ = "audit-v1-keep-q"
+			)
+			c := newCluster(t, NumBrokers(1), SeedTopics(1, topicP, topicQ))
+			downgradeToTxnV0(t, c)
 
-	cl := newPlainClient(t, c,
-		kgo.TransactionalID("audit-v1-keep"),
-		kgo.ManualFlushing(),
-	)
-	ctx := context.Background()
+			cl := newPlainClient(t, c,
+				kgo.TransactionalID("audit-v1-keep"),
+				kgo.ManualFlushing(),
+			)
+			ctx := context.Background()
 
-	warmTxnTopics(t, cl, topicP, topicQ)
-	endTxns := observeEndTxns(c)
+			warmTxnTopics(t, cl, topicP, topicQ)
+			endTxns := observeEndTxns(c)
 
-	// P joins the transaction (acked AddPartitionsToTxn) and gets a batch
-	// appended; its promise succeeds.
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
-	}
-	r1 := produceCh(ctx, cl, topicP, "r1")
-	if err := cl.Flush(ctx); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	if err := <-r1; err != nil {
-		t.Fatalf("first produce: %v", err)
-	}
+			// P joins the transaction (acked AddPartitionsToTxn) and gets a
+			// batch appended; its promise succeeds.
+			if err := cl.BeginTransaction(); err != nil {
+				t.Fatalf("BeginTransaction: %v", err)
+			}
+			r1 := produceCh(ctx, cl, topicP, "r1")
+			if err := cl.Flush(ctx); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+			if err := <-r1; err != nil {
+				t.Fatalf("first produce: %v", err)
+			}
 
-	// Fail the next AddPartitionsToTxn -- which contains only Q, P being
-	// already added -- with a fatal per-partition auth error. One flush
-	// cycle producing to both P and Q rides a single produce request, so
-	// the failure handling sees P's batch alongside Q's.
-	addTopics := failNextAddPartitions(c, kerr.TopicAuthorizationFailed.Code)
+			// Fail the next AddPartitionsToTxn -- which contains only Q, P
+			// being already added -- with a fatal per-partition error. One
+			// flush cycle producing to both P and Q rides a single produce
+			// request, so the failure handling sees P's batch alongside Q's.
+			addTopics := failNextAddPartitions(c, test.err.Code)
 
-	r2, r3 := produceCh(ctx, cl, topicP, "r2"), produceCh(ctx, cl, topicQ, "r3")
-	if err := cl.Flush(ctx); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	for _, ch := range []<-chan error{r2, r3} {
-		if err := <-ch; err == nil {
-			t.Fatal("expected the produces after the injected AddPartitionsToTxn failure to fail, got success")
-		}
-	}
-	got, _ := addTopics.Load().([]string)
-	if len(got) != 1 || got[0] != topicQ {
-		t.Fatalf("test premise broken: expected the failing AddPartitionsToTxn to contain only %q (P already added), got %v", topicQ, got)
-	}
+			r2, r3 := produceCh(ctx, cl, topicP, "r2"), produceCh(ctx, cl, topicQ, "r3")
+			if err := cl.Flush(ctx); err != nil {
+				t.Fatalf("Flush: %v", err)
+			}
+			for _, ch := range []<-chan error{r2, r3} {
+				if err := <-ch; !errors.Is(err, test.wantErr) {
+					t.Fatalf("produce after the injected AddPartitionsToTxn failure: got %v, want %v", err, test.wantErr)
+				}
+			}
+			got, _ := addTopics.Load().([]string)
+			if len(got) != 1 || got[0] != topicQ {
+				t.Fatalf("test premise broken: expected the failing AddPartitionsToTxn to contain only %q (P already added), got %v", topicQ, got)
+			}
 
-	// P joined this transaction and holds an appended batch whose promise
-	// succeeded; the commit must not report success.
-	err := cl.EndTransaction(ctx, kgo.TryCommit)
-	if err == nil {
-		t.Fatalf("BUG REPRODUCED: EndTransaction(TryCommit) returned nil after a fatal AddPartitionsToTxn error; %s[0] was added and produced earlier in this transaction (its promise succeeded), so the commit must fail rather than silently abandon the appended batch to the transaction-timeout abort (EndTxns issued: %d)", topicP, endTxns.Hits())
-	}
-	if !errors.Is(err, kerr.OperationNotAttempted) {
-		t.Fatalf("EndTransaction(TryCommit) = %v; want kerr.OperationNotAttempted", err)
+			// P joined this transaction and holds an appended batch whose
+			// promise succeeded; the commit must not report success.
+			err := cl.EndTransaction(ctx, kgo.TryCommit)
+			if err == nil {
+				t.Fatalf("BUG REPRODUCED: EndTransaction(TryCommit) returned nil after a fatal AddPartitionsToTxn error; %s[0] was added and produced earlier in this transaction (its promise succeeded), so the commit must fail rather than silently abandon the appended batch to the transaction-timeout abort (EndTxns issued: %d)", topicP, endTxns.Hits())
+			}
+			if !errors.Is(err, kerr.OperationNotAttempted) {
+				t.Fatalf("EndTransaction(TryCommit) = %v; want kerr.OperationNotAttempted", err)
+			}
+		})
 	}
 }
 

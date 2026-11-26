@@ -4163,6 +4163,7 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		{name: "tv1-commit-abortable", tv1: true, commit: true, flip: true, firstErr: kerr.TransactionAbortable, wantEnds: 1},
 		{name: "tv1-abortable-resend", tv1: true, commit: true, flip: true, firstErr: kerr.TransactionAbortable, retryErr: kerr.UnknownServerError, resend: true, wantEnds: 2, wantInits: 1},
 		{name: "tv1-abortable-reload-invalid-epoch", tv1: true, commit: true, flip: true, firstErr: kerr.TransactionAbortable, initErr: kerr.InvalidProducerEpoch, wantEnds: 1},
+		{name: "tv1-commit-invalid-epoch", tv1: true, commit: true, flip: true, firstErr: kerr.InvalidProducerEpoch, wantErr: kerr.ProducerFenced},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

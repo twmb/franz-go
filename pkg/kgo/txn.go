@@ -1072,6 +1072,12 @@ func (cl *Client) endTxn(ctx context.Context, id int64, epoch int16, commit Tran
 			}
 			cl.cfg.logger.Log(LogLevelInfo, "resending EndTxn until the coordinator answers", "transactional_id", *cl.cfg.txnID, "tries", tries, "err", err)
 		}
+		// Kafka answers a fenced EndTxn with INVALID_PRODUCER_EPOCH
+		// below v2. As Java does, we treat INVALID_PRODUCER_EPOCH as
+		// PRODUCER_FENCED at every version.
+		if errors.Is(err, kerr.InvalidProducerEpoch) {
+			err = kerr.ProducerFenced
+		}
 		if err != nil {
 			return err
 		}
@@ -1401,7 +1407,13 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 		if err != nil {
 			return err
 		}
-		return kerr.ErrorForCode(resp.ErrorCode)
+		// As for EndTxn, INVALID_PRODUCER_EPOCH is Kafka's fence below
+		// v2, and we treat INVALID_PRODUCER_EPOCH as PRODUCER_FENCED, as
+		// Java does.
+		if err = kerr.ErrorForCode(resp.ErrorCode); errors.Is(err, kerr.InvalidProducerEpoch) {
+			err = kerr.ProducerFenced
+		}
+		return err
 	})
 
 	// If the returned error is still a Kafka error, this is fatal and we
