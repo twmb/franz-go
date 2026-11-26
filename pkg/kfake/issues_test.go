@@ -2179,14 +2179,14 @@ func TestRequestCachedMetadata(t *testing.T) {
 		}
 	})
 
-	// StaleCacheResilience verifies that a failed metadata re-fetch after
-	// cache expiry does not destroy the previously cached data. The flow:
+	// StaleCacheResilience verifies that the cache keeps an error answer
+	// to a metadata re-fetch only until the entry expires. The flow:
 	// 1. Cache topic1 metadata with a short TTL.
 	// 2. Wait for the cache entry to expire.
 	// 3. Intercept the next metadata request to return an error.
-	// 4. Attempt a fetch  - the error is returned, but the stale cache
-	//    entry is preserved (we no longer delete on cache miss).
-	// 5. Restore normal metadata handling and fetch again  - succeeds.
+	// 4. Fetch: the error answer replaces the cached entry.
+	// 5. Wait for the error entry to expire and fetch again: the fetch
+	//    goes to the normal handler and succeeds.
 	t.Run("StaleCacheResilience", func(t *testing.T) {
 		defer metadataRequests.Store(0)
 
@@ -2213,7 +2213,7 @@ func TestRequestCachedMetadata(t *testing.T) {
 			return resp, nil, true
 		})
 
-		// Step 4: fetch - may get error data, but stale entry preserved.
+		// Step 4: fetch; the error answer replaces the cached entry.
 		_, _ = cl.RequestCachedMetadata(ctx, req, 100*time.Millisecond)
 
 		// Step 5: interceptor consumed, re-fetch goes to normal handler.
