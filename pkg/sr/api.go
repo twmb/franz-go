@@ -791,20 +791,19 @@ func (cl *Client) ResetCompatibility(ctx context.Context, subjects ...string) []
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var c SetCompatibility // unmarshals with "compatibility"
-			err := cl.delete(ctx, pathConfig(subject), &c)
-			results[slot] = CompatibilityResult{
-				Subject:          subject,
-				Level:            c.Level,
-				Alias:            c.Alias,
-				Normalize:        c.Normalize,
-				Group:            c.Group,
-				DefaultMetadata:  c.DefaultMetadata,
-				OverrideMetadata: c.OverrideMetadata,
-				DefaultRuleSet:   c.DefaultRuleSet,
-				OverrideRuleSet:  c.OverrideRuleSet,
-				Err:              err,
+			// Confluent's registry returns the deleted config with
+			// "compatibilityLevel"; another registry may return
+			// "compatibility" instead.
+			var c struct {
+				CompatibilityResult
+				Compatibility CompatibilityLevel `json:"compatibility"`
 			}
+			err := cl.delete(ctx, pathConfig(subject), &c)
+			if c.Level == 0 {
+				c.Level = c.Compatibility
+			}
+			c.Subject, c.Err = subject, err
+			results[slot] = c.CompatibilityResult
 		}()
 	}
 	wg.Wait()
