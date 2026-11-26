@@ -183,12 +183,20 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"id": 1}`,
 		},
 		{
-			name:       "POST /subjects/{s}/versions - bad request body",
+			name:       "POST /subjects/{s}/versions - schema that does not parse",
 			method:     "POST",
 			path:       "/subjects/user-topic-value/versions",
 			body:       `{"schema": "not json"}`,
 			wantStatus: http.StatusUnprocessableEntity,
-			wantBody:   `{"error_code": 42201, "message": "invalid AVRO schema: invalid character 'o' in literal null (expecting 'u')"}`,
+			wantBody:   `{"error_code": 42201, "message": "Invalid schema of type AVRO, details: invalid character 'o' in literal null (expecting 'u')"}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - missing reference",
+			method:     "POST",
+			path:       "/subjects/:.myctx:order/versions",
+			body:       `{"schema":"\"string\"","references":[{"name":"Product","subject":"product","version":1}]}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42201, "message": "Invalid schema of type AVRO, details: No schema reference found for subject \":.myctx:product\" and version 1"}`,
 		},
 		{
 			name:   "POST /subjects/{s}/versions - soft-deleted subject gets the next version",
@@ -463,6 +471,21 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"error_code": 40403, "message": "Schema not found"}`,
 		},
 		{
+			name:   "POST /subjects/{s} - answer has the metadata and rule set",
+			method: "POST",
+			path:   "/subjects/user-topic-value",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("user-topic-value", sr.Schema{
+					Schema:         userSchema.Schema,
+					SchemaMetadata: &sr.SchemaMetadata{Properties: map[string]string{"owner": "team"}},
+					SchemaRuleSet:  &sr.SchemaRuleSet{DomainRules: []sr.SchemaRule{{Name: "r", Type: "CEL"}}},
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":"user-topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}","metadata":{"properties":{"owner":"team"}},"ruleSet":{"domainRules":[{"name":"r","kind":"TRANSFORM","mode":"UPGRADE","type":"CEL","tags":null,"expr":""}]}}`,
+		},
+		{
 			name:   "POST /subjects/{s} - soft-deleted subject",
 			method: "POST",
 			path:   "/subjects/user-topic-value",
@@ -492,6 +515,28 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `[1]`,
 		},
 		{
+			name:       "GET /subjects/:.:/versions - the empty subject exists when the default context has a subject",
+			method:     "GET",
+			path:       "/subjects/:.:/versions",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("user-topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+		{
+			name:   "GET /subjects - POST /subjects/:.:/versions registers the empty subject",
+			method: "GET",
+			path:   "/subjects",
+			setup: func(r *srfake.Registry) {
+				resp, err := http.Post(r.URL()+"/subjects/:.:/versions", "application/json", strings.NewReader(`{"schema":"\"string\""}`))
+				if err != nil {
+					t.Fatalf("setup failed: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[""]`,
+		},
+		{
 			name:       "GET /config - PUT /config/:.: sets the global level",
 			method:     "GET",
 			path:       "/config",
@@ -506,6 +551,64 @@ func TestSubjectHandlers(t *testing.T) {
 			setup:      func(r *srfake.Registry) { r.SetMode(":.myctx:", sr.ModeReadOnly) },
 			wantStatus: http.StatusOK,
 			wantBody:   `{"mode": "READONLY"}`,
+		},
+
+		// Invalid subjects
+		{
+			name:       "POST /subjects/{s}/versions - subject named __GLOBAL returns 42208",
+			method:     "POST",
+			path:       "/subjects/__GLOBAL/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject '__GLOBAL' is not a valid."}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - control character returns 42208",
+			method:     "POST",
+			path:       "/subjects/a%01b/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject 'a\u0001b' is not a valid."}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - subject in the .__GLOBAL context returns 42208",
+			method:     "POST",
+			path:       "/subjects/:.__GLOBAL:topic/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject ':.__GLOBAL:topic' is not a valid."}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - subject has no length limit",
+			method:     "POST",
+			path:       "/subjects/" + strings.Repeat("a", 256) + "/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:       "POST /subjects/{s} - lookup does not check the subject",
+			method:     "POST",
+			path:       "/subjects/a%00b",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'a\u0000b' not found."}`,
+		},
+		{
+			name:       "PUT /config/{s} - subject named __GLOBAL returns 42208",
+			method:     "PUT",
+			path:       "/config/__GLOBAL",
+			body:       `{"compatibility": "FULL"}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject '__GLOBAL' is not a valid."}`,
+		},
+		{
+			name:       "PUT /mode/{s} - subject named __EMPTY returns 42208",
+			method:     "PUT",
+			path:       "/mode/__EMPTY",
+			body:       `{"mode": "READONLY"}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject '__EMPTY' is not a valid."}`,
 		},
 
 		// ?deletedOnly where Confluent's registry has only ?deleted
@@ -627,13 +730,13 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"compatibilityLevel": "BACKWARD"}`,
 		},
 		{
-			name:       "PUT /mode/{s} - body without a mode",
+			name:       "PUT /mode/{s} - null mode",
 			method:     "PUT",
 			path:       "/mode/user-topic-value",
-			body:       `{}`,
+			body:       `{"mode": null}`,
 			setup:      func(r *srfake.Registry) { r.SetMode("user-topic-value", sr.ModeReadOnly) },
 			wantStatus: http.StatusOK,
-			wantBody:   `{}`,
+			wantBody:   `{"mode": null}`,
 		},
 		{
 			name:   "GET /mode/{s} - body without a mode removes the mode",
@@ -788,6 +891,54 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"id": 1}`,
 		},
 		{
+			name:       "POST /subjects/{s}/versions - data after the body is ignored",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{"schema":"\"string\""} {`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - body that is not JSON returns 400",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{bad`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error_code": 400, "message": "invalid character 'b' looking for beginning of object key string"}`,
+		},
+		{
+			name:       "POST /subjects/{s} - body that is not JSON returns 400",
+			method:     "POST",
+			path:       "/subjects/user-topic-value",
+			body:       `{bad`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error_code": 400, "message": "invalid character 'b' looking for beginning of object key string"}`,
+		},
+		{
+			name:       "POST /compatibility/subjects/{s}/versions/{v} - body that is not JSON returns 400",
+			method:     "POST",
+			path:       "/compatibility/subjects/user-topic-value/versions/latest",
+			body:       `{bad`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error_code": 400, "message": "invalid character 'b' looking for beginning of object key string"}`,
+		},
+		{
+			name:       "PUT /config/{s} - body that is not JSON returns 400",
+			method:     "PUT",
+			path:       "/config/user-topic-value",
+			body:       `{bad`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error_code": 400, "message": "invalid character 'b' looking for beginning of object key string"}`,
+		},
+		{
+			name:       "PUT /mode/{s} - body that is not JSON returns 400",
+			method:     "PUT",
+			path:       "/mode/user-topic-value",
+			body:       `{bad`,
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error_code": 400, "message": "invalid character 'b' looking for beginning of object key string"}`,
+		},
+		{
 			name:       "POST /subjects/{s}/versions - id needs import mode",
 			method:     "POST",
 			path:       "/subjects/user-topic-value/versions",
@@ -840,6 +991,74 @@ func TestSubjectHandlers(t *testing.T) {
 			path:       "/subjects/user-topic-value/versions/1/referencedby",
 			wantStatus: http.StatusNotFound,
 			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
+		},
+
+		// Paging and filters
+		{
+			name:   "GET /subjects - offset and limit",
+			method: "GET",
+			path:   "/subjects?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 1, userSchema)
+				r.SeedSchema("c", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["b"]`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions - offset and limit",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+				r.SeedSchema("user-topic-value", 3, 3, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[2]`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v}/referencedby - offset and limit",
+			method: "GET",
+			path:   "/subjects/product-value/versions/1/referencedby?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				for i, s := range []string{"A", "B", "C"} {
+					r.SeedSchema(s, 1, 2+i, sr.Schema{
+						Schema:     `{"type":"record","name":"` + s + `","fields":[{"name":"p","type":"Product"}]}`,
+						References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+					})
+				}
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[3]`,
+		},
+		{
+			name:   "GET /schemas - offset and limit",
+			method: "GET",
+			path:   "/schemas?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 2, productSchema)
+				r.SeedSchema("c", 1, 3, userSchemaV2)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"b","version":1,"id":2,"guid":"3e3328fa-a65f-8325-b14d-93ec4ea81772","schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"sku\",\"type\":\"string\"}]}"}]`,
+		},
+		{
+			name:   "GET /schemas?ruleType={t} - only schemas with a rule of the type",
+			method: "GET",
+			path:   "/schemas?ruleType=CEL",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 2, sr.Schema{
+					Schema:        productSchema.Schema,
+					SchemaRuleSet: &sr.SchemaRuleSet{DomainRules: []sr.SchemaRule{{Name: "r", Type: "CEL"}}},
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"b","version":1,"id":2,"guid":"3e3328fa-a65f-8325-b14d-93ec4ea81772","schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"sku\",\"type\":\"string\"}]}","ruleSet":{"domainRules":[{"name":"r","kind":"TRANSFORM","mode":"UPGRADE","type":"CEL","tags":null,"expr":""}]}}]`,
 		},
 	}
 
@@ -911,6 +1130,27 @@ func TestGetAllSchemas(t *testing.T) {
 	}
 	if len(latest) != 2 {
 		t.Fatalf("AllSchemas(latestOnly): got %d, want 2 (one per subject)", len(latest))
+	}
+
+	// As in Confluent's registry, GET /schemas and referencedby return at
+	// most 1000 items by default.
+	for i := range 1001 {
+		reg.SeedSchema(fmt.Sprintf("ref-%d", i), 1, 10+i, sr.Schema{
+			Schema:     fmt.Sprintf(`{"type":"record","name":"R%d","fields":[{"name":"u","type":"User"}]}`, i),
+			References: []sr.SchemaReference{{Name: "User", Subject: "user-value", Version: 1}},
+		})
+	}
+	if all, err = cl.AllSchemas(ctx); err != nil || len(all) != 1000 {
+		t.Errorf("AllSchemas: got %d schemas and error %v, want 1000", len(all), err)
+	}
+	resp, err := http.Get(reg.URL() + "/subjects/user-value/versions/1/referencedby")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var ids []int
+	if err := json.NewDecoder(resp.Body).Decode(&ids); err != nil || len(ids) != 1000 {
+		t.Errorf("referencedby: got %d IDs and error %v, want 1000", len(ids), err)
 	}
 }
 
@@ -1186,6 +1426,33 @@ func TestSchemaHandlers(t *testing.T) {
 			wantStatus: http.StatusOK,
 			wantBody:   `[{"subject":"user-topic","version":1}]`,
 		},
+		{
+			name: "GET /schemas/ids/{id}/subjects - offset and limit",
+			path: "/schemas/ids/123/subjects?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("a-topic", userSchema)
+				r.RegisterSchema("b-topic", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["b-topic"]`,
+		},
+		{
+			name: "GET /schemas/ids/{id}/versions - offset and limit",
+			path: "/schemas/ids/123/versions?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("a-topic", userSchema)
+				r.RegisterSchema("b-topic", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"b-topic","version":1}]`,
+		},
+		{
+			name:       "GET /schemas/guids/{guid} - soft-deleted version answers",
+			path:       "/schemas/guids/5e7f40ce-ba13-8394-ab4a-c4e82c0ededd",
+			setup:      func(r *srfake.Registry) { del(r, "/subjects/user-topic/versions/1") },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1235,7 +1502,7 @@ func TestSchemaByGUIDHandlers(t *testing.T) {
 			name:       "GET /schemas/guids/{guid} - found",
 			path:       "/schemas/guids/" + guid,
 			wantStatus: http.StatusOK,
-			wantBody:   `{"subject":"user-topic","version":1,"id":123,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			wantBody:   `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
 		},
 		{
 			name:       "GET /schemas/guids/{guid} - not found",
@@ -1305,8 +1572,8 @@ func TestSchemaGUIDClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaByGUID: %v", err)
 	}
-	if byGUID.Subject != "user-value" || byGUID.Version != 1 || byGUID.ID != 7 || byGUID.GUID != got.GUID {
-		t.Errorf("SchemaByGUID = %+v, want subject=user-value version=1 id=7 guid=%s", byGUID, got.GUID)
+	if want := (sr.SubjectSchema{GUID: got.GUID, Schema: userSchema}); !reflect.DeepEqual(byGUID, want) {
+		t.Errorf("SchemaByGUID = %+v, want %+v", byGUID, want)
 	}
 
 	ids, err := cl.SchemaIDsByGUID(ctx, got.GUID)
@@ -1351,7 +1618,7 @@ func TestSchemaGUIDCrossContext(t *testing.T) {
 	}
 
 	// get-by-guid is global and prefers the default-context representative.
-	if got, want := do("/schemas/guids/"+guid), `{"subject":"user-topic","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`; !jsonEqual(got, want) {
+	if got, want := do("/schemas/guids/"+guid), `{"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`; !jsonEqual(got, want) {
 		t.Errorf("schema mismatch:\ngot:  %s\nwant: %s", got, want)
 	}
 }
@@ -1910,9 +2177,8 @@ func TestClientIntegration(t *testing.T) {
 			wantResult: sr.CompatBackward,
 		},
 		{
-			name: "CreateSchema - direct circular reference",
+			name: "CreateSchema - reference to its own subject before the subject exists",
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
-				// Create a schema that references itself
 				selfRefSchema := sr.Schema{
 					Schema: `{"type":"record","name":"SelfRef","fields":[{"name":"id","type":"string"}]}`,
 					Type:   sr.TypeAvro,
@@ -1925,7 +2191,7 @@ func TestClientIntegration(t *testing.T) {
 			wantErr: &sr.ResponseError{StatusCode: http.StatusUnprocessableEntity},
 		},
 		{
-			name: "CreateSchema - indirect circular reference",
+			name: "CreateSchema - reference to a schema that references an older version of the subject",
 			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up schema A
 				schemaA := sr.Schema{
@@ -1945,18 +2211,23 @@ func TestClientIntegration(t *testing.T) {
 				r.SeedSchema("schema-b", 1, 2, schemaB)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
-				// Now try to create a new version of schema A that references schema B
-				// This creates: A:1 (no refs) <- B:1 (refs A:1) <- A:2 (refs B:1) = cycle
-				schemaAWithCycle := sr.Schema{
-					Schema: `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"},{"name":"b_ref","type":"string"}]}`,
-					Type:   sr.TypeAvro,
-					References: []sr.SchemaReference{
-						{Name: "refB", Subject: "schema-b", Version: 1},
-					},
-				}
-				return cl.CreateSchema(context.Background(), "schema-a", schemaAWithCycle)
+				// As in Confluent's registry, A:2 can reference B:1, which
+				// references A:1.
+				return cl.CreateSchema(context.Background(), "schema-a", sr.Schema{
+					Schema:     `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"},{"name":"b_ref","type":"string"}]}`,
+					References: []sr.SchemaReference{{Name: "refB", Subject: "schema-b", Version: 1}},
+				})
 			},
-			wantErr: &sr.ResponseError{StatusCode: http.StatusUnprocessableEntity},
+			wantResult: sr.SubjectSchema{
+				Subject: "schema-a",
+				Version: 2,
+				ID:      3,
+				GUID:    "d5472882-826d-8a99-ad41-68eafa0a324f",
+				Schema: sr.Schema{
+					Schema:     `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"},{"name":"b_ref","type":"string"}]}`,
+					References: []sr.SchemaReference{{Name: "refB", Subject: "schema-b", Version: 1}},
+				},
+			},
 		},
 		{
 			name: "CreateSchema - valid references without cycles",
@@ -2877,6 +3148,14 @@ func TestContextHandlers(t *testing.T) {
 			wantStatus: http.StatusOK,
 			wantBody:   `[".a"]`, // sorted: [".", ".a", ".b"], offset=1 limit=1 -> [".a"]
 		},
+		{
+			name:       "GET /contexts - limit 0 lists every context",
+			method:     "GET",
+			path:       "/contexts?limit=0",
+			setup:      func(r *srfake.Registry) { r.SeedSchema(":.a:topic", 1, 1, productSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[".", ".a"]`,
+		},
 
 		// DELETE /contexts/{context}
 		{
@@ -3258,13 +3537,13 @@ func TestContextHandlers(t *testing.T) {
 			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
-			name:       "POST /subjects/:.myctx:{s}/versions - reference cycle in .myctx",
+			name:       "POST /subjects/:.myctx:{s}/versions - reference to a schema that references an older version in .myctx",
 			method:     "POST",
 			path:       "/subjects/:.myctx:product/versions",
 			body:       `{"schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"o\",\"type\":\"Order\"}]}","references":[{"name":"Order","subject":"order","version":1}]}`,
 			setup:      withOrder,
-			wantStatus: http.StatusUnprocessableEntity,
-			wantBody:   `{"error_code": 42201, "message": "circular dependency detected: subject :.myctx:product is referenced in a cycle"}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 3}`,
 		},
 	}
 

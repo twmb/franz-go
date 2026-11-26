@@ -2,7 +2,7 @@ package srfake
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 )
@@ -22,21 +22,18 @@ func writeError(w http.ResponseWriter, status, code int, msg string) {
 	})
 }
 
-// decodeJSONRequest safely decodes a single JSON object from an HTTP request body.
-// It ensures there is no trailing data after the JSON object. As in Confluent's
-// registry, unknown fields are ignored.
-// This addresses the json.NewDecoder issue described in https://github.com/golang/go/issues/36225
-func decodeJSONRequest(r io.Reader, v any) error {
-	dec := json.NewDecoder(r)
-
-	if err := dec.Decode(v); err != nil {
-		return err
+// decodeJSONRequest decodes the JSON value at the start of a request body into
+// v. As in Confluent's registry, unknown fields and anything after the value
+// are ignored, and a body that is not valid JSON returns 400 with error code
+// 400. Any other error, such as a bad level or mode name, returns the error
+// that invalid builds from its message.
+func decodeJSONRequest(r io.Reader, v any, invalid func(msg string) *registryError) error {
+	err := json.NewDecoder(r).Decode(v)
+	if _, ok := errors.AsType[*json.SyntaxError](err); ok || errors.Is(err, io.ErrUnexpectedEOF) {
+		return newErr(http.StatusBadRequest, http.StatusBadRequest, "%s", err.Error())
 	}
-
-	// Check for trailing data - ensures exactly one JSON object
-	if err := dec.Decode(&json.RawMessage{}); err != io.EOF {
-		return fmt.Errorf("request body must contain only a single JSON object")
+	if err != nil {
+		return invalid(err.Error())
 	}
-
 	return nil
 }

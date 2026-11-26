@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/twmb/franz-go/pkg/sr"
 )
@@ -165,16 +166,24 @@ func NewRegistry(opts ...Option) *Registry {
 	mux.HandleFunc("GET /schemas/guids/{guid}", r.handleGetSchemaByGUID)
 	mux.HandleFunc("GET /schemas/guids/{guid}/ids", r.handleGetSchemaIDsByGUID)
 
-	// subject routes
+	// subject routes. As in Confluent's registry, a subject such as ":.:" is
+	// the empty subject; the path keeps it as it is, since an empty path
+	// segment does not route.
+	subject := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, req *http.Request) {
+			req.SetPathValue("subject", normalizeSubject(req.PathValue("subject")))
+			h(w, req)
+		}
+	}
 	mux.HandleFunc("GET /subjects", r.handleGetSubjects)
-	mux.HandleFunc("GET /subjects/{subject}/versions", r.handleGetSubjectVersions)
-	mux.HandleFunc("POST /subjects/{subject}/versions", r.handlePostSubjectVersion)
-	mux.HandleFunc("GET /subjects/{subject}/versions/{version}", r.handleGetSubjectSchemaByVersion)
-	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/schema", r.handleGetSubjectRawSchemaByVersion)
-	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/referencedby", r.handleGetReferencedBy)
-	mux.HandleFunc("DELETE /subjects/{subject}", r.handleDeleteSubject)
-	mux.HandleFunc("DELETE /subjects/{subject}/versions/{version}", r.handleDeleteVersion)
-	mux.HandleFunc("POST /subjects/{subject}", r.handleCheckSchema)
+	mux.HandleFunc("GET /subjects/{subject}/versions", subject(r.handleGetSubjectVersions))
+	mux.HandleFunc("POST /subjects/{subject}/versions", subject(r.handlePostSubjectVersion))
+	mux.HandleFunc("GET /subjects/{subject}/versions/{version}", subject(r.handleGetSubjectSchemaByVersion))
+	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/schema", subject(r.handleGetSubjectRawSchemaByVersion))
+	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/referencedby", subject(r.handleGetReferencedBy))
+	mux.HandleFunc("DELETE /subjects/{subject}", subject(r.handleDeleteSubject))
+	mux.HandleFunc("DELETE /subjects/{subject}/versions/{version}", subject(r.handleDeleteVersion))
+	mux.HandleFunc("POST /subjects/{subject}", subject(r.handleCheckSchema))
 
 	// config routes
 	mux.HandleFunc("GET /config", r.handleGetGlobalConfig)
@@ -315,7 +324,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 // with reqID and reqVersion from the id and version fields of its body, which
 // are -1 and 0 when the body has neither.
 func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion int) (id, version int, err error) {
-	if err = r.validateSubject(subject); err != nil {
+	if err = validateSubject(subject, false); err != nil {
 		return 0, 0, err
 	}
 
@@ -372,11 +381,6 @@ func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion 
 	if existingID, ok := r.idsByGUID[contextGUID{ctx, guid}]; ok && r.idInUseLocked(ctx, existingID) {
 		version = subj.highestVersion + 1
 
-		// Check for circular dependencies before storing the schema
-		if err = r.validateCircularReferences(schema, subject, version); err != nil {
-			return 0, 0, err
-		}
-
 		// Store schema version data
 		r.keepSubjectLocked(subject, subj)
 		subj.versions[version] = &versionData{
@@ -398,11 +402,6 @@ func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion 
 	r.highestID[ctx]++
 	id = r.highestID[ctx]
 	version = subj.highestVersion + 1
-
-	// Check for circular dependencies before storing the schema
-	if err = r.validateCircularReferences(schema, subject, version); err != nil {
-		return 0, 0, err
-	}
 
 	r.idsByGUID[contextGUID{ctx, guid}] = id
 
@@ -872,16 +871,15 @@ func (*Registry) schemasEqual(a, b sr.Schema) bool {
 	return true
 }
 
-func (*Registry) validateSubject(subject string) error {
-	if subject == "" {
-		return errInvalidSchema("subject name cannot be empty")
-	}
-	if len(subject) > 255 {
-		return errInvalidSchema("subject name too long (max 255 characters)")
-	}
-	// Check for null bytes which can cause issues
-	if strings.Contains(subject, "\x00") {
-		return errInvalidSchema("subject name cannot contain null bytes")
+// Returns the error for a subject that Confluent's registry refuses: one with
+// a control character, one named __GLOBAL or __EMPTY, and, outside config and
+// mode, one in the .__GLOBAL context. As in Confluent's registry by default, a
+// subject without a name is valid.
+func validateSubject(subject string, configOrMode bool) error {
+	ctx, name := splitSubject(subject)
+	if strings.ContainsFunc(subject, unicode.IsControl) || name == "__GLOBAL" || name == "__EMPTY" ||
+		!configOrMode && ctx == ".__GLOBAL" {
+		return errInvalidSubject(subject)
 	}
 	return nil
 }
@@ -891,7 +889,7 @@ func (*Registry) validateSchema(s sr.Schema) error {
 	case sr.TypeAvro, sr.TypeJSON:
 		var tmp any
 		if err := json.Unmarshal([]byte(s.Schema), &tmp); err != nil {
-			return errInvalidSchemaWithCause(err, fmt.Sprintf("invalid %s schema: %v", s.Type.String(), err))
+			return errInvalidSchemaDetails(s.Type, err.Error())
 		}
 	case sr.TypeProtobuf:
 		if strings.TrimSpace(s.Schema) == "" {
@@ -921,67 +919,20 @@ func (r *Registry) validateReferences(subject string, s sr.Schema) (sr.Schema, e
 		}
 
 		// Check if the referenced schema exists and is not soft-deleted
-		subj, ok := r.subjects[refSubject(subject, ref.Subject)]
-		if !ok {
-			return s, errInvalidReference(ref)
+		refSubj := refSubject(subject, ref.Subject)
+		var vd *versionData
+		if subj, ok := r.subjects[refSubj]; ok {
+			if ref.Version == -1 {
+				refs[i].Version = subj.latestVersion
+			}
+			vd = subj.versions[refs[i].Version]
 		}
-		if ref.Version == -1 {
-			refs[i].Version = subj.latestVersion
-		}
-
-		versionData, ok := subj.versions[refs[i].Version]
-		if !ok || versionData.isDeleted {
-			return s, errInvalidReference(ref)
+		if vd == nil || vd.isDeleted {
+			return s, errInvalidSchemaDetails(s.Type, fmt.Sprintf("No schema reference found for subject %q and version %d", refSubj, ref.Version))
 		}
 	}
 	s.References = refs
 	return s, nil
-}
-
-// validateCircularReferences checks for circular dependencies in schema references.
-// This should be called after validateReferences to ensure all references exist.
-func (r *Registry) validateCircularReferences(schema sr.Schema, subject string, version int) error {
-	visited := make(map[string]bool)
-	subjectStack := make(map[string]bool)
-
-	return r.detectCycle(schema, subject, version, visited, subjectStack)
-}
-
-// detectCycle performs depth-first search to detect cycles in the reference graph
-func (r *Registry) detectCycle(schema sr.Schema, subject string, version int, visited, subjectStack map[string]bool) error {
-	// Create a unique key for this schema version
-	key := fmt.Sprintf("%s:%d", subject, version)
-
-	// If this subject is already in our traversal stack, we have a cycle
-	if subjectStack[subject] {
-		return errCircularDependency(subject)
-	}
-
-	// Mark current node as visited and current subject in stack
-	visited[key] = true
-	subjectStack[subject] = true
-
-	// Visit all references
-	for _, ref := range schema.References {
-		refName := refSubject(subject, ref.Subject)
-		refKey := fmt.Sprintf("%s:%d", refName, ref.Version)
-
-		// If not visited, recursively check this reference
-		if !visited[refKey] {
-			// Get the referenced schema
-			if refSubj, ok := r.subjects[refName]; ok {
-				if refVersionData, ok := refSubj.versions[ref.Version]; ok {
-					if err := r.detectCycle(refVersionData.schema.Schema, refName, ref.Version, visited, subjectStack); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-
-	// Remove from subject stack before returning
-	delete(subjectStack, subject)
-	return nil
 }
 
 // subjectContext extracts the context from a ":.name:subject" string, defaulting to ".".
@@ -1053,45 +1004,6 @@ func schemaGUID(s sr.Schema) string {
 	b[6] = (b[6] & 0x0f) | 0x80 // version 8 (custom, non-namespace)
 	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-// subjectSchemaByGUIDLocked returns a representative active SubjectSchema for the
-// given GUID. A GUID identifies a schema globally, so all contexts are searched;
-// a default-context match is preferred, otherwise the lowest-sorted subject and
-// version wins. The caller must hold the lock.
-func (r *Registry) subjectSchemaByGUIDLocked(guid string) (sr.SubjectSchema, bool) {
-	subjects := make([]string, 0, len(r.subjects))
-	for s := range r.subjects {
-		subjects = append(subjects, s)
-	}
-	sort.Strings(subjects)
-
-	var fallback sr.SubjectSchema
-	haveFallback := false
-	for _, s := range subjects {
-		subj := r.subjects[s]
-		if !subj.active() {
-			continue
-		}
-		versions := make([]int, 0, len(subj.versions))
-		for v := range subj.versions {
-			versions = append(versions, v)
-		}
-		sort.Ints(versions)
-		for _, v := range versions {
-			vd := subj.versions[v]
-			if vd.isDeleted || vd.schema.GUID != guid {
-				continue
-			}
-			if subjectContext(s) == "." {
-				return vd.schema, true
-			}
-			if !haveFallback {
-				fallback, haveFallback = vd.schema, true
-			}
-		}
-	}
-	return fallback, haveFallback
 }
 
 func normalizeSchema(raw string, t sr.SchemaType) (string, error) {
