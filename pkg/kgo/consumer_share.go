@@ -1857,7 +1857,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 		kmove     kip951move
 		brokers   []BrokerMetadata
 		requeued  int64
-		retry     bool // we requeued acks that a caller may be waiting on
+		retry     bool // we requeued acks
 		now       = time.Now().UnixNano()
 		backoff   time.Duration // of the retry, set at the first retryable partition error
 		renewed   int64         // the lock deadline of the records this request renewed
@@ -1907,8 +1907,7 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 					// record in a request fails the acks of its
 					// whole partition, so those acks fail here.
 					// A gap past its deadline is dropped. The other
-					// gaps go back with the records, or alone; no
-					// caller waits on a gap.
+					// gaps go back with the records, or alone.
 					if backoff == 0 {
 						backoff = sc.cfg.retryBackoff(s.share.ackRequeues + 1)
 					}
@@ -1981,9 +1980,10 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 	sc.enqueueCallback(results, nAcks-requeued)
 
 	// Nothing else sends requeued acks again: with a fetch buffered or
-	// nothing to fetch, the loop sends no request, and FlushAcks would
-	// wait for good. One timer per source signals a flush after the
-	// backoff.
+	// nothing to fetch, the loop sends no request. FlushAcks would wait
+	// for good, and a gap's offsets would stay locked on the broker
+	// until their lock ends. One timer per source signals a flush after
+	// the backoff.
 	if !retry {
 		s.share.ackRequeues = 0
 		return
@@ -2131,11 +2131,10 @@ func (st *shareAckState) deadline() int64 {
 // PurgeTopics), entries fire the left-group callback; gaps are
 // silently dropped.
 //
-// We signal the cursor's source when a caller's acks go back, and return
-// whether any did. The cursor can have moved to another source while the
-// request was in flight, and a source that has a fetch buffered sends
-// nothing until a poll or a signal. Gaps alone get no signal: no caller
-// waits on a gap, so the gaps go out with the source's next request.
+// We signal the cursor's source when anything goes back, and return whether
+// anything did. The cursor can have moved to another source while the
+// request was in flight, and a source that has a fetch buffered, or nothing
+// to fetch, sends nothing until a poll or a signal.
 func (d *cursorAckDrain) requeue(sc *shareConsumer) (requeued bool) {
 	c := d.cursor
 	c.ackMu.Lock()
@@ -2149,10 +2148,11 @@ func (d *cursorAckDrain) requeue(sc *shareConsumer) (requeued bool) {
 	c.pendingAcks = append(c.pendingAcks, d.entries...)
 	c.pendingGaps = append(c.pendingGaps, d.gaps...)
 	c.ackMu.Unlock()
-	if len(d.entries) > 0 {
-		c.source.Load().signalShareAcks()
+	if len(d.entries) == 0 && len(d.gaps) == 0 {
+		return false
 	}
-	return len(d.entries) > 0
+	c.source.Load().signalShareAcks()
+	return true
 }
 
 // enqueueGaps appends gap/release ranges to the cursor's pendingGaps.
