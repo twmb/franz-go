@@ -777,6 +777,12 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	defer cl.producer.txnMu.Unlock()
 
 	if !cl.producer.inTxn {
+		// With no transaction state left, an abort returns a fatal
+		// producer ID error, as Java does: a fenced EndTxn consumed the
+		// state, and the caller's abort returns the fence.
+		if id := cl.producer.id.Load().(*producerID); !bool(commit) && id.err != nil && !cl.recoverableProducerIDErr(id.err) {
+			return id.err
+		}
 		return nil
 	}
 	if commit {
@@ -905,13 +911,17 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			return nil
 		}
 		// As after an EndTxn below, a definitive answer, INVALID_TXN_STATE
-		// included, fails the producer ID with that answer, and anything
-		// else leaves the producer ID failed for reload. Either way, the
-		// next retry sees the transaction state.
-		if definitiveTxnErr(err) {
-			cl.producer.id.CompareAndSwap(stored, &producerID{id: u.id, epoch: u.epoch, err: err})
+		// included, fails the producer ID with that answer. After anything
+		// else, we still do not know whether the EndTxn happened.
+		if !definitiveTxnErr(err) {
+			restore()
+			return err
 		}
-		restore()
+		cl.producer.id.CompareAndSwap(stored, &producerID{id: u.id, epoch: u.epoch, err: err})
+		cl.producer.endUnconfirmed.Store(nil)
+		if errors.Is(err, kerr.TransactionAbortable) {
+			restore()
+		}
 		if bool(commit) && errors.Is(err, kerr.InvalidTxnState) {
 			return fmt.Errorf("the resent commit did not happen: %w", err)
 		}
@@ -965,18 +975,24 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// EndTransaction with the same TransactionEndTry resends. Until then,
 	// nothing reloads the producer ID (see producerID).
 	//
-	// failProducerID only swaps over an error-free id, so this cannot
-	// clobber an already-fatal producer state. We also restore
-	// everything this call consumed, so that the retry re-enters with the
-	// transaction state intact.
+	// failProducerID only swaps over an error-free id, so this cannot clobber
+	// an already-fatal producer state. If we do not know whether the EndTxn
+	// happened, we also restore everything this call consumed, so that the
+	// retry re-enters with the transaction state intact. A definitive answer
+	// ends the attempt: only TRANSACTION_ABORTABLE leaves a transaction for the
+	// caller to abort, so only TRANSACTION_ABORTABLE keeps the transaction
+	// state.
 	if err != nil {
-		cl.producer.endUnconfirmed.Store(&sentEndTxn{id: id, epoch: epoch, commit: bool(commit)})
 		if definitiveTxnErr(err) {
 			cl.failProducerID(id, epoch, err)
+			if errors.Is(err, kerr.TransactionAbortable) {
+				restore()
+			}
 		} else {
+			cl.producer.endUnconfirmed.Store(&sentEndTxn{id: id, epoch: epoch, commit: bool(commit)})
 			cl.failProducerID(id, epoch, errReloadProducerID)
+			restore()
 		}
-		restore()
 	}
 
 	return err
@@ -1089,25 +1105,37 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 	if err == nil {
 		return false, false, nil
 	}
+	if !cl.recoverableProducerIDErr(err) {
+		return true, false, err // fatal, unrecoverable
+	}
+
+	// Storing errReloadProducerID will reset sequence numbers as appropriate
+	// when the producer ID is reloaded successfully.
+	cl.producer.id.Store(&producerID{
+		id:    id,
+		epoch: epoch,
+		err:   errReloadProducerID,
+	})
+	return true, true, nil
+}
+
+// Returns whether we recover from a producer ID error by reloading the
+// producer ID.
+func (cl *Client) recoverableProducerIDErr(err error) bool {
+	if errors.Is(err, errReloadProducerID) {
+		return true
+	}
 
 	ke, ok := errors.AsType[*kerr.Error](err)
 	if !ok {
-		// The stored PID error is not a kerr (broker-side) error -- most
+		// The PID error is not a kerr (broker-side) error -- most
 		// likely a transient network error wrapped in errProducerIDLoadFail
 		// (dial refused, EOF, etc.) from a broker restart or transient
 		// unreachability. Rather than surfacing "producer ID has a fatal,
-		// unrecoverable error" to the caller, flag the PID for reload so
+		// unrecoverable error" to the caller, we flag the PID for reload so
 		// the next produce/begin re-runs InitProducerID now that the
 		// broker is (probably) back.
-		if isRetryableBrokerErr(err) || isAnyDialErr(err) {
-			cl.producer.id.Store(&producerID{
-				id:    id,
-				epoch: epoch,
-				err:   errReloadProducerID,
-			})
-			return true, true, nil
-		}
-		return true, false, err
+		return isRetryableBrokerErr(err) || isAnyDialErr(err)
 	}
 
 	if ke.Retriable || ke.Code == kerr.ConcurrentTransactions.Code {
@@ -1116,19 +1144,13 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 		// outlived its internal retries, or CONCURRENT_TRANSACTIONS,
 		// which kerr marks non-retryable, that outlived
 		// doWithConcurrentTransactions. These are transient load
-		// failures, not a fatal producer state: flag the ID for reload
-		// exactly like the transport-level failures above, rather than
-		// reporting "fatal, unrecoverable" for a condition that clears
-		// on its own.
-		cl.producer.id.Store(&producerID{
-			id:    id,
-			epoch: epoch,
-			err:   errReloadProducerID,
-		})
-		return true, true, nil
+		// failures, not a fatal producer state: we flag the ID for
+		// reload exactly like the transport-level failures above,
+		// rather than reporting "fatal, unrecoverable" for a condition
+		// that clears on its own.
+		return true
 	}
 
-	var recoverable bool
 	if cl.producer.tx890p2.Load() {
 		// Under KIP-890 part 2 (transaction.version=2 in effect for
 		// this client's transactions), InvalidProducerIDMapping and
@@ -1142,25 +1164,11 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 		// semantics hold and the KIP-360/KIP-588 re-init below is the
 		// recovery. Note that after a transaction timeout aborts our
 		// transaction, Kafka 2.6+ fences that re-init, which is fatal.
-		recoverable = errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.TransactionAbortable)
-	} else {
-		kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
-		kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
-		recoverable = kip360 || kip588
+		return errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.TransactionAbortable)
 	}
-
-	if !recoverable {
-		return true, false, err // fatal, unrecoverable
-	}
-
-	// Storing errReloadProducerID will reset sequence numbers as appropriate
-	// when the producer ID is reloaded successfully.
-	cl.producer.id.Store(&producerID{
-		id:    id,
-		epoch: epoch,
-		err:   errReloadProducerID,
-	})
-	return true, true, nil
+	kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
+	kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
+	return kip360 || kip588
 }
 
 // If a transaction is begun too quickly after finishing an old transaction,

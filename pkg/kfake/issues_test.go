@@ -4102,23 +4102,26 @@ func TestApiVersionsSoftwareNameValidation(t *testing.T) {
 	}
 }
 
-// An EndTxn whose outcome is unconfirmed (here UNKNOWN_SERVER_ERROR) restores
-// the client's transaction state, so BeginTransaction fails, and each
-// documented retry in the same direction resends the EndTxn at the epoch it
-// used, with no InitProducerID; a retry in the other direction is refused.
-// Until then, ProducerID fails without reloading. INVALID_TXN_STATE answering
-// the resend is definitive. Another producer that took over the
-// transactional ID fences the retry and keeps its transaction.
+// After an EndTxn that the client does not know happened (here after
+// UNKNOWN_SERVER_ERROR), the client restores its transaction state, so
+// BeginTransaction fails. Each EndTransaction with the same TransactionEndTry
+// resends the EndTxn at the epoch it used, with no InitProducerID, and
+// EndTransaction with the other TransactionEndTry is refused. Until then,
+// ProducerID fails without reloading. INVALID_TXN_STATE answering the resend is
+// definitive. Another producer that took over the transactional ID fences the
+// retry and keeps its transaction. After a definitive answer to the EndTxn,
+// TryAbort is not refused.
 func TestEndTxnUnconfirmedRetry(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name       string
-		tv1        bool // pin EndTxn to v4, on a cluster at transaction.version 1
-		commit     bool // the EndTxn and its retry commit, rather than abort
-		flip       bool // the retry goes in the other direction
-		concurrent bool // the EndTxn gets CONCURRENT_TRANSACTIONS until its ctx ends
-		purge      bool // the client purges the topic before the retry
-		failProd   bool // the transaction's produce fails, so no partition is added
+		tv1        bool        // pin EndTxn to v4, on a cluster at transaction.version 1
+		commit     bool        // the EndTxn and its retry commit, rather than abort
+		flip       bool        // the retry uses the other TransactionEndTry
+		concurrent bool        // the EndTxn gets CONCURRENT_TRANSACTIONS until its ctx ends
+		firstErr   *kerr.Error // if non-nil, the EndTxn gets this definitive answer instead
+		purge      bool        // the client purges the topic before the retry
+		failProd   bool        // the transaction's produce fails, so no partition is added
 		// Before the retry: the coordinator committed or aborted at our
 		// epoch, another producer took over, or the client asked for its
 		// producer ID.
@@ -4144,6 +4147,8 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		{name: "commit-concurrent", commit: true, concurrent: true, wantEnds: 1},
 		{name: "tv1-commit-purged", tv1: true, commit: true, purge: true, wantEnds: 1},
 		{name: "commit-failed-produce", commit: true, failProd: true, wantEnds: 1},
+		{name: "commit-fenced", commit: true, flip: true, firstErr: kerr.ProducerFenced, wantErr: kerr.ProducerFenced},
+		{name: "commit-abortable", commit: true, flip: true, firstErr: kerr.TransactionAbortable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -4158,6 +4163,9 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			first := Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError}
 			if test.concurrent {
 				first.Err, first.Count = kerr.ConcurrentTransactions, -1
+			}
+			if test.firstErr != nil {
+				first.Err = test.firstErr
 			}
 			firstFault := c.Fault(first)
 
@@ -4224,7 +4232,7 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 					t.Fatalf("ProducerID got err %v after %d InitProducerID, want an error after none", err, initPIDs.Hits()-pre)
 				}
 			}
-			if err := cl.BeginTransaction(); err == nil {
+			if err := cl.BeginTransaction(); test.firstErr == nil && err == nil {
 				t.Fatal("began a transaction before the client learned whether the last EndTxn happened")
 			}
 
@@ -4245,6 +4253,11 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			}
 			if other != nil && other.EndTransaction(ctx, kgo.TryCommit) != nil {
 				t.Fatal("the new producer's transaction did not commit")
+			}
+			if test.wantErr != nil {
+				if err := cl.BeginTransaction(); !errors.Is(err, test.wantErr) {
+					t.Fatalf("begin after the retry failed: got %v, want %v", err, test.wantErr)
+				}
 			}
 			if test.wantErr != nil || test.wantMsg != "" || test.committed || test.purge {
 				return
@@ -4270,7 +4283,7 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			)
 
 			want := []string{"second"}
-			if test.commit && !test.failProd {
+			if test.commit && !test.flip && !test.failProd {
 				want = []string{"first", "second"}
 			}
 			var vals []string
