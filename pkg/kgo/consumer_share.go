@@ -1968,6 +1968,11 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 				Partition: tp.p,
 				Err:       errBrokerOmittedAckPartition,
 			})
+			if req.IsRenewAck { // as for an answered partition: the record can be renewed again
+				for _, e := range drained.entries {
+					e.status.CompareAndSwap(int32(AckRenew), 0)
+				}
+			}
 		}
 	}
 	// A standalone ack can be the last request for a cursor, with no fetch
