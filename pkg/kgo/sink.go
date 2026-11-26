@@ -1216,7 +1216,12 @@ func (s *sink) handleReqRespBatch(
 		// epoch rather than resending under its old one (see tryAddBatch).
 		batch.pinned = false
 
-		if batch.owner.lastAckedOffset >= 0 && rp.LogStartOffset > batch.owner.lastAckedOffset {
+		// A transactional producer cannot reload its producer ID
+		// mid-transaction: the reload's InitProducerID aborts the open
+		// transaction and what the transaction already produced, and
+		// later produces would join a new transaction. The producer ID
+		// is failed below instead.
+		if s.cl.cfg.txnID == nil && batch.owner.lastAckedOffset >= 0 && rp.LogStartOffset > batch.owner.lastAckedOffset {
 			s.cl.cfg.logger.Log(LogLevelInfo, "partition prefix truncation to after our last produce caused the broker to forget us; no loss occurred, bumping producer epoch and resetting sequence numbers",
 				"broker", logID(s.nodeID),
 				"topic", topic,

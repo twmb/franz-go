@@ -7,6 +7,7 @@ package kfake
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -145,6 +146,34 @@ func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	}
 	if endTxns.Hits() == 0 {
 		t.Fatal("BUG REPRODUCED: EndTransaction(TryAbort) issued no EndTxn after failed transactional produces under KIP-890p2; the broker-side transaction is left ongoing until the transaction timeout")
+	}
+
+	// UNKNOWN_PRODUCER_ID after the log start moved past our last acked
+	// offset fails the produce, rather than reloading the producer ID
+	// mid-transaction and retrying into a new transaction.
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if err := cl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+		t.Fatalf("ProduceSync: %v", err)
+	}
+	c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ProduceRequest)
+		resp := req.ResponseKind().(*kmsg.ProduceResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.ProduceResponseTopic{Topic: rt.Topic, TopicID: rt.TopicID}
+			for _, rp := range rt.Partitions {
+				st.Partitions = append(st.Partitions, kmsg.ProduceResponseTopicPartition{Partition: rp.Partition, ErrorCode: kerr.UnknownProducerID.Code, LogStartOffset: 1000})
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+	if err := cl.ProduceSync(context.Background(), r).FirstErr(); !errors.Is(err, kerr.UnknownProducerID) {
+		t.Fatalf("produce after the truncation: got %v, want UNKNOWN_PRODUCER_ID", err)
+	}
+	if err := cl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+		t.Fatalf("EndTransaction after the truncation: %v", err)
 	}
 }
 
