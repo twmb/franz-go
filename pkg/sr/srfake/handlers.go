@@ -286,7 +286,7 @@ func (r *Registry) idUsagesLocked(id int, subject string, hasSubject, deleted bo
 			continue
 		}
 		for v, vd := range subj.versions {
-			if vd.schema.ID == id && (deleted || !subj.isDeleted && !vd.isDeleted) {
+			if vd.schema.ID == id && (deleted || !vd.isDeleted) {
 				usages = append(usages, sr.SubjectVersion{Subject: s, Version: v})
 			}
 		}
@@ -329,7 +329,7 @@ func (r *Registry) handleGetSchemaIDsByGUID(w http.ResponseWriter, req *http.Req
 
 	byContext := make(map[string]int)
 	for subject, subj := range r.subjects {
-		if subj.isDeleted {
+		if !subj.active() {
 			continue
 		}
 		for _, vd := range subj.versions {
@@ -409,7 +409,7 @@ func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 	out := make([]sr.SubjectSchema, 0)
 	for _, s := range subjects {
 		subj := r.subjects[s]
-		if !includeDeleted && subj.isDeleted {
+		if !includeDeleted && !subj.active() {
 			continue
 		}
 		if ctx != "" && subjectContext(s) != ctx {
@@ -447,7 +447,7 @@ func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	subjects := make([]string, 0, len(r.subjects))
 	for s, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
+		if !del.keep(!subj.active()) {
 			continue
 		}
 		if ctx != "" && subjectContext(s) != ctx {
@@ -477,7 +477,7 @@ func (r *Registry) handleGetSubjectVersions(w http.ResponseWriter, req *http.Req
 	defer r.mu.RUnlock()
 
 	subj, ok := r.subjects[subject]
-	if !ok || (subj.isDeleted && !del.any()) {
+	if !ok || len(subj.versions) == 0 || (!subj.active() && !del.any()) {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
@@ -528,7 +528,7 @@ func (r *Registry) handleGetSubjectSchemaByVersion(w http.ResponseWriter, req *h
 
 	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
 	if !ok {
-		r.handleAPIError(w, errVersionNotFound(subject, version))
+		r.handleAPIError(w, r.errMissingVersion(subject, version, del.any()))
 		return
 	}
 	respondJSON(w, http.StatusOK, sch)
@@ -549,7 +549,7 @@ func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req
 
 	sch, ok := r.getSchemaBySubjectVersion(subject, version, del.any())
 	if !ok {
-		r.handleAPIError(w, errVersionNotFound(subject, version))
+		r.handleAPIError(w, r.errMissingVersion(subject, version, del.any()))
 		return
 	}
 	respondJSON(w, http.StatusOK, sch.Schema)
@@ -581,10 +581,6 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	// Find all schemas that reference this target schema
 	referencingIDs := make([]int, 0) // Initialize as empty slice, not nil
 	for referrer, subj := range r.subjects {
-		if !del.keep(subj.isDeleted) {
-			continue
-		}
-
 		for _, versionData := range subj.versions {
 			if !del.keep(versionData.isDeleted) {
 				continue
@@ -670,7 +666,7 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 
 	// Check if subject exists and is not soft-deleted
 	subj, ok := r.subjects[subject]
-	if !ok || (subj.isDeleted && !del.any()) {
+	if !ok || (!subj.active() && !del.any()) {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
@@ -902,7 +898,7 @@ func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	ctxSet := map[string]bool{".": true}
 	for subject, subj := range r.subjects {
-		if subj.isDeleted {
+		if !subj.active() {
 			continue
 		}
 		hasActive := false
@@ -959,7 +955,7 @@ func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request)
 	defer r.mu.Unlock()
 
 	for subject, subj := range r.subjects {
-		if subj.isDeleted {
+		if !subj.active() {
 			continue
 		}
 		if subjectContext(subject) == ctx {

@@ -34,10 +34,23 @@ type versionData struct {
 type subjectData struct {
 	versions       map[int]*versionData   // Using a pointer to modify isDeleted in place
 	latestVersion  int                    // The highest version number among non-soft-deleted versions (0 means no active versions)
-	highestVersion int                    // The highest version number ever assigned (persists through deletes to prevent reuse)
-	isDeleted      bool                   // Whether the subject is soft-deleted
+	highestVersion int                    // The highest version, soft-deleted or not; a permanent delete of it frees its number for reuse, as in Confluent's registry
 	compatLevel    *sr.CompatibilityLevel // Pointer to distinguish "not set" from a zero-value
 	mode           *sr.Mode               // Pointer to distinguish "not set" from a zero-value
+}
+
+// Reports whether the subject has a version that is not soft-deleted. As in
+// Confluent's registry, a subject whose versions are all soft-deleted is
+// soft-deleted.
+func (s *subjectData) active() bool { return s.latestVersion > 0 }
+
+// Returns the highest version, soft-deleted or not, or 0 if there is none.
+func (s *subjectData) highestExisting() int {
+	highest := 0
+	for v := range s.versions {
+		highest = max(highest, v)
+	}
+	return highest
 }
 
 // recalculateLatestVersion updates the latestVersion field to the highest
@@ -298,13 +311,9 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 		return 0, 0, err
 	}
 
-	// Get or create subject data
+	// Get or create subject data. A soft-deleted subject gets the next
+	// version, as in Confluent's registry.
 	subj := r.getOrCreateSubject(subject)
-
-	// Check if subject is soft-deleted
-	if subj.isDeleted {
-		return 0, 0, errSubjectNotFound(subject)
-	}
 
 	// existing identical schema under same subject?
 	for v, versionData := range subj.versions {
@@ -401,13 +410,13 @@ func (r *Registry) GetSchema(subject string, version int) (sr.SubjectSchema, boo
 	return r.getSchemaBySubjectVersion(subject, version, false)
 }
 
-// SubjectExists returns true if subject exists and has not been hard-deleted.
+// SubjectExists returns true if subject has a version that is not deleted.
 func (r *Registry) SubjectExists(subject string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	subj, ok := r.subjects[subject]
-	return ok && !subj.isDeleted
+	return ok && subj.active()
 }
 
 // Reset wipes all in-memory state. Useful between tests.
@@ -426,7 +435,7 @@ func (r *Registry) Reset() {
 // are returned (matching the ?deleted=true query parameter).
 func (r *Registry) getSchemaBySubjectVersionLocked(subject string, version int, includeDeleted bool) (sr.SubjectSchema, bool) {
 	subj, ok := r.subjects[subject]
-	if !ok || (subj.isDeleted && !includeDeleted) {
+	if !ok {
 		return sr.SubjectSchema{}, false
 	}
 
@@ -504,85 +513,91 @@ func (r *Registry) schemaByIDLocked(id int, subject string, hasSubject bool) (sr
 	return r.versionByIDLocked(".", id, "")
 }
 
-// isSchemaReferenced checks if the given schema version is referenced by any other schemas.
-// Assumes the caller already holds a lock.
-func (r *Registry) isSchemaReferenced(targetSubject string, targetVersion int) (bool, []int) {
-	var referencingIDs []int
-
+// Returns the subjects with a version that references version targetVersion
+// of targetSubject, each mapped to whether one of those versions is not
+// soft-deleted. Assumes the caller already holds a lock.
+func (r *Registry) referrersLocked(targetSubject string, targetVersion int) map[string]bool {
+	referrers := make(map[string]bool)
 	for subject, subj := range r.subjects {
-		// Skip soft-deleted subjects
-		if subj.isDeleted {
-			continue
-		}
-
 		for _, versionData := range subj.versions {
-			// Skip soft-deleted versions
-			if versionData.isDeleted {
-				continue
-			}
-
-			// Check if this schema references our target
 			for _, ref := range versionData.schema.References {
 				if refSubject(subject, ref.Subject) == targetSubject && ref.Version == targetVersion {
-					referencingIDs = append(referencingIDs, versionData.schema.ID)
-					break // Only add each schema ID once
+					referrers[subject] = referrers[subject] || !versionData.isDeleted
 				}
 			}
 		}
 	}
-
-	return len(referencingIDs) > 0, referencingIDs
+	return referrers
 }
 
-// deleteSubject performs a soft or permanent delete of a subject.
-// This method assumes the caller already holds the necessary lock.
-// Returns the list of version numbers that were deleted.
+// Reports whether referrers keep a version from being deleted. As in
+// Confluent's registry, a soft delete counts only referrers that are not
+// soft-deleted, and a permanent delete counts every referrer.
+func blocksDelete(referrers map[string]bool, permanent bool) bool {
+	for _, active := range referrers {
+		if active || permanent {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteSubject performs a soft or permanent delete of a subject, as
+// Confluent's registry does: a soft delete marks every version that is not
+// soft-deleted as soft-deleted, and a permanent delete requires every version
+// to be soft-deleted first. Returns the deleted versions. This method assumes
+// the caller already holds the necessary lock.
 func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) {
 	subj, ok := r.subjects[subject]
-	if !ok {
+	if !ok || len(subj.versions) == 0 {
 		return nil, errSubjectNotFound(subject)
+	}
+	if !permanent && !subj.active() {
+		return nil, errSubjectSoftDeleted(subject)
 	}
 
 	var versions []int
-	for v := range subj.versions {
-		versions = append(versions, v)
+	for v, vd := range subj.versions {
+		if permanent || !vd.isDeleted {
+			versions = append(versions, v)
+		}
 	}
 	sort.Ints(versions)
 
-	// Check if any version of this subject is still referenced
-	var allReferencingIDs []int
 	for _, version := range versions {
-		if isReferenced, referencingIDs := r.isSchemaReferenced(subject, version); isReferenced {
-			allReferencingIDs = append(allReferencingIDs, referencingIDs...)
+		// References from the subject itself do not count, as in
+		// Confluent's registry.
+		referrers := r.referrersLocked(subject, version)
+		delete(referrers, subject)
+		if blocksDelete(referrers, permanent) {
+			return nil, errSchemaIsReferenced(subject, version)
 		}
-	}
-	if len(allReferencingIDs) > 0 {
-		return nil, newErr(http.StatusConflict, sr.ErrInvalidSchema.Code,
-			"Cannot delete subject %s as its schemas are still referenced by schema IDs: %v",
-			subject, allReferencingIDs)
+		if permanent && !subj.versions[version].isDeleted {
+			return nil, errSubjectNotSoftDeleted(subject)
+		}
 	}
 
 	if permanent {
 		// Hard delete - remove entire subject
 		delete(r.subjects, subject)
-	} else {
-		// Soft delete - mark subject as deleted
-		subj.isDeleted = true
-		for _, v := range versions {
-			if vd := subj.versions[v]; !vd.isDeleted {
-				r.idsByGUID[contextGUID{subjectContext(subject), vd.schema.GUID}] = vd.schema.ID
-			}
-		}
+		return versions, nil
 	}
-
+	for _, v := range versions {
+		vd := subj.versions[v]
+		vd.isDeleted = true
+		r.idsByGUID[contextGUID{subjectContext(subject), vd.schema.GUID}] = vd.schema.ID
+	}
+	subj.latestVersion = 0
 	return versions, nil
 }
 
-// deleteVersion performs a soft or permanent delete of a specific version.
-// This method assumes the caller already holds the necessary lock.
+// deleteVersion performs a soft or permanent delete of a specific version, as
+// Confluent's registry does: a permanent delete requires a soft delete first,
+// and a soft-deleted version cannot be soft-deleted again. This method
+// assumes the caller already holds the necessary lock.
 func (r *Registry) deleteVersion(subject string, version int, permanent bool) error {
 	subj, ok := r.subjects[subject]
-	if !ok {
+	if !ok || len(subj.versions) == 0 {
 		return errSubjectNotFound(subject)
 	}
 
@@ -590,15 +605,26 @@ func (r *Registry) deleteVersion(subject string, version int, permanent bool) er
 	if !ok {
 		return errVersionNotFound(subject, version)
 	}
+	if !permanent && versionData.isDeleted {
+		return errVersionSoftDeleted(subject, version)
+	}
 
 	// Check if schema is still referenced
-	if isReferenced, referencingIDs := r.isSchemaReferenced(subject, version); isReferenced {
-		return errSchemaIsReferenced(subject, version, referencingIDs)
+	if blocksDelete(r.referrersLocked(subject, version), permanent) {
+		return errSchemaIsReferenced(subject, version)
+	}
+	if permanent && !versionData.isDeleted {
+		return errVersionNotSoftDeleted(subject, version)
 	}
 
 	if permanent {
-		// Hard delete - remove version data
+		// Hard delete - remove version data, and the subject once it has
+		// no versions
 		delete(subj.versions, version)
+		subj.highestVersion = subj.highestExisting()
+		if len(subj.versions) == 0 {
+			delete(r.subjects, subject)
+		}
 	} else {
 		// Soft delete - mark version as deleted
 		versionData.isDeleted = true
@@ -618,27 +644,36 @@ func (r *Registry) resolveVersion(subject, versionStr string, includeDeleted boo
 		r.mu.RLock()
 		defer r.mu.RUnlock()
 
+		// As in Confluent's registry, latest is the highest version that
+		// is not soft-deleted, or with ?deleted=true the highest version.
 		subj, ok := r.subjects[subject]
-		if !ok {
-			// Subject truly doesn't exist
+		switch {
+		case ok && includeDeleted && len(subj.versions) > 0:
+			return subj.highestExisting(), nil
+		case ok && subj.active():
+			return subj.latestVersion, nil
+		default:
 			return 0, errSubjectNotFound(subject)
 		}
-		if subj.latestVersion == 0 {
-			// No active versions. With ?deleted=true, fall back to the highest
-			// ever-assigned version (which is soft-deleted); otherwise treat as
-			// not found, per Confluent API behavior.
-			if includeDeleted && subj.highestVersion > 0 {
-				return subj.highestVersion, nil
-			}
-			return 0, errSubjectNotFound(subject)
-		}
-		return subj.latestVersion, nil
 	}
 	v, err := strconv.Atoi(versionStr)
 	if err != nil {
 		return 0, errInvalidVersion("invalid version")
 	}
 	return v, nil
+}
+
+// Returns the error for a version of subject that a lookup did not find. As in
+// Confluent's registry, the subject is not found if it has no version that the
+// lookup could return, else the version is not found.
+func (r *Registry) errMissingVersion(subject string, version int, includeDeleted bool) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if subj, ok := r.subjects[subject]; ok && (subj.active() || includeDeleted && len(subj.versions) > 0) {
+		return errVersionNotFound(subject, version)
+	}
+	return errSubjectNotFound(subject)
 }
 
 func (r *Registry) getSchemaBySubjectVersion(subject string, version int, includeDeleted bool) (sr.SubjectSchema, bool) {
@@ -731,7 +766,7 @@ func (r *Registry) validateReferences(subject string, s sr.Schema) error {
 		// Check if the referenced schema exists and is not soft-deleted
 		// This assumes the caller already holds the necessary lock
 		subj, ok := r.subjects[refSubject(subject, ref.Subject)]
-		if !ok || subj.isDeleted {
+		if !ok {
 			return errInvalidReference(ref)
 		}
 
@@ -864,7 +899,7 @@ func (r *Registry) subjectSchemaByGUIDLocked(guid string) (sr.SubjectSchema, boo
 	haveFallback := false
 	for _, s := range subjects {
 		subj := r.subjects[s]
-		if subj.isDeleted {
+		if !subj.active() {
 			continue
 		}
 		versions := make([]int, 0, len(subj.versions))

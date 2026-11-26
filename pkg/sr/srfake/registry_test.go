@@ -33,6 +33,15 @@ var (
 )
 
 func TestSubjectHandlers(t *testing.T) {
+	del := func(r *srfake.Registry, path string) {
+		req, _ := http.NewRequest(http.MethodDelete, r.URL()+path, http.NoBody)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("setup failed: DELETE %s: %v", path, err)
+		}
+		resp.Body.Close()
+	}
+
 	testCases := []struct {
 		name       string
 		method     string
@@ -174,23 +183,17 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"error_code": 42201, "message": "invalid AVRO schema: invalid character 'o' in literal null (expecting 'u')"}`,
 		},
 		{
-			name:   "POST /subjects/{s}/versions - soft-deleted subject",
+			name:   "POST /subjects/{s}/versions - soft-deleted subject gets the next version",
 			method: "POST",
 			path:   "/subjects/user-topic-value/versions",
 			body:   `{"schema": "{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}"}`,
 			setup: func(r *srfake.Registry) {
 				// First register a schema, then soft-delete the subject
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
-				// Perform a soft-delete via the public HTTP API
-				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/user-topic-value", http.NoBody)
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					panic("setup failed: could not delete subject")
-				}
-				resp.Body.Close()
+				del(r, "/subjects/user-topic-value")
 			},
-			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 2}`,
 		},
 
 		// GET /subjects/{subject}/versions
@@ -241,20 +244,59 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "GET",
 			path:   "/subjects/user-topic-value/versions/latest",
 			setup: func(r *srfake.Registry) {
-				// Create a subject with a schema, then hard delete the version
-				// to simulate a subject with no active versions
+				// Create a subject with a schema, then soft delete the
+				// version so the subject has no active versions
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
-
-				// Hard delete the version to make latestVersion = 0
-				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/user-topic-value/versions/1?permanent=true", http.NoBody)
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatalf("setup failed: could not delete version: %v", err)
-				}
-				resp.Body.Close()
+				del(r, "/subjects/user-topic-value/versions/1")
 			},
 			wantStatus: http.StatusNotFound,
 			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v} - latest on soft-deleted subject",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions/latest",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v} - version of soft-deleted subject",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v} - latest with deleted is the highest version",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions/latest?deleted=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+				del(r, "/subjects/user-topic-value/versions/2")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":"user-topic-value","version":2,"id":2,"guid":"2d51477a-8eaa-8a8d-b0a6-a102a0e75476","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}"}`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions - deletedOnly lists the versions of a soft-deleted subject",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions?deletedOnly=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+				del(r, "/subjects/user-topic-value")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[1, 2]`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - latest on non-existent subject",
@@ -290,14 +332,103 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `[1, 2]`,
 		},
 		{
-			name:   "DELETE /subjects/{s} - permanent delete",
+			name:   "DELETE /subjects/{s} - permanent delete requires a soft delete",
 			method: "DELETE",
 			path:   "/subjects/user-topic-value?permanent=true",
 			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40405, "message": "Subject 'user-topic-value' was not deleted first before being permanently deleted"}`,
+		},
+		{
+			name:   "DELETE /subjects/{s} - permanent delete after a soft delete",
+			method: "DELETE",
+			path:   "/subjects/user-topic-value?permanent=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value")
+			},
 			wantStatus: http.StatusOK,
 			wantBody:   `[1]`,
+		},
+		{
+			name:   "DELETE /subjects/{s} - soft delete twice",
+			method: "DELETE",
+			path:   "/subjects/user-topic-value",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40404, "message": "Subject 'user-topic-value' was soft deleted.Set permanent=true to delete permanently"}`,
+		},
+
+		// DELETE /subjects/{subject}/versions/{version}
+		{
+			name:   "DELETE /subjects/{s}/versions/{v} - permanent delete requires a soft delete",
+			method: "DELETE",
+			path:   "/subjects/user-topic-value/versions/1?permanent=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40407, "message": "Subject 'user-topic-value' Version 1 was not deleted first before being permanently deleted"}`,
+		},
+		{
+			name:   "DELETE /subjects/{s}/versions/{v} - soft delete twice",
+			method: "DELETE",
+			path:   "/subjects/user-topic-value/versions/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				del(r, "/subjects/user-topic-value/versions/1")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40406, "message": "Subject 'user-topic-value' Version 1 was soft deleted.Set permanent=true to delete permanently"}`,
+		},
+		{
+			name:   "DELETE /subjects/{s}/versions/{v} - referenced schema",
+			method: "DELETE",
+			path:   "/subjects/product-value/versions/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				r.SeedSchema("order-value", 1, 2, sr.Schema{
+					Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+					References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+				})
+			},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42206, "message": "One or more references exist to the schema {magic=1,keytype=SCHEMA,subject=product-value,version=1}."}`,
+		},
+		{
+			name:   "DELETE /subjects/{s}/versions/{v} - permanent delete counts a soft-deleted referrer",
+			method: "DELETE",
+			path:   "/subjects/product-value/versions/1?permanent=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				r.SeedSchema("order-value", 1, 2, sr.Schema{
+					Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+					References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+				})
+				del(r, "/subjects/order-value/versions/1")
+				del(r, "/subjects/product-value/versions/1")
+			},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42206, "message": "One or more references exist to the schema {magic=1,keytype=SCHEMA,subject=product-value,version=1}."}`,
+		},
+		{
+			name:   "DELETE /subjects/{s} - references from the subject itself do not block",
+			method: "DELETE",
+			path:   "/subjects/product-value",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				r.SeedSchema("product-value", 2, 2, sr.Schema{
+					Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+					References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[1, 2]`,
 		},
 
 		// POST /subjects/{subject} (check if schema registered)
@@ -985,6 +1116,14 @@ func TestClientIntegration(t *testing.T) {
 		Compatibility sr.CompatibilityLevel `json:"compatibility"`
 	}
 
+	// A permanent delete requires a soft delete first.
+	hardDelete := func(cl *sr.Client, subject string, version int) error {
+		if err := cl.DeleteSchema(context.Background(), subject, version, sr.SoftDelete); err != nil {
+			return err
+		}
+		return cl.DeleteSchema(context.Background(), subject, version, sr.HardDelete)
+	}
+
 	testCases := []struct {
 		name       string
 		setup      func(t *testing.T, r *srfake.Registry)
@@ -1131,7 +1270,10 @@ func TestClientIntegration(t *testing.T) {
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
-				return cl.DeleteSubject(context.Background(), subject, true)
+				if _, err := cl.DeleteSubject(context.Background(), subject, sr.SoftDelete); err != nil {
+					return nil, err
+				}
+				return cl.DeleteSubject(context.Background(), subject, sr.HardDelete)
 			},
 			wantResult: []int{1, 2}, // returns deleted versions
 		},
@@ -1143,7 +1285,7 @@ func TestClientIntegration(t *testing.T) {
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				// Action: Delete version 2
-				err := cl.DeleteSchema(context.Background(), subject, 2, sr.HardDelete)
+				err := hardDelete(cl, subject, 2)
 				if err != nil {
 					return nil, errors.New("delete call failed unexpectedly")
 				}
@@ -1171,7 +1313,7 @@ func TestClientIntegration(t *testing.T) {
 				}
 
 				// 2. Hard delete version 3 (the latest)
-				err = cl.DeleteSchema(context.Background(), subject, 3, sr.HardDelete)
+				err = hardDelete(cl, subject, 3)
 				if err != nil {
 					return nil, fmt.Errorf("failed to delete version 3: %v", err)
 				}
@@ -1194,7 +1336,7 @@ func TestClientIntegration(t *testing.T) {
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				// 1. Hard delete the only version
-				err := cl.DeleteSchema(context.Background(), subject, 1, sr.HardDelete)
+				err := hardDelete(cl, subject, 1)
 				if err != nil {
 					return nil, fmt.Errorf("failed to delete version 1: %v", err)
 				}
@@ -1214,7 +1356,7 @@ func TestClientIntegration(t *testing.T) {
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				// 1. Hard delete version 2 (not the latest)
-				err := cl.DeleteSchema(context.Background(), subject, 2, sr.HardDelete)
+				err := hardDelete(cl, subject, 2)
 				if err != nil {
 					return nil, fmt.Errorf("failed to delete version 2: %v", err)
 				}
@@ -1455,7 +1597,7 @@ func TestClientIntegration(t *testing.T) {
 			},
 		},
 		{
-			name: "CreateSchema - soft-deleted subject should fail",
+			name: "CreateSchema - soft-deleted subject gets the next version",
 			setup: func(t *testing.T, r *srfake.Registry) {
 				// First register a schema, then soft-delete the subject
 				r.SeedSchema(subject, 1, 1, userSchema)
@@ -1472,7 +1614,13 @@ func TestClientIntegration(t *testing.T) {
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				return cl.CreateSchema(context.Background(), subject, userSchemaV2)
 			},
-			wantErr: &sr.ResponseError{StatusCode: http.StatusNotFound},
+			wantResult: sr.SubjectSchema{
+				Subject: subject,
+				Version: 2,
+				ID:      2,
+				GUID:    "2d51477a-8eaa-8a8d-b0a6-a102a0e75476",
+				Schema:  userSchemaV2,
+			},
 		},
 		{
 			name: "CreateSchema - empty subject name should fail",
@@ -1489,7 +1637,7 @@ func TestClientIntegration(t *testing.T) {
 			wantErr: &sr.ResponseError{StatusCode: http.StatusUnprocessableEntity},
 		},
 		{
-			name: "Version numbering - no reuse after latest version deletion",
+			name: "Version numbering - reuse after hard deletion of the latest version",
 			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
@@ -1507,12 +1655,12 @@ func TestClientIntegration(t *testing.T) {
 				}
 
 				// 2. Hard delete version 3 (the latest)
-				err = cl.DeleteSchema(context.Background(), subject, 3, sr.HardDelete)
+				err = hardDelete(cl, subject, 3)
 				if err != nil {
 					return nil, fmt.Errorf("failed to delete version 3: %v", err)
 				}
 
-				// 3. Register a new schema - should get version 4, NOT version 3
+				// 3. Register a new schema - gets version 3 again, as in Confluent's registry
 				newSchema := sr.Schema{
 					Schema: `{"type":"record","name":"NewSchema","fields":[{"name":"id","type":"string"}]}`,
 					Type:   sr.TypeAvro,
@@ -1524,7 +1672,7 @@ func TestClientIntegration(t *testing.T) {
 
 				return result.Version, nil
 			},
-			wantResult: 4, // Should skip version 3 and use version 4
+			wantResult: 3,
 		},
 		{
 			name: "Version numbering - no reuse after non-latest version deletion",
@@ -1538,7 +1686,7 @@ func TestClientIntegration(t *testing.T) {
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				// 1. Hard delete version 3 (not the latest)
-				err := cl.DeleteSchema(context.Background(), subject, 3, sr.HardDelete)
+				err := hardDelete(cl, subject, 3)
 				if err != nil {
 					return nil, fmt.Errorf("failed to delete version 3: %v", err)
 				}
@@ -1596,7 +1744,7 @@ func TestClientIntegration(t *testing.T) {
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				// 1. Hard delete schema with ID 2
-				err := cl.DeleteSchema(context.Background(), "subject-2", 1, sr.HardDelete)
+				err := hardDelete(cl, "subject-2", 1)
 				if err != nil {
 					return nil, fmt.Errorf("failed to delete schema with ID 2: %v", err)
 				}
@@ -1810,20 +1958,20 @@ func TestRaceConditionRegisterSchema(t *testing.T) {
 
 	// Test case 2: Cannot delete referenced schema (should fail)
 	// Try to delete the referenced schema - should fail because it's still referenced
-	req, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/ref-subject/versions/1?permanent=true", http.NoBody)
+	req, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/ref-subject/versions/1", http.NoBody)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Delete request failed: %v", err)
 	}
 	resp.Body.Close()
 
-	// Delete should have failed with 409 Conflict
-	if resp.StatusCode != http.StatusConflict {
-		t.Errorf("Expected delete to fail with 409 Conflict, got status %d", resp.StatusCode)
+	// Delete should have failed with 422, as the schema is referenced
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("Expected delete to fail with 422, got status %d", resp.StatusCode)
 	}
 
 	// Delete the referencing schema first
-	req2, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/main-subject-1/versions/1?permanent=true", http.NoBody)
+	req2, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/main-subject-1/versions/1", http.NoBody)
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("Delete referencing schema request failed: %v", err)
@@ -1835,7 +1983,7 @@ func TestRaceConditionRegisterSchema(t *testing.T) {
 	}
 
 	// Now try to delete the referenced schema - should succeed
-	req3, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/ref-subject/versions/1?permanent=true", http.NoBody)
+	req3, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/ref-subject/versions/1", http.NoBody)
 	resp3, err := http.DefaultClient.Do(req3)
 	if err != nil {
 		t.Fatalf("Delete referenced schema request failed: %v", err)
@@ -2008,8 +2156,8 @@ func TestDeletionWithReferences(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusConflict {
-			t.Errorf("Expected deletion to fail with 409 Conflict, got status %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("Expected deletion to fail with 422, got status %d", resp.StatusCode)
 		}
 
 		// Verify the referenced schema was NOT deleted
@@ -2019,7 +2167,7 @@ func TestDeletionWithReferences(t *testing.T) {
 		}
 
 		// Should be able to delete the referencing schema first
-		req2, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/ref-schema/versions/1?permanent=true", http.NoBody)
+		req2, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/ref-schema/versions/1", http.NoBody)
 		resp2, err := http.DefaultClient.Do(req2)
 		if err != nil {
 			t.Fatalf("Delete referencing schema request failed: %v", err)
@@ -2031,7 +2179,7 @@ func TestDeletionWithReferences(t *testing.T) {
 		}
 
 		// Now should be able to delete the referenced schema
-		req3, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/base-schema/versions/1?permanent=true", http.NoBody)
+		req3, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/base-schema/versions/1", http.NoBody)
 		resp3, err := http.DefaultClient.Do(req3)
 		if err != nil {
 			t.Fatalf("Delete referenced schema request failed: %v", err)
@@ -2071,8 +2219,8 @@ func TestDeletionWithReferences(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusConflict {
-			t.Errorf("Expected subject deletion to fail with 409 Conflict, got status %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("Expected subject deletion to fail with 422, got status %d", resp.StatusCode)
 		}
 	})
 
@@ -2104,8 +2252,8 @@ func TestDeletionWithReferences(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusConflict {
-			t.Errorf("Expected soft deletion to fail with 409 Conflict, got status %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("Expected soft deletion to fail with 422, got status %d", resp.StatusCode)
 		}
 	})
 
@@ -2121,7 +2269,7 @@ func TestDeletionWithReferences(t *testing.T) {
 		reg.SeedSchema("independent-schema", 1, 1, independentSchema)
 
 		// Should be able to delete schema with no references
-		req, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/independent-schema/versions/1?permanent=true", http.NoBody)
+		req, _ := http.NewRequest(http.MethodDelete, reg.URL()+"/subjects/independent-schema/versions/1", http.NoBody)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
@@ -2590,7 +2738,7 @@ func TestContextHandlers(t *testing.T) {
 			method:     "DELETE",
 			path:       "/subjects/:.myctx:product/versions/1",
 			setup:      withOrder,
-			wantStatus: http.StatusConflict,
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
 			name:       "POST /subjects/:.myctx:{s}/versions - reference cycle in .myctx",
@@ -2697,11 +2845,8 @@ func TestErrorHandling(t *testing.T) {
 		}
 		resp.Body.Close()
 
-		// Now try to register to the soft-deleted subject using the client
-		_, err = cl.CreateSchema(t.Context(), "test", sr.Schema{
-			Schema: `{"type": "number"}`,
-			Type:   sr.TypeAvro,
-		})
+		// Now list the versions of the soft-deleted subject using the client
+		_, err = cl.SubjectVersions(t.Context(), "test")
 
 		if err == nil {
 			t.Fatalf("expected error, got nil")
