@@ -200,6 +200,21 @@ func (c *Cluster) featureVersions() *kversion.Versions {
 
 var stableVersions = sync.OnceValue(kversion.Stable)
 
+// Returns the cluster's finalized level of a feature: the level
+// UpdateFeatures set, else the kversion table's.
+func (c *Cluster) featureLevel(name string) int16 {
+	if level, ok := c.features[name]; ok {
+		return level
+	}
+	var level int16
+	c.featureVersions().EachFinalizedFeature(func(n string, l int16) {
+		if n == name {
+			level = l
+		}
+	})
+	return level
+}
+
 // maxVersion returns the max version we advertise for a request key, or -1 if
 // we do not advertise the key at all.
 func (c *Cluster) maxVersion(key int16) int16 {

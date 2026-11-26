@@ -1085,11 +1085,9 @@ func initProducerID(t *testing.T, cl *kgo.Client, txid string, pid int64, epoch 
 	return resp
 }
 
-// TestTxnInitProducerID verifies that a client can
-// recover after a transaction timeout bumps the epoch. The client
-// sends InitProducerID with its stale epoch and should get a new
-// valid epoch back - not INVALID_PRODUCER_EPOCH. It also checks how
-// InitProducerID matches the request's producer ID to the transactional ID.
+// TestTxnInitProducerID verifies how InitProducerID answers a KIP-360
+// request by its epoch, and how it matches the request's producer ID to the
+// transactional ID.
 func TestTxnInitProducerID(t *testing.T) {
 	t.Parallel()
 
@@ -1107,9 +1105,7 @@ func TestTxnInitProducerID(t *testing.T) {
 		t.Fatalf("expected epoch 0, got %d", epoch)
 	}
 
-	// Simulate a timeout bump: re-init with the same txid (creates
-	// existing entry), then bump epoch via another init. This gives
-	// us a server epoch that's ahead of the client.
+	// A re-init at our epoch bumps it.
 	resp2 := initProducerID(t, cl, "txid-stale", pid, epoch, 60000)
 	if resp2.ErrorCode != 0 {
 		t.Fatalf("bump: %v", kerr.ErrorForCode(resp2.ErrorCode))
@@ -1119,15 +1115,15 @@ func TestTxnInitProducerID(t *testing.T) {
 		t.Fatalf("expected bumped epoch > %d, got %d", epoch, serverEpoch)
 	}
 
-	// Now try to recover with the STALE epoch (the original one).
-	// This is the scenario that used to cause an infinite retry loop.
-	// The re-init also sets the new transaction timeout.
+	// A retry of that re-init, as after a lost response, gets the
+	// bumped epoch without another bump, and sets the new transaction
+	// timeout.
 	resp3 := initProducerID(t, cl, "txid-stale", pid, epoch, 30000)
 	if resp3.ErrorCode != 0 {
-		t.Fatalf("stale recovery should succeed, got: %v", kerr.ErrorForCode(resp3.ErrorCode))
+		t.Fatalf("retry should succeed, got: %v", kerr.ErrorForCode(resp3.ErrorCode))
 	}
-	if resp3.ProducerEpoch <= serverEpoch {
-		t.Fatalf("expected epoch > %d after stale recovery, got %d", serverEpoch, resp3.ProducerEpoch)
+	if resp3.ProducerEpoch != serverEpoch {
+		t.Fatalf("expected epoch %d after the retry, got %d", serverEpoch, resp3.ProducerEpoch)
 	}
 	var timeout int32
 	c.admin(func() { timeout = c.pids.byTxid["txid-stale"].txTimeout })
@@ -6899,9 +6895,11 @@ func TestStaticMemberRecovery(t *testing.T) {
 	}
 }
 
-// endTxnStep is one EndTxn request, always sent at the epoch InitProducerID
-// handed back, which is what a retry after a lost response looks like.
+// endTxnStep is one EndTxn request, or with init one KIP-360 InitProducerID,
+// always sent at the epoch InitProducerID handed back, which is what a retry
+// after a lost response looks like.
 type endTxnStep struct {
+	init     bool
 	commit   bool
 	wantCode int16
 	// wantEpochUp asserts the response carries an epoch above the one we
@@ -6911,20 +6909,25 @@ type endTxnStep struct {
 	wantEpochSame bool
 }
 
-// TestTxnEndTxnRetry walks EndTxn through the retries a producer makes when
-// it loses a response, at TV1 (v4, no epoch bump) and TV2 (v5, KIP-890,
-// which bumps the epoch).
+// TestTxnEndTxnRetry walks EndTxn, and the KIP-360 InitProducerID a producer
+// recovers with, through the retries a producer makes when it loses a
+// response, at TV1 (v4, no epoch bump) and TV2 (v5, KIP-890, which bumps the
+// epoch).
 func TestTxnEndTxnRetry(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
-		tv1   bool // pin EndTxn to v4
+		tv1   bool // pin EndTxn to v4, on a cluster at transaction.version 1
 		topic string
 		// epoch, if nonzero, is the producer's epoch before the steps.
 		epoch int16
 		// timeoutMs, if nonzero, is the transaction timeout, and the
 		// steps run after it aborts the transaction.
 		timeoutMs int32
+		// pending fails the markers of the timeout's abort, which
+		// leaves the abort pending until the timer or a step
+		// completes the abort.
+		pending bool
 		// reinit has another producer init the transactional ID
 		// before the steps, which then come from a zombie.
 		reinit bool
@@ -6982,26 +6985,33 @@ func TestTxnEndTxnRetry(t *testing.T) {
 		},
 		{
 			// The new producer's InitProducerID aborted the zombie's
-			// transaction; the zombie's end is fenced, not a retry.
+			// transaction; the zombie's end is fenced, not a retry, and
+			// so is its KIP-360 re-init.
 			name:   "tv2-zombie-after-reinit",
 			topic:  "t-endtxn-v5-zombie",
 			reinit: true,
-			steps:  []endTxnStep{{commit: false, wantCode: kerr.ProducerFenced.Code}},
+			steps: []endTxnStep{
+				{commit: false, wantCode: kerr.ProducerFenced.Code},
+				{init: true, wantCode: kerr.ProducerFenced.Code},
+			},
 		},
 		{
 			// A commit at the last epoch moves to a new producer ID,
-			// and a retry from the old one replays it.
+			// and a retry from the old one replays it, as does a
+			// KIP-360 re-init from the old one.
 			name:  "tv2-retry-after-overflow",
 			topic: "t-endtxn-v5-overflow",
 			epoch: math.MaxInt16 - 1,
 			steps: []endTxnStep{
 				{commit: true},
 				{commit: true, wantEpochSame: true},
+				{init: true, wantEpochSame: true},
 			},
 		},
 		{
 			// A timeout at the last epoch aborts and moves to a new
-			// producer ID, and a commit then did not happen.
+			// producer ID, and a commit then did not happen. A KIP-360
+			// re-init from the old producer ID gets the new one.
 			name:      "tv2-timeout-at-overflow",
 			topic:     "t-endtxn-v5-timeout-overflow",
 			epoch:     math.MaxInt16 - 1,
@@ -7010,7 +7020,28 @@ func TestTxnEndTxnRetry(t *testing.T) {
 				{commit: false},
 				{commit: true, wantCode: kerr.ProducerFenced.Code},
 				{commit: false, wantEpochSame: true},
+				{init: true, wantEpochSame: true},
 			},
+		},
+		{
+			// Below transaction version 2, the timeout's abort clears
+			// the last epoch, so the producer's KIP-360 re-init is
+			// fenced.
+			name:      "tv1-timeout-reinit",
+			tv1:       true,
+			topic:     "t-endtxn-tv1-timeout",
+			timeoutMs: 1,
+			steps:     []endTxnStep{{init: true, wantCode: kerr.ProducerFenced.Code}},
+		},
+		{
+			// As does the timeout's abort that completes after its
+			// markers failed.
+			name:      "tv1-pending-timeout-reinit",
+			tv1:       true,
+			topic:     "t-endtxn-tv1-pending-timeout",
+			timeoutMs: 1,
+			pending:   true,
+			steps:     []endTxnStep{{init: true, wantCode: kerr.ProducerFenced.Code}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -7021,6 +7052,9 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			if tc.topic != "" {
 				opts = append(opts, SeedTopics(1, tc.topic))
 			}
+			if tc.pending {
+				opts = append(opts, SyncWrites())
+			}
 			c := newCluster(t, opts...)
 
 			// kgo overrides req.Version with the negotiated max, so
@@ -7030,6 +7064,7 @@ func TestTxnEndTxnRetry(t *testing.T) {
 				v := kversion.Stable()
 				v.SetMaxKeyVersion(26, 4) // EndTxn key = 26
 				clOpts = append(clOpts, kgo.MaxVersions(v))
+				c.admin(func() { c.features["transaction.version"] = 1 })
 			}
 			cl := newPlainClient(t, c, clOpts...)
 			ctx := context.Background()
@@ -7064,6 +7099,19 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			if tc.reinit {
 				initProducerID(t, cl, txid, -1, -1, 60000)
 			}
+			mfs := c.fs.(*memFS)
+			if tc.pending {
+				c.admin(func() {
+					pd, _ := c.data.tps.getp(tc.topic, 0)
+					dir := c.partDir(pd)
+					mfs.failPath = func(op, path string) error {
+						if op == "sync" && strings.HasPrefix(path, dir) {
+							return &testError{"injected sync"}
+						}
+						return nil
+					}
+				})
+			}
 			for start := time.Now(); tc.timeoutMs != 0; {
 				if time.Since(start) > 5*time.Second {
 					t.Fatal("the transaction timeout never aborted the transaction")
@@ -7082,21 +7130,28 @@ func TestTxnEndTxnRetry(t *testing.T) {
 					break
 				}
 			}
+			c.admin(func() { mfs.failPath = nil })
 
 			var firstPID int64
 			var firstEpoch int16
 			for i, step := range tc.steps {
-				endReq := kmsg.NewEndTxnRequest()
-				endReq.TransactionalID = txid
-				endReq.ProducerID = pid
-				endReq.ProducerEpoch = epoch
-				endReq.Commit = step.commit
-				resp, err := endReq.RequestWith(ctx, cl)
-				if err != nil {
-					t.Fatalf("step %d (commit=%v): %v", i, step.commit, err)
+				resp := kmsg.NewPtrEndTxnResponse()
+				if step.init {
+					ir := initProducerID(t, cl, txid, pid, epoch, 60000)
+					resp.ErrorCode, resp.ProducerID, resp.ProducerEpoch = ir.ErrorCode, ir.ProducerID, ir.ProducerEpoch
+				} else {
+					endReq := kmsg.NewEndTxnRequest()
+					endReq.TransactionalID = txid
+					endReq.ProducerID = pid
+					endReq.ProducerEpoch = epoch
+					endReq.Commit = step.commit
+					var err error
+					if resp, err = endReq.RequestWith(ctx, cl); err != nil {
+						t.Fatalf("step %d (commit=%v): %v", i, step.commit, err)
+					}
 				}
 				if resp.ErrorCode != step.wantCode {
-					t.Fatalf("step %d (commit=%v): want %v, got %v", i, step.commit,
+					t.Fatalf("step %d (init=%v commit=%v): want %v, got %v", i, step.init, step.commit,
 						kerr.ErrorForCode(step.wantCode), kerr.ErrorForCode(resp.ErrorCode))
 				}
 				if i == 0 {

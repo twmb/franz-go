@@ -240,6 +240,20 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 			origPID = txn.ProducerID
 			origEpoch = txn.ProducerEpoch
 		}
+
+		// Two more producers: one with a last epoch, and one whose abort
+		// is decided but has its markers unwritten at the close. The
+		// restart finishes the abort, which clears the last epoch, as an
+		// abort below transaction version 2 does.
+		c.admin(func() {
+			kept := c.pids.create(new("kept"), 60000)
+			kept.lastEpoch = 5
+			kept.persist()
+			cleared := c.pids.create(new("cleared"), 60000)
+			cleared.persist()
+			cleared.maybeStart()
+			cleared.ending, cleared.endEpoch, cleared.endClearsLast = new(false), 1, true
+		})
 		cl.Close()
 		c.Close()
 	}
@@ -250,6 +264,20 @@ func TestPersistPIDEpochRestart(t *testing.T) {
 			DataDir(dir),
 			NumBrokers(1),
 		)
+
+		c.admin(func() {
+			kept, cleared := c.pids.byTxid["kept"], c.pids.byTxid["cleared"]
+			if kept == nil || cleared == nil {
+				t.Error("the restart lost a producer")
+				return
+			}
+			if kept.lastEpoch != 5 {
+				t.Errorf("last epoch after the restart: got %d, want 5", kept.lastEpoch)
+			}
+			if cleared.epoch != 1 || cleared.lastEpoch != -1 {
+				t.Errorf("an abort the restart finished: got epoch %d and last epoch %d, want 1 and -1", cleared.epoch, cleared.lastEpoch)
+			}
+		})
 
 		// Init a new client with same txn ID - should get same PID with bumped epoch
 		cl := newPlainClient(t, c,
