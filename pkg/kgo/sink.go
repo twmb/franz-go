@@ -2613,7 +2613,16 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 	nums := b.calculateRecordNumbers(pr.Record)
 
 	batchWireLength, _, _ := b.wireLengthForProduceVersion(produceVersion)
-	newBatchLength := batchWireLength + nums.wireLength()
+	recordWireLength := nums.wireLength()
+	// If the batch may be sized as a message set (an unknown or pre-v3
+	// produce version), the record grows it by its message set length,
+	// which can be larger than its record batch length.
+	if produceVersion < 3 {
+		if msLength := messageSet1Length(pr.Record); msLength > recordWireLength {
+			recordWireLength = msLength
+		}
+	}
+	newBatchLength := batchWireLength + recordWireLength
 
 	if b.frozen || newBatchLength > maxBatchBytes {
 		return false, false
