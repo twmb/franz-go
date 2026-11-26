@@ -6998,7 +6998,8 @@ func TestTxnEndTxnRetry(t *testing.T) {
 		{
 			// A commit at the last epoch moves to a new producer ID,
 			// and a retry from the old one replays it, as does a
-			// KIP-360 re-init from the old one.
+			// KIP-360 re-init from the old one. The re-init clears
+			// the old producer ID, which fences a second one.
 			name:  "tv2-retry-after-overflow",
 			topic: "t-endtxn-v5-overflow",
 			epoch: math.MaxInt16 - 1,
@@ -7006,6 +7007,7 @@ func TestTxnEndTxnRetry(t *testing.T) {
 				{commit: true},
 				{commit: true, wantEpochSame: true},
 				{init: true, wantEpochSame: true},
+				{init: true, wantCode: kerr.ProducerFenced.Code},
 			},
 		},
 		{

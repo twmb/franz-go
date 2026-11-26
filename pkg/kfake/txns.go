@@ -65,7 +65,8 @@ type (
 
 		// The producer ID before an epoch overflow rotated to id, so
 		// that we accept a retry from a client that missed the
-		// rotation.
+		// rotation. As in Kafka, the next transition clears it: a
+		// transaction start, an end, or an InitProducerID.
 		prevID int64
 
 		txid         string
@@ -351,15 +352,17 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 
 	// A KIP-360 request at our epoch bumps it, and one at our last epoch
 	// gets our epoch without a bump. Any other epoch is fenced.
+	if req.ProducerID != -1 && req.ProducerEpoch != pidinf.epoch && req.ProducerEpoch != pidinf.lastEpoch {
+		resp.ErrorCode = kerr.ProducerFenced.Code
+		return resp
+	}
+	pidinf.prevID = 0
 	switch {
 	case req.ProducerID == -1:
 		pidinf = pids.bumpEpoch(pidinf)
 		pidinf.lastEpoch = -1
 	case req.ProducerEpoch == pidinf.epoch:
 		pidinf = pids.bumpEpoch(pidinf)
-	case req.ProducerEpoch != pidinf.lastEpoch:
-		resp.ErrorCode = kerr.ProducerFenced.Code
-		return resp
 	}
 	pidinf.txTimeout = req.TransactionTimeoutMillis
 	pidinf.txStart = time.Time{}
@@ -376,6 +379,7 @@ func (pidinf *pidinfo) maybeStart() {
 		return
 	}
 	pidinf.inTx = true
+	pidinf.prevID = 0
 	pidinf.txStart = time.Now()
 	pidinf.pids.txs[pidinf] = struct{}{}
 	// If we crash before EndTxn logs its prepare entry, the restart
@@ -1068,6 +1072,7 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.endClearsLast = false
 	pidinf.ended = true
 	pidinf.lastWasCommit = wasCommit
+	pidinf.prevID = 0
 	pidinf.lastActive = time.Now()
 	delete(pidinf.pids.txs, pidinf)
 }
