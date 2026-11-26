@@ -321,6 +321,7 @@ func (vs *Versions) String() string {
 	for k := range vs.reqs {
 		keys = append(keys, k)
 	}
+	slices.Sort(keys)
 	for _, k := range keys {
 		name := kmsg.NameForKey(k)
 		if name == "" {
