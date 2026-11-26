@@ -566,7 +566,8 @@ func (r *Registry) handleGetSubjectSchemaByVersion(w http.ResponseWriter, req *h
 // /schema route ask for, or writes the error and returns false.
 func (r *Registry) subjectVersion(w http.ResponseWriter, req *http.Request) (sr.SubjectSchema, bool) {
 	subject := req.PathValue("subject")
-	del := parseDeleted(req)
+	// As in Confluent's registry, this route has ?deleted and not ?deletedOnly.
+	deleted := req.URL.Query().Get("deleted") == "true"
 	version, err := parseVersion(req.PathValue("version"))
 	if err != nil {
 		r.handleAPIError(w, err)
@@ -576,9 +577,9 @@ func (r *Registry) subjectVersion(w http.ResponseWriter, req *http.Request) (sr.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	ss, ok := r.lookupVersionLocked(subject, version, del.any())
+	ss, ok := r.lookupVersionLocked(subject, version, deleted)
 	if !ok {
-		r.handleAPIError(w, r.errMissingVersionLocked(subject, version, del.any()))
+		r.handleAPIError(w, r.errMissingVersionLocked(subject, version, deleted))
 	}
 	return ss, ok
 }
@@ -596,7 +597,8 @@ func (r *Registry) handleGetSubjectRawSchemaByVersion(w http.ResponseWriter, req
 func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Request) {
 	subject := req.PathValue("subject")
 	versionStr := req.PathValue("version")
-	del := parseDeleted(req)
+	// As in Confluent's registry, this route has ?deleted and not ?deletedOnly.
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	asked, err := parseVersion(versionStr)
 	if err != nil {
@@ -609,7 +611,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 
 	// Find the target schema. As in Confluent's registry, a numbered version
 	// is found even if it is soft-deleted, and latest honors ?deleted.
-	includeTarget := del.any() || asked != -1
+	includeTarget := deleted || asked != -1
 	target, ok := r.lookupVersionLocked(subject, asked, includeTarget)
 	if !ok {
 		r.handleAPIError(w, r.errMissingVersionLocked(subject, asked, includeTarget))
@@ -621,7 +623,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	referencingIDs := make([]int, 0) // Initialize as empty slice, not nil
 	for referrer, subj := range r.subjects {
 		for _, versionData := range subj.versions {
-			if !del.keep(versionData.isDeleted) {
+			if !deleted && versionData.isDeleted {
 				continue
 			}
 
@@ -699,7 +701,8 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	del := parseDeleted(req)
+	// As in Confluent's registry, this route has ?deleted and not ?deletedOnly.
+	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -708,18 +711,18 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 	// context, as Confluent's registry does.
 	match, ok := r.findUsingContextsLocked(subject, func(s string) (sr.SubjectSchema, bool) {
 		subj, ok := r.subjects[s]
-		if !ok || (!subj.active() && !del.any()) {
+		if !ok || (!subj.active() && !deleted) {
 			return sr.SubjectSchema{}, false
 		}
 		for _, versionData := range subj.versions {
-			if del.keep(versionData.isDeleted) && r.schemasEqual(versionData.schema.Schema, body) {
+			if (deleted || !versionData.isDeleted) && r.schemasEqual(versionData.schema.Schema, body) {
 				return versionData.schema, true
 			}
 		}
 		return sr.SubjectSchema{}, false
 	})
 	if !ok {
-		if subj, exists := r.subjects[subject]; !exists || (!subj.active() && !del.any()) {
+		if subj, exists := r.subjects[subject]; !exists || (!subj.active() && !deleted) {
 			r.handleAPIError(w, errSubjectNotFound(subject))
 			return
 		}

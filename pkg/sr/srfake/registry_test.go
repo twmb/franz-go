@@ -508,6 +508,48 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"mode": "READONLY"}`,
 		},
 
+		// ?deletedOnly where Confluent's registry has only ?deleted
+		{
+			name:   "GET /subjects/{s}/versions/{v}?deletedOnly=true - deletedOnly is not supported",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions/2?deletedOnly=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+				del(r, "/subjects/user-topic-value/versions/2")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40402, "message": "Version 2 not found."}`,
+		},
+		{
+			name:   "POST /subjects/{s}?deletedOnly=true - deletedOnly is not supported",
+			method: "POST",
+			path:   "/subjects/user-topic-value?deletedOnly=true",
+			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"email\",\"type\":\"string\",\"default\":\"\"}]}"}`,
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+				del(r, "/subjects/user-topic-value/versions/2")
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40403, "message": "Schema not found"}`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v}/referencedby?deletedOnly=true - deletedOnly is not supported",
+			method: "GET",
+			path:   "/subjects/product-value/versions/1/referencedby?deletedOnly=true",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				r.SeedSchema("order-value", 1, 2, sr.Schema{
+					Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+					References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+				})
+				del(r, "/subjects/order-value/versions/1")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+
 		// GUIDs
 		{
 			name:   "GET /schemas/guids/{guid}/ids - soft-deleted version keeps its ID",
