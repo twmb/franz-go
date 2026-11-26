@@ -513,8 +513,10 @@ func (pids *pids) doAddPartitions(creq *clientReq, t *kmsg.AddPartitionsToTxnReq
 		return st
 	}
 
+	// A pending end decided at a higher epoch already moved the epoch, as
+	// Kafka does when it writes the decision.
 	pidinf, code := pids.txnPid(txnID, t.ProducerID)
-	if code == 0 && pidinf.epoch != t.ProducerEpoch {
+	if code == 0 && (pidinf.epoch != t.ProducerEpoch || pidinf.ending != nil && pidinf.endEpoch > t.ProducerEpoch) {
 		code = kerr.ProducerFenced.Code
 	} else if code == 0 && pidinf.ending != nil {
 		code = kerr.ConcurrentTransactions.Code
@@ -558,8 +560,10 @@ func (pids *pids) doAddOffsets(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
+	// A pending end decided at a higher epoch already moved the epoch, as
+	// Kafka does when it writes the decision.
 	pidinf, code := pids.txnPid(req.TransactionalID, req.ProducerID)
-	if code == 0 && pidinf.epoch != req.ProducerEpoch {
+	if code == 0 && (pidinf.epoch != req.ProducerEpoch || pidinf.ending != nil && pidinf.endEpoch > req.ProducerEpoch) {
 		code = kerr.ProducerFenced.Code
 	} else if code == 0 && pidinf.ending != nil {
 		code = kerr.ConcurrentTransactions.Code
@@ -756,6 +760,11 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 	case pidinf.epoch != req.ProducerEpoch:
 		resp.ErrorCode = kerr.ProducerFenced.Code
 		return resp
+	case req.Version < 5 && pidinf.ending != nil && pidinf.endEpoch > req.ProducerEpoch:
+		// When Kafka decides our own abort, Kafka moves the epoch,
+		// which fences an end below v5 at the old epoch.
+		resp.ErrorCode = kerr.ProducerFenced.Code
+		return resp
 	case pidinf.ending != nil && req.Commit != *pidinf.ending:
 		resp.ErrorCode = kerr.InvalidTxnState.Code
 		return resp
@@ -772,10 +781,13 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 	}
 
 	// A v5 end bumps the epoch, and Kafka writes its markers at the new
-	// epoch.
+	// epoch. A pending end keeps the epoch it was decided at.
 	markerEpoch := pidinf.epoch
 	if req.Version >= 5 {
 		markerEpoch++
+	}
+	if pidinf.ending != nil {
+		markerEpoch = pidinf.endEpoch
 	}
 
 	// The decision goes to disk before any marker or offset: a restart

@@ -6896,10 +6896,12 @@ func TestStaticMemberRecovery(t *testing.T) {
 }
 
 // endTxnStep is one EndTxn request, or with init one KIP-360 InitProducerID,
-// always sent at the epoch InitProducerID handed back, which is what a retry
-// after a lost response looks like.
+// or with offsets one AddOffsetsToTxn, always sent at the epoch
+// InitProducerID handed back, which is what a retry after a lost response
+// looks like.
 type endTxnStep struct {
 	init     bool
+	offsets  bool
 	commit   bool
 	wantCode int16
 	// wantEpochUp asserts the response carries an epoch above the one we
@@ -7045,6 +7047,25 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			pending:   true,
 			steps:     []endTxnStep{{init: true, wantCode: kerr.ProducerFenced.Code}},
 		},
+		{
+			// The timeout's abort moved the epoch while its markers
+			// are pending, which fences the producer's own abort.
+			name:      "tv1-pending-timeout-end",
+			tv1:       true,
+			topic:     "t-endtxn-tv1-pending-timeout-end",
+			timeoutMs: 1,
+			pending:   true,
+			steps:     []endTxnStep{{commit: false, wantCode: kerr.ProducerFenced.Code}},
+		},
+		{
+			// As is the producer's AddOffsetsToTxn.
+			name:      "tv1-pending-timeout-offsets",
+			tv1:       true,
+			topic:     "t-endtxn-tv1-pending-timeout-offsets",
+			timeoutMs: 1,
+			pending:   true,
+			steps:     []endTxnStep{{offsets: true, wantCode: kerr.ProducerFenced.Code}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -7138,10 +7159,14 @@ func TestTxnEndTxnRetry(t *testing.T) {
 			var firstEpoch int16
 			for i, step := range tc.steps {
 				resp := kmsg.NewPtrEndTxnResponse()
-				if step.init {
+				switch {
+				case step.init:
 					ir := initProducerID(t, cl, txid, pid, epoch, 60000)
 					resp.ErrorCode, resp.ProducerID, resp.ProducerEpoch = ir.ErrorCode, ir.ProducerID, ir.ProducerEpoch
-				} else {
+				case step.offsets:
+					req := &kmsg.AddOffsetsToTxnRequest{TransactionalID: txid, ProducerID: pid, ProducerEpoch: epoch, Group: "g"}
+					resp.ErrorCode = faultReq(t, cl, 0, req).(*kmsg.AddOffsetsToTxnResponse).ErrorCode
+				default:
 					endReq := kmsg.NewEndTxnRequest()
 					endReq.TransactionalID = txid
 					endReq.ProducerID = pid
