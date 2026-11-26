@@ -87,11 +87,11 @@ type producer struct {
 
 	txnMu xsync.Mutex
 	inTxn bool
-	// endUnconfirmed is non-nil while an attempted EndTxn's outcome is
-	// unconfirmed (ctx ended or the client closed before an answer, or
-	// UNKNOWN_SERVER_ERROR), and is what that EndTxn sent. EndTransaction
-	// restores the transaction state it consumed, and the documented
-	// retry in the same direction resends the same EndTxn.
+	// endUnconfirmed is what an EndTxn sent, while we do not know whether
+	// that EndTxn happened: ctx ended or the client closed before an answer
+	// with an outcome, or the broker answered UNKNOWN_SERVER_ERROR.
+	// EndTransaction restores the transaction state it consumed, and a later
+	// EndTransaction with the same TransactionEndTry resends the same EndTxn.
 	//
 	// producerID loads the producer ID, then endUnconfirmed, and does not
 	// reload the producer ID while endUnconfirmed is set. EndTransaction

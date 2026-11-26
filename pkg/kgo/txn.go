@@ -908,7 +908,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		// included, fails the producer ID with that answer, and anything
 		// else leaves the producer ID failed for reload. Either way, the
 		// next retry sees the transaction state.
-		if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+		if definitiveTxnErr(err) {
 			cl.producer.id.CompareAndSwap(stored, &producerID{id: u.id, epoch: u.epoch, err: err})
 		}
 		restore()
@@ -955,15 +955,15 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// produces at this id and epoch into a transaction that may still be
 	// open.
 	//
-	// How we fail the id depends on what we know. A non-retryable Kafka
-	// error (fenced, invalid mapping, etc.) is a definitive broker
-	// answer: fail with that error so recovery flows through
-	// maybeRecoverProducerID. Everything else (a transport error or a
-	// retryable error when ctx ended or the client closed,
-	// UNKNOWN_SERVER_ERROR) leaves the commit or abort unconfirmed: fail
-	// with errReloadProducerID, and save what the EndTxn sent, which the
-	// documented retry in the same direction resends. Until then, nothing
-	// reloads the producer ID (see producerID).
+	// How we fail the id depends on what we know. A non-retryable Kafka error
+	// (fenced, invalid mapping, etc.) is a definitive broker answer: fail with
+	// that error so recovery flows through maybeRecoverProducerID. Everything
+	// else (a transport error, a retryable error, or CONCURRENT_TRANSACTIONS
+	// when ctx ended or the client closed, and UNKNOWN_SERVER_ERROR) means we
+	// do not know whether the commit or abort happened: fail with
+	// errReloadProducerID, and save what the EndTxn sent, which a later
+	// EndTransaction with the same TransactionEndTry resends. Until then,
+	// nothing reloads the producer ID (see producerID).
 	//
 	// failProducerID only swaps over an error-free id, so this cannot
 	// clobber an already-fatal producer state. We also restore
@@ -971,7 +971,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// transaction state intact.
 	if err != nil {
 		cl.producer.endUnconfirmed.Store(&sentEndTxn{id: id, epoch: epoch, commit: bool(commit)})
-		if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+		if definitiveTxnErr(err) {
 			cl.failProducerID(id, epoch, err)
 		} else {
 			cl.failProducerID(id, epoch, errReloadProducerID)
@@ -980,6 +980,16 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	return err
+}
+
+// Returns whether a transaction coordinator error is a definitive answer.
+// UNKNOWN_SERVER_ERROR leaves the outcome unknown. CONCURRENT_TRANSACTIONS,
+// which doWithConcurrentTransactions returns only once ctx ends or the client
+// closes, means the coordinator was still busy with the transaction, which
+// may include an EndTxn we sent before.
+func definitiveTxnErr(err error) bool {
+	ke, ok := errors.AsType[*kerr.Error](err)
+	return ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code && ke.Code != kerr.ConcurrentTransactions.Code
 }
 
 // Sends EndTxn until the coordinator answers, and on success stores the
@@ -1100,15 +1110,16 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 		return true, false, err
 	}
 
-	if ke.Retriable {
-		// The stored failure is a retriable broker code, e.g.
+	if ke.Retriable || ke.Code == kerr.ConcurrentTransactions.Code {
+		// The failure is a retryable broker code, e.g.
 		// COORDINATOR_LOAD_IN_PROGRESS or NOT_COORDINATOR that
-		// outlived its internal retries, or CONCURRENT_TRANSACTIONS
-		// that outlived doWithConcurrentTransactions. These are
-		// transient load failures, not a fatal producer state: flag
-		// the ID for reload exactly like the transport-level failures
-		// above, rather than reporting "fatal, unrecoverable" for a
-		// condition that clears on its own.
+		// outlived its internal retries, or CONCURRENT_TRANSACTIONS,
+		// which kerr marks non-retryable, that outlived
+		// doWithConcurrentTransactions. These are transient load
+		// failures, not a fatal producer state: flag the ID for reload
+		// exactly like the transport-level failures above, rather than
+		// reporting "fatal, unrecoverable" for a condition that clears
+		// on its own.
 		cl.producer.id.Store(&producerID{
 			id:    id,
 			epoch: epoch,
@@ -1350,8 +1361,9 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	// if this is fatal. If it is, we will catch it later on a better
 	// error. Some brokers send this when things fail internally, we can
 	// just abort our commit and see if things are still bad in
-	// EndTransaction.
-	if ke, ok := errors.AsType[*kerr.Error](err); ok && !ke.Retriable && ke.Code != kerr.UnknownServerError.Code {
+	// EndTransaction. CONCURRENT_TRANSACTIONS when ctx ends means the
+	// coordinator applied nothing.
+	if definitiveTxnErr(err) {
 		cl.failProducerID(id, epoch, err)
 	}
 

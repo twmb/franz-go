@@ -4112,12 +4112,13 @@ func TestApiVersionsSoftwareNameValidation(t *testing.T) {
 func TestEndTxnUnconfirmedRetry(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name     string
-		tv1      bool // pin EndTxn to v4, on a cluster at transaction.version 1
-		commit   bool // the EndTxn and its retry commit, rather than abort
-		flip     bool // the retry goes in the other direction
-		purge    bool // the client purges the topic before the retry
-		failProd bool // the transaction's produce fails, so no partition is added
+		name       string
+		tv1        bool // pin EndTxn to v4, on a cluster at transaction.version 1
+		commit     bool // the EndTxn and its retry commit, rather than abort
+		flip       bool // the retry goes in the other direction
+		concurrent bool // the EndTxn gets CONCURRENT_TRANSACTIONS until its ctx ends
+		purge      bool // the client purges the topic before the retry
+		failProd   bool // the transaction's produce fails, so no partition is added
 		// Before the retry: the coordinator committed or aborted at our
 		// epoch, another producer took over, or the client asked for its
 		// producer ID.
@@ -4140,6 +4141,7 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		{name: "tv1-commit-aborted", tv1: true, commit: true, aborted: true, wantErr: kerr.InvalidTxnState, wantEnds: 1},
 		{name: "commit-then-abort", commit: true, flip: true, wantMsg: "again with TryCommit"},
 		{name: "abort-then-commit", flip: true, wantMsg: "again with TryAbort"},
+		{name: "commit-concurrent", commit: true, concurrent: true, wantEnds: 1},
 		{name: "tv1-commit-purged", tv1: true, commit: true, purge: true, wantEnds: 1},
 		{name: "commit-failed-produce", commit: true, failProd: true, wantEnds: 1},
 	} {
@@ -4153,7 +4155,11 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			// fault it matches, and only the erroring one answers.
 			endTxns := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Observe: true, Count: -1})
 			initPIDs := c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Observe: true, Count: -1})
-			c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError})
+			first := Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.UnknownServerError}
+			if test.concurrent {
+				first.Err, first.Count = kerr.ConcurrentTransactions, -1
+			}
+			firstFault := c.Fault(first)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -4161,6 +4167,22 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 			opts := []kgo.Opt{
 				kgo.TransactionalID("txn-unconfirmed-abort"),
 				kgo.DefaultProduceTopic(topic),
+			}
+			firstCtx := ctx
+			if test.concurrent {
+				// The EndTxn's ctx ends while the client backs off after
+				// CONCURRENT_TRANSACTIONS, with no request in flight.
+				backoff := &msgLogger{msg: "EndTxn failed with CONCURRENT_TRANSACTIONS, which may be because we ended a txn and began producing in a new txn too quickly; backing off and retrying", seen: make(chan struct{}, 1)}
+				opts = append(opts, kgo.WithLogger(backoff), kgo.ConcurrentTransactionsBackoff(time.Minute))
+				var firstCancel func()
+				firstCtx, firstCancel = context.WithCancel(ctx)
+				go func() {
+					select {
+					case <-backoff.seen:
+					case <-ctx.Done():
+					}
+					firstCancel()
+				}()
 			}
 			if test.tv1 {
 				v := kversion.Stable()
@@ -4180,9 +4202,10 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 				t.Fatalf("produce: got %v, want an error %v", err, test.failProd)
 			}
 			pid, epoch, _ := cl.ProducerID(ctx)
-			if err := cl.EndTransaction(ctx, kgo.TransactionEndTry(test.commit)); err == nil {
+			if err := cl.EndTransaction(firstCtx, kgo.TransactionEndTry(test.commit)); err == nil {
 				t.Fatal("expected an error from the hijacked EndTxn")
 			}
+			firstFault.Remove()
 			if test.purge {
 				cl.PurgeTopicsFromClient(topic)
 			}
