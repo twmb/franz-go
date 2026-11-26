@@ -551,18 +551,28 @@ func (r *Registry) handleGetSubjectVersions(w http.ResponseWriter, req *http.Req
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	exists := func(s *subjectData) bool { return len(s.versions) > 0 && (s.active() || del.any()) }
 	subj, ok := r.subjects[subject]
-	if !ok || len(subj.versions) == 0 || (!subj.active() && !del.any()) {
+	found := ok && exists(subj)
+	// As in Confluent's registry, a subject without a name, such as the empty
+	// subject, exists when any subject of its context exists.
+	if ctx, name := splitSubject(subject); name == "" {
+		for s, other := range r.subjects {
+			found = found || subjectContext(s) == ctx && exists(other)
+		}
+	}
+	if !found {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
 
-	var versions []int
-	for v, versionData := range subj.versions {
-		if !del.keep(versionData.isDeleted) {
-			continue
+	versions := make([]int, 0)
+	if ok {
+		for v, versionData := range subj.versions {
+			if del.keep(versionData.isDeleted) {
+				versions = append(versions, v)
+			}
 		}
-		versions = append(versions, v)
 	}
 	sort.Ints(versions)
 	respondJSON(w, http.StatusOK, page(req, versions, math.MaxInt))
@@ -735,11 +745,6 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
 	subject := req.PathValue("subject")
 
-	if err := r.validateSubject(subject); err != nil {
-		r.handleAPIError(w, err)
-		return
-	}
-
 	var body sr.Schema
 	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
@@ -857,6 +862,10 @@ func (r *Registry) putConfig(w http.ResponseWriter, req *http.Request, subject s
 	}
 	if err != nil {
 		r.handleAPIError(w, errInvalidCompatLevel())
+		return
+	}
+	if err := validateSubject(subject, true); err != nil {
+		r.handleAPIError(w, err)
 		return
 	}
 
@@ -979,6 +988,10 @@ func (r *Registry) putMode(w http.ResponseWriter, req *http.Request, subject str
 	}
 	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidMode(err.Error()))
+		return
+	}
+	if err := validateSubject(subject, true); err != nil {
+		r.handleAPIError(w, err)
 		return
 	}
 

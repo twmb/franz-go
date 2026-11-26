@@ -507,6 +507,28 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `[1]`,
 		},
 		{
+			name:       "GET /subjects/:.:/versions - the empty subject exists when the default context has a subject",
+			method:     "GET",
+			path:       "/subjects/:.:/versions",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("user-topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+		{
+			name:   "GET /subjects - POST /subjects/:.:/versions registers the empty subject",
+			method: "GET",
+			path:   "/subjects",
+			setup: func(r *srfake.Registry) {
+				resp, err := http.Post(r.URL()+"/subjects/:.:/versions", "application/json", strings.NewReader(`{"schema":"\"string\""}`))
+				if err != nil {
+					t.Fatalf("setup failed: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[""]`,
+		},
+		{
 			name:       "GET /config - PUT /config/:.: sets the global level",
 			method:     "GET",
 			path:       "/config",
@@ -521,6 +543,64 @@ func TestSubjectHandlers(t *testing.T) {
 			setup:      func(r *srfake.Registry) { r.SetMode(":.myctx:", sr.ModeReadOnly) },
 			wantStatus: http.StatusOK,
 			wantBody:   `{"mode": "READONLY"}`,
+		},
+
+		// Invalid subjects
+		{
+			name:       "POST /subjects/{s}/versions - subject named __GLOBAL returns 42208",
+			method:     "POST",
+			path:       "/subjects/__GLOBAL/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject '__GLOBAL' is not a valid."}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - control character returns 42208",
+			method:     "POST",
+			path:       "/subjects/a%01b/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject 'a\u0001b' is not a valid."}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - subject in the .__GLOBAL context returns 42208",
+			method:     "POST",
+			path:       "/subjects/:.__GLOBAL:topic/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject ':.__GLOBAL:topic' is not a valid."}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - subject has no length limit",
+			method:     "POST",
+			path:       "/subjects/" + strings.Repeat("a", 256) + "/versions",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:       "POST /subjects/{s} - lookup does not check the subject",
+			method:     "POST",
+			path:       "/subjects/a%00b",
+			body:       `{"schema":"\"string\""}`,
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'a\u0000b' not found."}`,
+		},
+		{
+			name:       "PUT /config/{s} - subject named __GLOBAL returns 42208",
+			method:     "PUT",
+			path:       "/config/__GLOBAL",
+			body:       `{"compatibility": "FULL"}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject '__GLOBAL' is not a valid."}`,
+		},
+		{
+			name:       "PUT /mode/{s} - subject named __EMPTY returns 42208",
+			method:     "PUT",
+			path:       "/mode/__EMPTY",
+			body:       `{"mode": "READONLY"}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42208, "message": "The specified subject '__EMPTY' is not a valid."}`,
 		},
 
 		// ?deletedOnly where Confluent's registry has only ?deleted

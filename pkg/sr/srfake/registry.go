@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/twmb/franz-go/pkg/sr"
 )
@@ -165,16 +166,24 @@ func NewRegistry(opts ...Option) *Registry {
 	mux.HandleFunc("GET /schemas/guids/{guid}", r.handleGetSchemaByGUID)
 	mux.HandleFunc("GET /schemas/guids/{guid}/ids", r.handleGetSchemaIDsByGUID)
 
-	// subject routes
+	// subject routes. As in Confluent's registry, a subject such as ":.:" is
+	// the empty subject; the path keeps it as it is, since an empty path
+	// segment does not route.
+	subject := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, req *http.Request) {
+			req.SetPathValue("subject", normalizeSubject(req.PathValue("subject")))
+			h(w, req)
+		}
+	}
 	mux.HandleFunc("GET /subjects", r.handleGetSubjects)
-	mux.HandleFunc("GET /subjects/{subject}/versions", r.handleGetSubjectVersions)
-	mux.HandleFunc("POST /subjects/{subject}/versions", r.handlePostSubjectVersion)
-	mux.HandleFunc("GET /subjects/{subject}/versions/{version}", r.handleGetSubjectSchemaByVersion)
-	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/schema", r.handleGetSubjectRawSchemaByVersion)
-	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/referencedby", r.handleGetReferencedBy)
-	mux.HandleFunc("DELETE /subjects/{subject}", r.handleDeleteSubject)
-	mux.HandleFunc("DELETE /subjects/{subject}/versions/{version}", r.handleDeleteVersion)
-	mux.HandleFunc("POST /subjects/{subject}", r.handleCheckSchema)
+	mux.HandleFunc("GET /subjects/{subject}/versions", subject(r.handleGetSubjectVersions))
+	mux.HandleFunc("POST /subjects/{subject}/versions", subject(r.handlePostSubjectVersion))
+	mux.HandleFunc("GET /subjects/{subject}/versions/{version}", subject(r.handleGetSubjectSchemaByVersion))
+	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/schema", subject(r.handleGetSubjectRawSchemaByVersion))
+	mux.HandleFunc("GET /subjects/{subject}/versions/{version}/referencedby", subject(r.handleGetReferencedBy))
+	mux.HandleFunc("DELETE /subjects/{subject}", subject(r.handleDeleteSubject))
+	mux.HandleFunc("DELETE /subjects/{subject}/versions/{version}", subject(r.handleDeleteVersion))
+	mux.HandleFunc("POST /subjects/{subject}", subject(r.handleCheckSchema))
 
 	// config routes
 	mux.HandleFunc("GET /config", r.handleGetGlobalConfig)
@@ -315,7 +324,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 // with reqID and reqVersion from the id and version fields of its body, which
 // are -1 and 0 when the body has neither.
 func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion int) (id, version int, err error) {
-	if err = r.validateSubject(subject); err != nil {
+	if err = validateSubject(subject, false); err != nil {
 		return 0, 0, err
 	}
 
@@ -872,16 +881,15 @@ func (*Registry) schemasEqual(a, b sr.Schema) bool {
 	return true
 }
 
-func (*Registry) validateSubject(subject string) error {
-	if subject == "" {
-		return errInvalidSchema("subject name cannot be empty")
-	}
-	if len(subject) > 255 {
-		return errInvalidSchema("subject name too long (max 255 characters)")
-	}
-	// Check for null bytes which can cause issues
-	if strings.Contains(subject, "\x00") {
-		return errInvalidSchema("subject name cannot contain null bytes")
+// Returns the error for a subject that Confluent's registry refuses: one with
+// a control character, one named __GLOBAL or __EMPTY, and, outside config and
+// mode, one in the .__GLOBAL context. As in Confluent's registry by default, a
+// subject without a name is valid.
+func validateSubject(subject string, configOrMode bool) error {
+	ctx, name := splitSubject(subject)
+	if strings.ContainsFunc(subject, unicode.IsControl) || name == "__GLOBAL" || name == "__EMPTY" ||
+		!configOrMode && ctx == ".__GLOBAL" {
+		return errInvalidSubject(subject)
 	}
 	return nil
 }

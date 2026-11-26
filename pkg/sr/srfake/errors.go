@@ -70,6 +70,10 @@ func errVersionNotSoftDeleted(subject string, version int) *registryError {
 	return newErr(http.StatusNotFound, sr.ErrSchemaVersionNotSoftDeleted.Code, "Subject '%s' Version %d was not deleted first before being permanently deleted", subject, version)
 }
 
+func errInvalidSubject(subject string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSubject.Code, "The specified subject '%s' is not a valid.", subject)
+}
+
 func errInvalidReference(ref sr.SchemaReference) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "reference %q subject %q version %d not found", ref.Name, ref.Subject, ref.Version)
 }
