@@ -2,6 +2,7 @@ package srfake
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -712,80 +713,128 @@ func (r *Registry) handleCheckCompatibility(w http.ResponseWriter, req *http.Req
 
 // handleGetGlobalConfig emulates GET /config to retrieve the global
 // compatibility level.
-func (r *Registry) handleGetGlobalConfig(w http.ResponseWriter, _ *http.Request) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.globalCompat})
+func (r *Registry) handleGetGlobalConfig(w http.ResponseWriter, req *http.Request) {
+	r.getConfig(w, req, "")
 }
 
 // handlePutGlobalConfig emulates PUT /config to update the global
 // compatibility level.
 func (r *Registry) handlePutGlobalConfig(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	var body struct {
-		Compatibility sr.CompatibilityLevel `json:"compatibility"`
-	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
-		return
-	}
-	r.mu.Lock()
-	r.globalCompat = body.Compatibility
-	r.mu.Unlock()
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibility": body.Compatibility})
+	r.putConfig(w, req, "")
 }
 
 // handleGetSubjectConfig emulates GET /config/{subject} to retrieve a
 // subject's compatibility level.
 func (r *Registry) handleGetSubjectConfig(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	useDefault := req.URL.Query().Get("defaultToGlobal") != "false"
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	subj, ok := r.subjects[subject]
-	switch {
-	case ok && subj.compatLevel != nil:
-		respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": *subj.compatLevel})
-	case useDefault:
-		respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.globalCompat})
-	default:
-		r.handleAPIError(w, errSubjectNotFound(subject))
-	}
+	r.getConfig(w, req, req.PathValue("subject"))
 }
 
 // handlePutSubjectConfig emulates PUT /config/{subject} to update a subject's
 // compatibility level.
 func (r *Registry) handlePutSubjectConfig(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	subject := req.PathValue("subject")
-
-	var body struct {
-		Compatibility sr.CompatibilityLevel `json:"compatibility"`
-	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
-		return
-	}
-	if err := r.SetCompat(subject, body.Compatibility); err != nil {
-		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
-		return
-	}
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibility": body.Compatibility})
+	r.putConfig(w, req, req.PathValue("subject"))
 }
 
-// handleDeleteSubjectConfig emulates DELETE /config/{subject} to remove a
-// subject-specific compatibility level, reverting it to the global default.
-func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
+// Serves GET /config and GET /config/{subject}, as Confluent's registry does:
+// with ?defaultToGlobal=true, the level that applies to subject, else the level
+// set for subject. A subject without a level returns 40408, and the global
+// level is the default until it is set.
+func (r *Registry) getConfig(w http.ResponseWriter, req *http.Request, subject string) {
+	defaultToGlobal := req.URL.Query().Get("defaultToGlobal") == "true"
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	level, ok := r.compats[subject]
+	switch {
+	case defaultToGlobal:
+		level = r.compatInScopeLocked(subject)
+	case !ok && subject == "":
+		level = r.defaultCompat
+	case !ok:
+		r.handleAPIError(w, errCompatNotConfigured(subject))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.levelOf(level)})
+}
+
+// Serves PUT /config and PUT /config/{subject}. As in Confluent's registry, a
+// body without a level keeps the level that is set, a null level removes it,
+// and a subject in read-only mode refuses the change.
+func (r *Registry) putConfig(w http.ResponseWriter, req *http.Request, subject string) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
+	var body struct {
+		Compatibility json.RawMessage `json:"compatibility"`
+	}
+	var level sr.CompatibilityLevel
+	err := decodeJSONRequest(req.Body, &body)
+	if err == nil && body.Compatibility != nil && string(body.Compatibility) != "null" {
+		if err = json.Unmarshal(body.Compatibility, &level); err == nil && level.String() == "" {
+			err = errInvalidCompatLevel()
+		}
+	}
+	if err != nil {
+		r.handleAPIError(w, errInvalidCompatLevel())
+		return
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if subj, ok := r.subjects[subject]; ok {
-		subj.compatLevel = nil
+	if err := r.errReadOnlyLocked(subject); err != nil {
+		r.handleAPIError(w, err)
+		return
 	}
-	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.globalCompat})
+	if body.Compatibility == nil {
+		level = r.compats[subject]
+	}
+	r.compats[subject] = level
+	resp := make(map[string]sr.CompatibilityLevel)
+	if level != 0 {
+		resp["compatibility"] = level
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// handleDeleteGlobalConfig emulates DELETE /config, which removes the global
+// compatibility level and returns the level that was in effect, as Confluent's
+// registry does.
+func (r *Registry) handleDeleteGlobalConfig(w http.ResponseWriter, _ *http.Request) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.errReadOnlyLocked(""); err != nil {
+		r.handleAPIError(w, err)
+		return
+	}
+	level, ok := r.compats[""]
+	if !ok {
+		level = r.defaultCompat
+	}
+	delete(r.compats, "")
+	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.levelOf(level)})
+}
+
+// handleDeleteSubjectConfig emulates DELETE /config/{subject}, which removes the
+// compatibility level of a subject and returns it, as Confluent's registry
+// does. A subject without a level returns 40401.
+func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Request) {
+	subject := req.PathValue("subject")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	level, ok := r.compats[subject]
+	if !ok {
+		r.handleAPIError(w, errSubjectNotFound(subject))
+		return
+	}
+	if err := r.errReadOnlyLocked(subject); err != nil {
+		r.handleAPIError(w, err)
+		return
+	}
+	delete(r.compats, subject)
+	respondJSON(w, http.StatusOK, map[string]sr.CompatibilityLevel{"compatibilityLevel": r.levelOf(level)})
 }
 
 /* -------------------------------------------------------------------------
@@ -793,77 +842,86 @@ func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Re
    ------------------------------------------------------------------------- */
 
 // handleGetMode emulates GET /mode and returns the global mode.
-func (r *Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
+func (r *Registry) handleGetMode(w http.ResponseWriter, req *http.Request) {
+	r.getMode(w, req, "")
+}
+
+// handleGetSubjectMode emulates GET /mode/{subject}.
+func (r *Registry) handleGetSubjectMode(w http.ResponseWriter, req *http.Request) {
+	r.getMode(w, req, req.PathValue("subject"))
+}
+
+// Serves GET /mode and GET /mode/{subject}, as Confluent's registry does: with
+// ?defaultToGlobal=true, the mode that applies to subject, else the mode set
+// for subject. A subject without a mode returns 40409, and the global mode is
+// READWRITE until it is set.
+func (r *Registry) getMode(w http.ResponseWriter, req *http.Request, subject string) {
+	defaultToGlobal := req.URL.Query().Get("defaultToGlobal") == "true"
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
+
+	mode, ok := r.modes[subject]
+	switch {
+	case defaultToGlobal:
+		mode = r.modeInScopeLocked(subject)
+	case !ok && subject == "":
+		mode = sr.ModeReadWrite
+	case !ok:
+		r.handleAPIError(w, errModeNotConfigured(subject))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": mode})
 }
 
 // handlePutMode emulates PUT /mode and sets the global mode. The ?force query
 // parameter is accepted but not enforced: the mock does not restrict setting
 // IMPORT mode on a non-empty registry.
 func (r *Registry) handlePutMode(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	var body struct {
-		Mode sr.Mode `json:"mode"`
-	}
-	if err := decodeJSONRequest(req.Body, &body); err != nil {
-		r.handleAPIError(w, errInvalidMode(err.Error()))
-		return
-	}
-	r.mu.Lock()
-	r.globalMode = body.Mode
-	r.mu.Unlock()
-	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
-}
-
-// handleGetSubjectMode emulates GET /mode/{subject}. If the subject has no mode
-// override it falls back to the global mode unless defaultToGlobal=false.
-func (r *Registry) handleGetSubjectMode(w http.ResponseWriter, req *http.Request) {
-	subject := req.PathValue("subject")
-	useDefault := req.URL.Query().Get("defaultToGlobal") != "false"
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	subj, ok := r.subjects[subject]
-	switch {
-	case ok && subj.mode != nil:
-		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": *subj.mode})
-	case useDefault:
-		respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": r.globalMode})
-	default:
-		r.handleAPIError(w, errSubjectNotFound(subject))
-	}
+	r.putMode(w, req, "")
 }
 
 // handlePutSubjectMode emulates PUT /mode/{subject} and sets a per-subject mode.
 // As with the global setter, ?force is accepted but not enforced.
 func (r *Registry) handlePutSubjectMode(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
-	subject := req.PathValue("subject")
+	r.putMode(w, req, req.PathValue("subject"))
+}
 
+// Serves PUT /mode and PUT /mode/{subject}. As in Confluent's registry, a body
+// without a mode removes the mode that is set.
+func (r *Registry) putMode(w http.ResponseWriter, req *http.Request, subject string) {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<10)
 	var body struct {
-		Mode sr.Mode `json:"mode"`
+		Mode *sr.Mode `json:"mode"`
 	}
 	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidMode(err.Error()))
 		return
 	}
-	if err := r.SetMode(subject, body.Mode); err != nil {
-		r.handleAPIError(w, errInvalidMode(err.Error()))
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if body.Mode == nil {
+		delete(r.modes, subject)
+		respondJSON(w, http.StatusOK, map[string]sr.Mode{})
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": body.Mode})
+	r.modes[subject] = *body.Mode
+	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": *body.Mode})
 }
 
 // handleDeleteMode emulates DELETE /mode, resetting the global mode to the
 // default (READWRITE) and returning the mode that was in effect.
 func (r *Registry) handleDeleteMode(w http.ResponseWriter, _ *http.Request) {
 	r.mu.Lock()
-	deleted := r.globalMode
-	r.globalMode = sr.ModeReadWrite
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+
+	deleted, ok := r.modes[""]
+	if !ok {
+		deleted = sr.ModeReadWrite
+	}
+	delete(r.modes, "")
 	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
 }
 
@@ -875,13 +933,12 @@ func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Requ
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	subj, ok := r.subjects[subject]
-	if !ok || subj.mode == nil {
+	deleted, ok := r.modes[subject]
+	if !ok {
 		r.handleAPIError(w, errSubjectNotFound(subject))
 		return
 	}
-	deleted := *subj.mode
-	subj.mode = nil
+	delete(r.modes, subject)
 	respondJSON(w, http.StatusOK, map[string]sr.Mode{"mode": deleted})
 }
 

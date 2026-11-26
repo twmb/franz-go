@@ -41,6 +41,14 @@ func TestSubjectHandlers(t *testing.T) {
 		}
 		resp.Body.Close()
 	}
+	put := func(r *srfake.Registry, path, body string) {
+		req, _ := http.NewRequest(http.MethodPut, r.URL()+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("setup failed: PUT %s: %v", path, err)
+		}
+		resp.Body.Close()
+	}
 
 	testCases := []struct {
 		name       string
@@ -473,6 +481,157 @@ func TestSubjectHandlers(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
 		},
+
+		// Config and mode
+		{
+			name:       "GET /config/{s} - subject without a level returns 40408",
+			method:     "GET",
+			path:       "/config/user-topic-value",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40408, "message": "Subject 'user-topic-value' does not have subject-level compatibility configured"}`,
+		},
+		{
+			name:       "GET /mode/{s} - subject without a mode returns 40409",
+			method:     "GET",
+			path:       "/mode/user-topic-value",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40409, "message": "Subject 'user-topic-value' does not have subject-level mode configured"}`,
+		},
+		{
+			name:       "DELETE /config/{s} - returns the removed level",
+			method:     "DELETE",
+			path:       "/config/user-topic-value",
+			setup:      func(r *srfake.Registry) { r.SetCompat("user-topic-value", sr.CompatFull) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibilityLevel": "FULL"}`,
+		},
+		{
+			name:       "DELETE /config - returns the global level",
+			method:     "DELETE",
+			path:       "/config",
+			setup:      func(r *srfake.Registry) { r.SetCompat("", sr.CompatFull) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibilityLevel": "FULL"}`,
+		},
+		{
+			name:       "PUT /config/{s} - body without a level keeps the level",
+			method:     "PUT",
+			path:       "/config/user-topic-value",
+			body:       `{}`,
+			setup:      func(r *srfake.Registry) { r.SetCompat("user-topic-value", sr.CompatFull) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibility": "FULL"}`,
+		},
+		{
+			name:   "GET /config/{s} - level set to null answers the default",
+			method: "GET",
+			path:   "/config/user-topic-value",
+			setup: func(r *srfake.Registry) {
+				r.SetCompat("user-topic-value", sr.CompatFull)
+				put(r, "/config/user-topic-value", `{"compatibility": null}`)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"compatibilityLevel": "BACKWARD"}`,
+		},
+		{
+			name:       "PUT /mode/{s} - body without a mode",
+			method:     "PUT",
+			path:       "/mode/user-topic-value",
+			body:       `{}`,
+			setup:      func(r *srfake.Registry) { r.SetMode("user-topic-value", sr.ModeReadOnly) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{}`,
+		},
+		{
+			name:   "GET /mode/{s} - body without a mode removes the mode",
+			method: "GET",
+			path:   "/mode/user-topic-value",
+			setup: func(r *srfake.Registry) {
+				r.SetMode("user-topic-value", sr.ModeReadOnly)
+				put(r, "/mode/user-topic-value", `{}`)
+			},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40409, "message": "Subject 'user-topic-value' does not have subject-level mode configured"}`,
+		},
+		{
+			name:       "DELETE /config/{s} - subject without a level returns 40401",
+			method:     "DELETE",
+			path:       "/config/user-topic-value",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+		},
+		{
+			name:       "GET /subjects?deleted=true - a subject level does not create a subject",
+			method:     "GET",
+			path:       "/subjects?deleted=true",
+			setup:      func(r *srfake.Registry) { r.SetCompat("user-topic-value", sr.CompatFull) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - global read-only mode refuses",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup:      func(r *srfake.Registry) { r.SetMode("", sr.ModeReadOnly) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42205, "message": "Subject user-topic-value in context  is in read-only mode"}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - import mode refuses",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup:      func(r *srfake.Registry) { r.SetMode("user-topic-value", sr.ModeImport) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42205, "message": "Subject user-topic-value in context  is not in read-write mode"}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - read-only mode of the context refuses",
+			method:     "POST",
+			path:       "/subjects/:.myctx:topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup:      func(r *srfake.Registry) { r.SetMode(":.myctx:", sr.ModeReadOnly) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42205, "message": "Subject :.myctx:topic-value in context :.myctx: is in read-only mode"}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - global read-only mode does not cover another context",
+			method:     "POST",
+			path:       "/subjects/:.myctx:topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+			setup:      func(r *srfake.Registry) { r.SetMode("", sr.ModeReadOnly) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:   "DELETE /subjects/{s} - read-only mode refuses",
+			method: "DELETE",
+			path:   "/subjects/user-topic-value",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SetMode("user-topic-value", sr.ModeReadOnly)
+			},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42205, "message": "Subject user-topic-value in context  is in read-only mode"}`,
+		},
+		{
+			name:       "PUT /config/{s} - read-only mode refuses",
+			method:     "PUT",
+			path:       "/config/user-topic-value",
+			body:       `{"compatibility": "FULL"}`,
+			setup:      func(r *srfake.Registry) { r.SetMode("user-topic-value", sr.ModeReadOnly) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42205, "message": "Subject user-topic-value in context  is in read-only mode"}`,
+		},
+		{
+			name:       "PUT /config/{s} - invalid level returns 42203",
+			method:     "PUT",
+			path:       "/config/user-topic-value",
+			body:       `{"compatibility": "SIDEWAYS"}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42203, "message": "Invalid compatibility level. Valid values are none, backward, forward, full, backward_transitive, forward_transitive, and full_transitive"}`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -597,6 +756,13 @@ func TestModeGlobal(t *testing.T) {
 	if got = cl.Mode(ctx); got[0].Mode != sr.ModeReadWrite {
 		t.Fatalf("global mode after reset = %v, want READWRITE", got[0].Mode)
 	}
+
+	// Registry.Reset restores the global mode as well.
+	cl.SetMode(ctx, sr.ModeReadOnly)
+	reg.Reset()
+	if got = cl.Mode(ctx); got[0].Mode != sr.ModeReadWrite {
+		t.Fatalf("global mode after Registry.Reset = %v, want READWRITE", got[0].Mode)
+	}
 }
 
 func TestModeSubject(t *testing.T) {
@@ -609,8 +775,13 @@ func TestModeSubject(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// With no subject override, it falls back to the global mode.
-	got := cl.Mode(ctx, "user-value")
+	// With no subject override, the subject has no mode, and it falls back
+	// to the global mode with DefaultToGlobal.
+	if got := cl.Mode(ctx, "user-value"); got[0].Err == nil {
+		t.Fatalf("subject mode without an override: %+v, want an error", got)
+	}
+	toGlobal := sr.WithParams(ctx, sr.DefaultToGlobal)
+	got := cl.Mode(toGlobal, "user-value")
 	if got[0].Err != nil || got[0].Mode != sr.ModeReadWrite {
 		t.Fatalf("subject mode fallback: %+v", got)
 	}
@@ -629,7 +800,7 @@ func TestModeSubject(t *testing.T) {
 	if len(rst) != 1 || rst[0].Err != nil {
 		t.Fatalf("reset subject mode: %+v", rst)
 	}
-	if got = cl.Mode(ctx, "user-value"); got[0].Mode != sr.ModeReadWrite {
+	if got = cl.Mode(toGlobal, "user-value"); got[0].Mode != sr.ModeReadWrite {
 		t.Fatalf("subject mode after reset = %v, want READWRITE (global)", got[0].Mode)
 	}
 }
@@ -1010,12 +1181,29 @@ func TestConfigHandlers(t *testing.T) {
 		}
 	})
 
+	t.Run("Reset restores the default level", func(t *testing.T) {
+		full := srfake.New(srfake.WithGlobalCompat(sr.CompatFull))
+		t.Cleanup(full.Close)
+		full.SetCompat("", sr.CompatNone)
+		full.Reset()
+
+		resp, err := client.Get(full.URL() + "/config")
+		if err != nil {
+			t.Fatalf("GET /config: %v", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !jsonEqual(string(body), `{"compatibilityLevel": "FULL"}`) {
+			t.Errorf("global config after Reset: %s", string(body))
+		}
+	})
+
 	t.Run("Subject-level config", func(t *testing.T) {
 		reg.Reset()
 		subject := "my-topic"
 
 		// 1. Get subject config, should fallback to global
-		req, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject, http.NoBody)
+		req, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject+"?defaultToGlobal=true", http.NoBody)
 		resp, _ := client.Do(req)
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -1049,7 +1237,7 @@ func TestConfigHandlers(t *testing.T) {
 		}
 
 		// 5. Get subject config again, should fall back to global
-		req3, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject, http.NoBody)
+		req3, _ := http.NewRequest(http.MethodGet, reg.URL()+"/config/"+subject+"?defaultToGlobal=true", http.NoBody)
 		resp3, _ := client.Do(req3)
 		body3, _ := io.ReadAll(resp3.Body)
 		resp3.Body.Close()
@@ -1481,7 +1669,7 @@ func TestClientIntegration(t *testing.T) {
 			name: "SubjectCompatibility - get, set, and delete",
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				// 1. Get initial subject compat (falls back to global BACKWARD)
-				results := cl.Compatibility(context.Background(), subject)
+				results := cl.Compatibility(sr.WithParams(context.Background(), sr.DefaultToGlobal), subject)
 				if len(results) != 1 || results[0].Err != nil || results[0].Level != sr.CompatBackward {
 					return nil, errors.New("initial subject compat did not fall back to BACKWARD")
 				}
@@ -1504,7 +1692,7 @@ func TestClientIntegration(t *testing.T) {
 				}
 
 				// 5. Get again, should fall back to global
-				finalResults := cl.Compatibility(context.Background(), subject)
+				finalResults := cl.Compatibility(sr.WithParams(context.Background(), sr.DefaultToGlobal), subject)
 				if len(finalResults) != 1 || finalResults[0].Err != nil {
 					return nil, errors.New("failed to get final subject compat")
 				}
@@ -2625,12 +2813,12 @@ func TestContextHandlers(t *testing.T) {
 			wantBody:   `[1]`,
 		},
 		{
-			name:       "GET /contexts/.myctx/config - get global config in context",
+			name:       "GET /contexts/.myctx/config - context without a level returns 40408",
 			method:     "GET",
 			path:       "/contexts/.myctx/config",
 			setup:      func(r *srfake.Registry) {},
-			wantStatus: http.StatusOK,
-			wantBody:   `{"compatibilityLevel": "BACKWARD"}`,
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40408, "message": "Subject ':.myctx:' does not have subject-level compatibility configured"}`,
 		},
 		{
 			name:   "GET /contexts/.myctx/schemas/ids/{id}/schema - get raw schema by ID in context",

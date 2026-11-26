@@ -32,11 +32,9 @@ type versionData struct {
 
 // subjectData holds all information related to a single subject.
 type subjectData struct {
-	versions       map[int]*versionData   // Using a pointer to modify isDeleted in place
-	latestVersion  int                    // The highest version number among non-soft-deleted versions (0 means no active versions)
-	highestVersion int                    // The highest version, soft-deleted or not; a permanent delete of it frees its number for reuse, as in Confluent's registry
-	compatLevel    *sr.CompatibilityLevel // Pointer to distinguish "not set" from a zero-value
-	mode           *sr.Mode               // Pointer to distinguish "not set" from a zero-value
+	versions       map[int]*versionData // Using a pointer to modify isDeleted in place
+	latestVersion  int                  // The highest version number among non-soft-deleted versions (0 means no active versions)
+	highestVersion int                  // The highest version, soft-deleted or not; a permanent delete of it frees its number for reuse, as in Confluent's registry
 }
 
 // Reports whether the subject has a version that is not soft-deleted. As in
@@ -96,9 +94,13 @@ type Registry struct {
 	// soft-deleted with the GUID.
 	idsByGUID map[contextGUID]int
 
-	// Global/unrelated state
-	globalCompat sr.CompatibilityLevel
-	globalMode   sr.Mode
+	// compats and modes are the compatibility levels and modes that are set,
+	// by subject. As in Confluent's registry, the empty subject is the global
+	// setting, and ":.ctx:" is the setting of context .ctx. A zero level is a
+	// subject that is configured without a level.
+	compats       map[string]sr.CompatibilityLevel
+	modes         map[string]sr.Mode
+	defaultCompat sr.CompatibilityLevel // the global level when none is set
 
 	// middleware
 	expectedAuth string
@@ -134,11 +136,12 @@ func New(opts ...Option) *Registry {
 func NewRegistry(opts ...Option) *Registry {
 	r := &Registry{
 		// Simplified state initialization
-		subjects:     make(map[string]*subjectData),
-		highestID:    make(map[string]int),
-		idsByGUID:    make(map[contextGUID]int),
-		globalCompat: sr.CompatBackward,
-		globalMode:   sr.ModeReadWrite,
+		subjects:      make(map[string]*subjectData),
+		highestID:     make(map[string]int),
+		idsByGUID:     make(map[contextGUID]int),
+		compats:       make(map[string]sr.CompatibilityLevel),
+		modes:         make(map[string]sr.Mode),
+		defaultCompat: sr.CompatBackward,
 	}
 
 	for _, opt := range opts {
@@ -170,6 +173,7 @@ func NewRegistry(opts ...Option) *Registry {
 	// config routes
 	mux.HandleFunc("GET /config", r.handleGetGlobalConfig)
 	mux.HandleFunc("PUT /config", r.handlePutGlobalConfig)
+	mux.HandleFunc("DELETE /config", r.handleDeleteGlobalConfig)
 	mux.HandleFunc("GET /config/{subject}", r.handleGetSubjectConfig)
 	mux.HandleFunc("PUT /config/{subject}", r.handlePutSubjectConfig)
 	mux.HandleFunc("DELETE /config/{subject}", r.handleDeleteSubjectConfig)
@@ -297,14 +301,24 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	if err = r.validateSubject(subject); err != nil {
 		return 0, 0, err
 	}
-	if err = r.validateSchema(schema); err != nil {
-		return 0, 0, err
-	}
 
 	// Hold write lock for entire operation to prevent race conditions.
 	// The "check-then-act" sequence must be atomic to ensure data integrity.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// As in Confluent's registry, only a subject in read-write mode accepts
+	// a schema, and the mode is checked before the schema.
+	switch r.modeInScopeLocked(subject) {
+	case sr.ModeReadWrite:
+	case sr.ModeReadOnly:
+		return 0, 0, errModeRefuses(subject, "is in read-only mode")
+	default:
+		return 0, 0, errModeRefuses(subject, "is not in read-write mode")
+	}
+	if err = r.validateSchema(schema); err != nil {
+		return 0, 0, err
+	}
 
 	// Validate references under write lock to prevent dangling references
 	if err = r.validateReferences(subject, schema); err != nil {
@@ -377,7 +391,8 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	return id, version, nil
 }
 
-// SetCompat emulates PUT /config/{subject}.
+// SetCompat sets the compatibility level of subject, as PUT /config/{subject}
+// does, without checking the mode. The empty subject sets the global level.
 func (r *Registry) SetCompat(subject string, c sr.CompatibilityLevel) error {
 	if c.String() == "" {
 		return fmt.Errorf("empty compatibility level")
@@ -385,14 +400,11 @@ func (r *Registry) SetCompat(subject string, c sr.CompatibilityLevel) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Get or create subject data
-	subj := r.getOrCreateSubject(subject)
-
-	subj.compatLevel = &c
+	r.compats[subject] = c
 	return nil
 }
 
-// SetMode sets the per-subject mode override, creating the subject if needed.
+// SetMode sets the mode of subject. The empty subject sets the global mode.
 func (r *Registry) SetMode(subject string, m sr.Mode) error {
 	if m.String() == "" {
 		return fmt.Errorf("invalid mode")
@@ -400,8 +412,7 @@ func (r *Registry) SetMode(subject string, m sr.Mode) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	subj := r.getOrCreateSubject(subject)
-	subj.mode = &m
+	r.modes[subject] = m
 	return nil
 }
 
@@ -419,7 +430,8 @@ func (r *Registry) SubjectExists(subject string) bool {
 	return ok && subj.active()
 }
 
-// Reset wipes all in-memory state. Useful between tests.
+// Reset wipes all in-memory state, which restores the initial global
+// compatibility level and mode. Useful between tests.
 func (r *Registry) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -427,7 +439,64 @@ func (r *Registry) Reset() {
 	r.subjects = make(map[string]*subjectData)
 	r.highestID = make(map[string]int)
 	r.idsByGUID = make(map[contextGUID]int)
-	r.globalCompat = sr.CompatBackward
+	r.compats = make(map[string]sr.CompatibilityLevel)
+	r.modes = make(map[string]sr.Mode)
+}
+
+// Returns the keys whose setting applies to subject, nearest first, as in
+// Confluent's registry: the subject, then its context (the global setting for
+// the default context), then the .__GLOBAL context.
+func scopeKeys(subject string) []string {
+	return []string{subject, qualifiedContext(subjectContext(subject)), ":.__GLOBAL:"}
+}
+
+// Returns the compatibility level that applies to subject. The caller must
+// hold the lock.
+func (r *Registry) compatInScopeLocked(subject string) sr.CompatibilityLevel {
+	for _, key := range scopeKeys(subject) {
+		if c, ok := r.compats[key]; ok {
+			return r.levelOf(c)
+		}
+	}
+	return r.defaultCompat
+}
+
+// Returns the level that a set compatibility c answers with: as in
+// Confluent's registry, a subject configured without a level answers with the
+// default level.
+func (r *Registry) levelOf(c sr.CompatibilityLevel) sr.CompatibilityLevel {
+	if c == 0 {
+		return r.defaultCompat
+	}
+	return c
+}
+
+// Returns the mode that applies to subject. The caller must hold the lock.
+func (r *Registry) modeInScopeLocked(subject string) sr.Mode {
+	for _, key := range scopeKeys(subject) {
+		if m, ok := r.modes[key]; ok {
+			return m
+		}
+	}
+	return sr.ModeReadWrite
+}
+
+// Returns an error if subject is in read-only mode, which refuses deletes and
+// compatibility changes, as in Confluent's registry. The caller must hold the
+// lock.
+func (r *Registry) errReadOnlyLocked(subject string) error {
+	if r.modeInScopeLocked(subject) == sr.ModeReadOnly {
+		return errModeRefuses(subject, "is in read-only mode")
+	}
+	return nil
+}
+
+// Removes the settings of subject, as Confluent's registry does when the last
+// version of subject is permanently deleted. The caller must hold the lock.
+func (r *Registry) removeSubjectLocked(subject string) {
+	delete(r.subjects, subject)
+	delete(r.compats, subject)
+	delete(r.modes, subject)
 }
 
 // getSchemaBySubjectVersionLocked is like getSchemaBySubjectVersion but assumes
@@ -555,6 +624,9 @@ func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) 
 	if !permanent && !subj.active() {
 		return nil, errSubjectSoftDeleted(subject)
 	}
+	if err := r.errReadOnlyLocked(subject); err != nil {
+		return nil, err
+	}
 
 	var versions []int
 	for v, vd := range subj.versions {
@@ -579,7 +651,7 @@ func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) 
 
 	if permanent {
 		// Hard delete - remove entire subject
-		delete(r.subjects, subject)
+		r.removeSubjectLocked(subject)
 		return versions, nil
 	}
 	for _, v := range versions {
@@ -608,6 +680,9 @@ func (r *Registry) deleteVersion(subject string, version int, permanent bool) er
 	if !permanent && versionData.isDeleted {
 		return errVersionSoftDeleted(subject, version)
 	}
+	if err := r.errReadOnlyLocked(subject); err != nil {
+		return err
+	}
 
 	// Check if schema is still referenced
 	if blocksDelete(r.referrersLocked(subject, version), permanent) {
@@ -623,7 +698,7 @@ func (r *Registry) deleteVersion(subject string, version int, permanent bool) er
 		delete(subj.versions, version)
 		subj.highestVersion = subj.highestExisting()
 		if len(subj.versions) == 0 {
-			delete(r.subjects, subject)
+			r.removeSubjectLocked(subject)
 		}
 	} else {
 		// Soft delete - mark version as deleted

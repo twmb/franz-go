@@ -81,8 +81,26 @@ func errInvalidVersion(msg string) *registryError {
 	return newErr(http.StatusBadRequest, sr.ErrInvalidVersion.Code, "%s", msg)
 }
 
-func errInvalidCompatLevel(msg string) *registryError {
-	return newErr(http.StatusBadRequest, sr.ErrInvalidCompatibilityLevel.Code, "%s", msg)
+func errInvalidCompatLevel() *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidCompatibilityLevel.Code, "Invalid compatibility level. Valid values are none, backward, forward, full, backward_transitive, forward_transitive, and full_transitive")
+}
+
+func errCompatNotConfigured(subject string) *registryError {
+	return newErr(http.StatusNotFound, sr.ErrSubjectLevelCompatibilityNotConfigured.Code, "Subject '%s' does not have subject-level compatibility configured", subject)
+}
+
+func errModeNotConfigured(subject string) *registryError {
+	return newErr(http.StatusNotFound, sr.ErrSubjectLevelModeNotConfigured.Code, "Subject '%s' does not have subject-level mode configured", subject)
+}
+
+// errModeRefuses is the error for an operation that the mode of subject
+// refuses. As in Confluent's registry, the global subject reads as null.
+func errModeRefuses(subject, why string) *registryError {
+	name := subject
+	if name == "" {
+		name = "null"
+	}
+	return newErr(http.StatusUnprocessableEntity, sr.ErrOperationNotPermitted.Code, "Subject %s in context %s %s", name, qualifiedContext(subjectContext(subject)), why)
 }
 
 func errInvalidMode(msg string) *registryError {
