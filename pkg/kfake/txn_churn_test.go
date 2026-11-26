@@ -7,6 +7,7 @@ package kfake
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +88,16 @@ func failAllProduces(c *Cluster, topic string) {
 	})
 }
 
+// bufferedReadHook calls BufferedProduceRecords on every response, as a
+// metrics hook can.
+type bufferedReadHook struct{ cl atomic.Pointer[kgo.Client] }
+
+func (h *bufferedReadHook) OnBrokerRead(kgo.BrokerMetadata, int16, int, time.Duration, time.Duration, error) {
+	if cl := h.cl.Load(); cl != nil {
+		cl.BufferedProduceRecords()
+	}
+}
+
 // observeEndTxns installs an observing fault that counts EndTxn requests
 // without altering them.
 func observeEndTxns(c *Cluster) *FaultHandle {
@@ -101,6 +112,10 @@ func observeEndTxns(c *Cluster) *FaultHandle {
 // append, so a failed append can leave a server-side ongoing transaction
 // that only the transaction timeout would otherwise clear, and under TV2
 // every transaction must end with an epoch bump before the next begins.
+//
+// The client also has a hook that calls BufferedProduceRecords on every
+// response, which must not deadlock with the producer ID reload in
+// BeginTransaction.
 func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-v2-abort"))
@@ -108,9 +123,18 @@ func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	endTxns := observeEndTxns(c)
 	failAllProduces(c, "audit-v2-abort")
 
-	cl := newPlainClient(t, c, kgo.TransactionalID("audit-v2-abort"))
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
+	hook := new(bufferedReadHook)
+	cl := newPlainClient(t, c, kgo.TransactionalID("audit-v2-abort"), kgo.WithHooks(hook))
+	hook.cl.Store(cl)
+	begun := make(chan error, 1)
+	go func() { begun <- cl.BeginTransaction() }()
+	select {
+	case err := <-begun:
+		if err != nil {
+			t.Fatalf("BeginTransaction: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("BeginTransaction's producer ID load did not return within 5s while the hook calls BufferedProduceRecords")
 	}
 	r := &kgo.Record{Topic: "audit-v2-abort", Value: []byte("v")}
 	if err := cl.ProduceSync(context.Background(), r).FirstErr(); err == nil {

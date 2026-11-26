@@ -1132,11 +1132,9 @@ func (p *producer) takeAddedToTxn() []*recBuf {
 // This returns if it is necessary to recover the producer ID (it has an
 // error), whether it is possible to recover, and, if not, the error.
 //
-// We call this when beginning a transaction or when ending with an abort.
+// We call this when beginning a transaction or when ending with an abort,
+// while the caller has txnMu locked.
 func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bool, err error) {
-	cl.producer.mu.Lock()
-	defer cl.producer.mu.Unlock()
-
 	id, epoch, err := cl.producerID(ctx2fn(ctx))
 	if err == nil {
 		return false, false, nil
