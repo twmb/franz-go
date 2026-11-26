@@ -856,6 +856,74 @@ func TestSubjectHandlers(t *testing.T) {
 			wantStatus: http.StatusNotFound,
 			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
+
+		// Paging and filters
+		{
+			name:   "GET /subjects - offset and limit",
+			method: "GET",
+			path:   "/subjects?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 1, userSchema)
+				r.SeedSchema("c", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["b"]`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions - offset and limit",
+			method: "GET",
+			path:   "/subjects/user-topic-value/versions?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+				r.SeedSchema("user-topic-value", 3, 3, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[2]`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v}/referencedby - offset and limit",
+			method: "GET",
+			path:   "/subjects/product-value/versions/1/referencedby?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				for i, s := range []string{"A", "B", "C"} {
+					r.SeedSchema(s, 1, 2+i, sr.Schema{
+						Schema:     `{"type":"record","name":"` + s + `","fields":[{"name":"p","type":"Product"}]}`,
+						References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+					})
+				}
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[3]`,
+		},
+		{
+			name:   "GET /schemas - offset and limit",
+			method: "GET",
+			path:   "/schemas?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 2, productSchema)
+				r.SeedSchema("c", 1, 3, userSchemaV2)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"b","version":1,"id":2,"guid":"3e3328fa-a65f-8325-b14d-93ec4ea81772","schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"sku\",\"type\":\"string\"}]}"}]`,
+		},
+		{
+			name:   "GET /schemas?ruleType={t} - only schemas with a rule of the type",
+			method: "GET",
+			path:   "/schemas?ruleType=CEL",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("a", 1, 1, userSchema)
+				r.SeedSchema("b", 1, 2, sr.Schema{
+					Schema:        productSchema.Schema,
+					SchemaRuleSet: &sr.SchemaRuleSet{DomainRules: []sr.SchemaRule{{Name: "r", Type: "CEL"}}},
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"b","version":1,"id":2,"guid":"3e3328fa-a65f-8325-b14d-93ec4ea81772","schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"sku\",\"type\":\"string\"}]}","ruleSet":{"domainRules":[{"name":"r","kind":"TRANSFORM","mode":"UPGRADE","type":"CEL","tags":null,"expr":""}]}}]`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -926,6 +994,27 @@ func TestGetAllSchemas(t *testing.T) {
 	}
 	if len(latest) != 2 {
 		t.Fatalf("AllSchemas(latestOnly): got %d, want 2 (one per subject)", len(latest))
+	}
+
+	// As in Confluent's registry, GET /schemas and referencedby return at
+	// most 1000 items by default.
+	for i := range 1001 {
+		reg.SeedSchema(fmt.Sprintf("ref-%d", i), 1, 10+i, sr.Schema{
+			Schema:     fmt.Sprintf(`{"type":"record","name":"R%d","fields":[{"name":"u","type":"User"}]}`, i),
+			References: []sr.SchemaReference{{Name: "User", Subject: "user-value", Version: 1}},
+		})
+	}
+	if all, err = cl.AllSchemas(ctx); err != nil || len(all) != 1000 {
+		t.Errorf("AllSchemas: got %d schemas and error %v, want 1000", len(all), err)
+	}
+	resp, err := http.Get(reg.URL() + "/subjects/user-value/versions/1/referencedby")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var ids []int
+	if err := json.NewDecoder(resp.Body).Decode(&ids); err != nil || len(ids) != 1000 {
+		t.Errorf("referencedby: got %d IDs and error %v, want 1000", len(ids), err)
 	}
 }
 
@@ -1200,6 +1289,26 @@ func TestSchemaHandlers(t *testing.T) {
 			},
 			wantStatus: http.StatusOK,
 			wantBody:   `[{"subject":"user-topic","version":1}]`,
+		},
+		{
+			name: "GET /schemas/ids/{id}/subjects - offset and limit",
+			path: "/schemas/ids/123/subjects?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("a-topic", userSchema)
+				r.RegisterSchema("b-topic", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["b-topic"]`,
+		},
+		{
+			name: "GET /schemas/ids/{id}/versions - offset and limit",
+			path: "/schemas/ids/123/versions?offset=1&limit=1",
+			setup: func(r *srfake.Registry) {
+				r.RegisterSchema("a-topic", userSchema)
+				r.RegisterSchema("b-topic", userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"b-topic","version":1}]`,
 		},
 		{
 			name:       "GET /schemas/guids/{guid} - soft-deleted version answers",
@@ -2898,6 +3007,14 @@ func TestContextHandlers(t *testing.T) {
 			},
 			wantStatus: http.StatusOK,
 			wantBody:   `[".a"]`, // sorted: [".", ".a", ".b"], offset=1 limit=1 -> [".a"]
+		},
+		{
+			name:       "GET /contexts - limit 0 lists every context",
+			method:     "GET",
+			path:       "/contexts?limit=0",
+			setup:      func(r *srfake.Registry) { r.SeedSchema(":.a:topic", 1, 1, productSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `[".", ".a"]`,
 		},
 
 		// DELETE /contexts/{context}

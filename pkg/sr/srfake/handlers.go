@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -282,7 +284,7 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
-	respondJSON(w, http.StatusOK, usages)
+	respondJSON(w, http.StatusOK, page(req, usages, math.MaxInt))
 }
 
 // handleGetSubjectsByID emulates GET /schemas/ids/{id}/subjects.
@@ -309,7 +311,7 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 			subjects = append(subjects, u.Subject)
 		}
 	}
-	respondJSON(w, http.StatusOK, subjects)
+	respondJSON(w, http.StatusOK, page(req, subjects, math.MaxInt))
 }
 
 // Returns the versions that carry id in the context that a lookup of id
@@ -426,12 +428,45 @@ func (f deletedFilter) keep(isDeleted bool) bool {
 // single-item lookups to decide whether a soft-deleted item may be returned.
 func (f deletedFilter) any() bool { return f.includeDeleted || f.onlyDeleted }
 
+// schemaSearchLimit is the default and largest limit of GET /schemas and
+// referencedby in Confluent's registry. Its other listings have no limit by
+// default.
+const schemaSearchLimit = 1000
+
+// Returns the items that the offset and limit query parameters select, as
+// Confluent's registry pages a listing: a limit that is not positive or is
+// above maxLimit is maxLimit.
+func page[T any](req *http.Request, items []T, maxLimit int) []T {
+	q := req.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	items = items[min(max(offset, 0), len(items)):]
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > maxLimit {
+		limit = maxLimit
+	}
+	return items[:min(limit, len(items))]
+}
+
+// Reports whether rules has a rule of type t.
+func hasRuleType(rules *sr.SchemaRuleSet, t string) bool {
+	if rules == nil {
+		return false
+	}
+	for _, rule := range slices.Concat(rules.DomainRules, rules.MigrationRules) {
+		if rule.Type == t {
+			return true
+		}
+	}
+	return false
+}
+
 // handleGetSchemas implements GET /schemas, returning every schema across all
-// subjects and versions. It supports the subjectPrefix, deleted, deletedOnly,
-// and latestOnly query parameters.
+// subjects and versions. It supports the subjectPrefix, deleted, latestOnly,
+// ruleType, offset, and limit query parameters.
 func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 	includeDeleted := req.URL.Query().Get("deleted") == "true"
 	latestOnly := req.URL.Query().Get("latestOnly") == "true"
+	ruleType := req.URL.Query().Get("ruleType")
 	// As in Confluent's registry, GET /schemas without a prefix lists the
 	// default context.
 	subjPrefix, _ := contextParam(req, "subjectPrefix")
@@ -468,11 +503,14 @@ func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 			if latestOnly && v != subj.latestVersion {
 				continue
 			}
+			if ruleType != "" && !hasRuleType(vd.schema.SchemaRuleSet, ruleType) {
+				continue
+			}
 			out = append(out, vd.schema)
 		}
 	}
 
-	respondJSON(w, http.StatusOK, out)
+	respondJSON(w, http.StatusOK, page(req, out, schemaSearchLimit))
 }
 
 func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
@@ -501,7 +539,7 @@ func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 		subjects = []string{}
 	}
 	sort.Strings(subjects)
-	respondJSON(w, http.StatusOK, subjects)
+	respondJSON(w, http.StatusOK, page(req, subjects, math.MaxInt))
 }
 
 // handleGetSubjectVersions emulates GET /subjects/{subject}/versions to return
@@ -527,7 +565,7 @@ func (r *Registry) handleGetSubjectVersions(w http.ResponseWriter, req *http.Req
 		versions = append(versions, v)
 	}
 	sort.Ints(versions)
-	respondJSON(w, http.StatusOK, versions)
+	respondJSON(w, http.StatusOK, page(req, versions, math.MaxInt))
 }
 
 // handlePostSubjectVersion emulates POST /subjects/{subject}/versions to
@@ -645,7 +683,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	}
 
 	sort.Ints(referencingIDs)
-	respondJSON(w, http.StatusOK, referencingIDs)
+	respondJSON(w, http.StatusOK, page(req, referencingIDs, schemaSearchLimit))
 }
 
 // handleDeleteSubject emulates DELETE /subjects/{subject} and performs a soft
@@ -994,8 +1032,6 @@ func (r *Registry) handleDeleteSubjectMode(w http.ResponseWriter, req *http.Requ
 // handleGetContexts emulates GET /contexts.
 func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 	contextPrefix := req.URL.Query().Get("contextPrefix")
-	offsetStr := req.URL.Query().Get("offset")
-	limitStr := req.URL.Query().Get("limit")
 
 	r.mu.RLock()
 	ctxSet := map[string]bool{".": true}
@@ -1011,25 +1047,7 @@ func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	sort.Strings(contexts)
-
-	offset := 0
-	if offsetStr != "" {
-		if v, err := strconv.Atoi(offsetStr); err == nil && v > 0 {
-			offset = v
-		}
-	}
-	if offset > len(contexts) {
-		offset = len(contexts)
-	}
-	contexts = contexts[offset:]
-
-	if limitStr != "" {
-		if v, err := strconv.Atoi(limitStr); err == nil && v >= 0 && v < len(contexts) {
-			contexts = contexts[:v]
-		}
-	}
-
-	respondJSON(w, http.StatusOK, contexts)
+	respondJSON(w, http.StatusOK, page(req, contexts, math.MaxInt))
 }
 
 // handleDeleteContext emulates DELETE /contexts/{context}.
