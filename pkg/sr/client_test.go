@@ -348,6 +348,11 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			expected: `[".mycontext"]`,
 		},
 		{
+			name:     "get contexts in schema context",
+			fn:       func() (any, error) { return c.Contexts(InContext(ctx, ".mycontext")) },
+			expected: `[".mycontext",".other"]`,
+		},
+		{
 			name: "delete context",
 			fn: func() (any, error) {
 				return nil, c.DeleteContext(ctx, ".mycontext")

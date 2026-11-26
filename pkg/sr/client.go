@@ -297,7 +297,7 @@ func (cl *Client) do(ctx context.Context, method, path string, v, into any) erro
 	if ctxName == ".." {
 		return fmt.Errorf("invalid schema context %q", ctxName)
 	}
-	if ctxName != "" && ctxName != "." && !strings.HasPrefix(path, "/contexts/") {
+	if ctxName != "" && ctxName != "." && path != "/contexts" && !strings.HasPrefix(path, "/contexts/") {
 		path = "/contexts/" + url.PathEscape(ctxName) + path
 	}
 	// URL.JoinPath returns the base URL alone for a path with an invalid
