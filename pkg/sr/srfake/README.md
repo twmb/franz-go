@@ -180,7 +180,8 @@ This mock implements only the basic Schema Registry functionality. Newer advance
 
 - **Compatibility checking**: Always returns `true` (use interceptors for testing failures)
 - **Schema validation**: Basic validation only, no full schema evolution checking
+- **Schema equality**: Avro and JSON schemas are compared as JSON, ignoring key order and whitespace, and protobuf schemas as text; the `normalize` parameter is ignored
 - **Authentication**: Simplified bearer token only
-- **Import mode**: Not supported
-- **Schema contexts**: No support for schema grouping/contexts
+- **Import mode**: Not supported; a registration with an `id` returns error 42205, and `PUT /mode` ignores `force`
+- **Schema contexts**: Supported through qualified subjects (`:.ctx:subject`) and `/contexts/{context}/...` paths, each context with its own schema IDs; the wildcard context `:*:` works only in `subjectPrefix`
 - **Advanced features**: Role-based access control, audit logs, data contracts, etc.
