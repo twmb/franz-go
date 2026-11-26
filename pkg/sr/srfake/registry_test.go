@@ -183,12 +183,20 @@ func TestSubjectHandlers(t *testing.T) {
 			wantBody:   `{"id": 1}`,
 		},
 		{
-			name:       "POST /subjects/{s}/versions - bad request body",
+			name:       "POST /subjects/{s}/versions - schema that does not parse",
 			method:     "POST",
 			path:       "/subjects/user-topic-value/versions",
 			body:       `{"schema": "not json"}`,
 			wantStatus: http.StatusUnprocessableEntity,
-			wantBody:   `{"error_code": 42201, "message": "invalid AVRO schema: invalid character 'o' in literal null (expecting 'u')"}`,
+			wantBody:   `{"error_code": 42201, "message": "Invalid schema of type AVRO, details: invalid character 'o' in literal null (expecting 'u')"}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - missing reference",
+			method:     "POST",
+			path:       "/subjects/:.myctx:order/versions",
+			body:       `{"schema":"\"string\"","references":[{"name":"Product","subject":"product","version":1}]}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42201, "message": "Invalid schema of type AVRO, details: No schema reference found for subject \":.myctx:product\" and version 1"}`,
 		},
 		{
 			name:   "POST /subjects/{s}/versions - soft-deleted subject gets the next version",
@@ -2121,9 +2129,8 @@ func TestClientIntegration(t *testing.T) {
 			wantResult: sr.CompatBackward,
 		},
 		{
-			name: "CreateSchema - direct circular reference",
+			name: "CreateSchema - reference to its own subject before the subject exists",
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
-				// Create a schema that references itself
 				selfRefSchema := sr.Schema{
 					Schema: `{"type":"record","name":"SelfRef","fields":[{"name":"id","type":"string"}]}`,
 					Type:   sr.TypeAvro,
@@ -2136,7 +2143,7 @@ func TestClientIntegration(t *testing.T) {
 			wantErr: &sr.ResponseError{StatusCode: http.StatusUnprocessableEntity},
 		},
 		{
-			name: "CreateSchema - indirect circular reference",
+			name: "CreateSchema - reference to a schema that references an older version of the subject",
 			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up schema A
 				schemaA := sr.Schema{
@@ -2156,18 +2163,23 @@ func TestClientIntegration(t *testing.T) {
 				r.SeedSchema("schema-b", 1, 2, schemaB)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
-				// Now try to create a new version of schema A that references schema B
-				// This creates: A:1 (no refs) <- B:1 (refs A:1) <- A:2 (refs B:1) = cycle
-				schemaAWithCycle := sr.Schema{
-					Schema: `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"},{"name":"b_ref","type":"string"}]}`,
-					Type:   sr.TypeAvro,
-					References: []sr.SchemaReference{
-						{Name: "refB", Subject: "schema-b", Version: 1},
-					},
-				}
-				return cl.CreateSchema(context.Background(), "schema-a", schemaAWithCycle)
+				// As in Confluent's registry, A:2 can reference B:1, which
+				// references A:1.
+				return cl.CreateSchema(context.Background(), "schema-a", sr.Schema{
+					Schema:     `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"},{"name":"b_ref","type":"string"}]}`,
+					References: []sr.SchemaReference{{Name: "refB", Subject: "schema-b", Version: 1}},
+				})
 			},
-			wantErr: &sr.ResponseError{StatusCode: http.StatusUnprocessableEntity},
+			wantResult: sr.SubjectSchema{
+				Subject: "schema-a",
+				Version: 2,
+				ID:      3,
+				GUID:    "d5472882-826d-8a99-ad41-68eafa0a324f",
+				Schema: sr.Schema{
+					Schema:     `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"},{"name":"b_ref","type":"string"}]}`,
+					References: []sr.SchemaReference{{Name: "refB", Subject: "schema-b", Version: 1}},
+				},
+			},
 		},
 		{
 			name: "CreateSchema - valid references without cycles",
@@ -3477,13 +3489,13 @@ func TestContextHandlers(t *testing.T) {
 			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
-			name:       "POST /subjects/:.myctx:{s}/versions - reference cycle in .myctx",
+			name:       "POST /subjects/:.myctx:{s}/versions - reference to a schema that references an older version in .myctx",
 			method:     "POST",
 			path:       "/subjects/:.myctx:product/versions",
 			body:       `{"schema":"{\"type\":\"record\",\"name\":\"Product\",\"fields\":[{\"name\":\"o\",\"type\":\"Order\"}]}","references":[{"name":"Order","subject":"order","version":1}]}`,
 			setup:      withOrder,
-			wantStatus: http.StatusUnprocessableEntity,
-			wantBody:   `{"error_code": 42201, "message": "circular dependency detected: subject :.myctx:product is referenced in a cycle"}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 3}`,
 		},
 	}
 

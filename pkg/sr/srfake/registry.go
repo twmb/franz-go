@@ -381,11 +381,6 @@ func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion 
 	if existingID, ok := r.idsByGUID[contextGUID{ctx, guid}]; ok && r.idInUseLocked(ctx, existingID) {
 		version = subj.highestVersion + 1
 
-		// Check for circular dependencies before storing the schema
-		if err = r.validateCircularReferences(schema, subject, version); err != nil {
-			return 0, 0, err
-		}
-
 		// Store schema version data
 		r.keepSubjectLocked(subject, subj)
 		subj.versions[version] = &versionData{
@@ -407,11 +402,6 @@ func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion 
 	r.highestID[ctx]++
 	id = r.highestID[ctx]
 	version = subj.highestVersion + 1
-
-	// Check for circular dependencies before storing the schema
-	if err = r.validateCircularReferences(schema, subject, version); err != nil {
-		return 0, 0, err
-	}
 
 	r.idsByGUID[contextGUID{ctx, guid}] = id
 
@@ -899,7 +889,7 @@ func (*Registry) validateSchema(s sr.Schema) error {
 	case sr.TypeAvro, sr.TypeJSON:
 		var tmp any
 		if err := json.Unmarshal([]byte(s.Schema), &tmp); err != nil {
-			return errInvalidSchemaWithCause(err, fmt.Sprintf("invalid %s schema: %v", s.Type.String(), err))
+			return errInvalidSchemaDetails(s.Type, err.Error())
 		}
 	case sr.TypeProtobuf:
 		if strings.TrimSpace(s.Schema) == "" {
@@ -929,67 +919,20 @@ func (r *Registry) validateReferences(subject string, s sr.Schema) (sr.Schema, e
 		}
 
 		// Check if the referenced schema exists and is not soft-deleted
-		subj, ok := r.subjects[refSubject(subject, ref.Subject)]
-		if !ok {
-			return s, errInvalidReference(ref)
+		refSubj := refSubject(subject, ref.Subject)
+		var vd *versionData
+		if subj, ok := r.subjects[refSubj]; ok {
+			if ref.Version == -1 {
+				refs[i].Version = subj.latestVersion
+			}
+			vd = subj.versions[refs[i].Version]
 		}
-		if ref.Version == -1 {
-			refs[i].Version = subj.latestVersion
-		}
-
-		versionData, ok := subj.versions[refs[i].Version]
-		if !ok || versionData.isDeleted {
-			return s, errInvalidReference(ref)
+		if vd == nil || vd.isDeleted {
+			return s, errInvalidSchemaDetails(s.Type, fmt.Sprintf("No schema reference found for subject %q and version %d", refSubj, ref.Version))
 		}
 	}
 	s.References = refs
 	return s, nil
-}
-
-// validateCircularReferences checks for circular dependencies in schema references.
-// This should be called after validateReferences to ensure all references exist.
-func (r *Registry) validateCircularReferences(schema sr.Schema, subject string, version int) error {
-	visited := make(map[string]bool)
-	subjectStack := make(map[string]bool)
-
-	return r.detectCycle(schema, subject, version, visited, subjectStack)
-}
-
-// detectCycle performs depth-first search to detect cycles in the reference graph
-func (r *Registry) detectCycle(schema sr.Schema, subject string, version int, visited, subjectStack map[string]bool) error {
-	// Create a unique key for this schema version
-	key := fmt.Sprintf("%s:%d", subject, version)
-
-	// If this subject is already in our traversal stack, we have a cycle
-	if subjectStack[subject] {
-		return errCircularDependency(subject)
-	}
-
-	// Mark current node as visited and current subject in stack
-	visited[key] = true
-	subjectStack[subject] = true
-
-	// Visit all references
-	for _, ref := range schema.References {
-		refName := refSubject(subject, ref.Subject)
-		refKey := fmt.Sprintf("%s:%d", refName, ref.Version)
-
-		// If not visited, recursively check this reference
-		if !visited[refKey] {
-			// Get the referenced schema
-			if refSubj, ok := r.subjects[refName]; ok {
-				if refVersionData, ok := refSubj.versions[ref.Version]; ok {
-					if err := r.detectCycle(refVersionData.schema.Schema, refName, ref.Version, visited, subjectStack); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-
-	// Remove from subject stack before returning
-	delete(subjectStack, subject)
-	return nil
 }
 
 // subjectContext extracts the context from a ":.name:subject" string, defaulting to ".".

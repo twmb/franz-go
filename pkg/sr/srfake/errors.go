@@ -74,8 +74,10 @@ func errInvalidSubject(subject string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSubject.Code, "The specified subject '%s' is not a valid.", subject)
 }
 
-func errInvalidReference(ref sr.SchemaReference) *registryError {
-	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "reference %q subject %q version %d not found", ref.Name, ref.Subject, ref.Version)
+// errInvalidSchemaDetails is the error for a schema of type t that does not
+// parse, with the prefix that Confluent's registry gives it.
+func errInvalidSchemaDetails(t sr.SchemaType, details string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "Invalid schema of type %s, details: %s", t, details)
 }
 
 func errInvalidSchema(msg string) *registryError {
@@ -118,10 +120,6 @@ func errModeRefuses(subject, why string) *registryError {
 
 func errInvalidMode(msg string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidMode.Code, "%s", msg)
-}
-
-func errCircularDependency(subject string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "circular dependency detected: subject %s is referenced in a cycle", subject)
 }
 
 func errContextNotEmpty(context string) *registryError {
