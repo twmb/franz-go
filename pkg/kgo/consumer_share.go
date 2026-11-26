@@ -1908,16 +1908,13 @@ func (s *source) shareAck(predrained []cursorAckDrain) {
 					// whole partition, so those acks fail here.
 					// A gap past its deadline is dropped. The other
 					// gaps go back with the records, or alone; no
-					// caller waits on a gap. If every record
-					// expired, the gaps are dropped with them.
+					// caller waits on a gap.
 					if backoff == 0 {
 						backoff = sc.cfg.retryBackoff(s.share.ackRequeues + 1)
 					}
 					expired := drained.expire(now + backoff.Nanoseconds())
-					if len(drained.entries) > 0 || len(expired) == 0 {
-						retry = drained.requeue(sc) || retry
-						requeued += int64(len(drained.entries))
-					}
+					retry = drained.requeue(sc) || retry
+					requeued += int64(len(drained.entries))
 					if len(expired) == 0 {
 						continue
 					}
@@ -2911,10 +2908,8 @@ func (s *source) handleShareReqResp(req *kmsg.ShareFetchRequest, resp *kmsg.Shar
 					// and the others go back with the next fetch.
 					pa := piggybackAcks[pi]
 					expired := pa.expire(time.Now().UnixNano())
-					if len(pa.entries) > 0 || len(expired) == 0 {
-						pa.requeue(sc)
-						ackRequeued += int64(len(pa.entries))
-					}
+					pa.requeue(sc)
+					ackRequeued += int64(len(pa.entries))
 					if len(expired) > 0 {
 						ackResults = append(ackResults, ShareAckResult{topicName, rp.Partition, fmt.Errorf("%w: %w", errShareAckDeadline, ackErr)})
 					}
