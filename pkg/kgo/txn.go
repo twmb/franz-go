@@ -480,6 +480,17 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		"will_try_commit", willTryCommit,
 	)
 
+	// Before KIP-447 (Kafka 2.5, which added RequireStable), a member
+	// taking over our partitions does not wait for our open transaction,
+	// so we stop resending EndTxn once the group could have moved them.
+	// Then End does not learn whether the commit happened, and the
+	// session fails.
+	if sent != nil && !kip447 {
+		var cancel func()
+		ctx, cancel = context.WithTimeout(ctx, s.cl.cfg.rebalanceTimeout)
+		defer cancel()
+	}
+
 	// We have a few potential retryable errors from EndTransaction.
 	// OperationNotAttempted will be returned at most once.
 	//

@@ -8,6 +8,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 )
 
 // TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit verifies that an
@@ -24,19 +25,23 @@ import (
 // from EndTxn; conformant Kafka / kfake does not emit it on their own, so the
 // test injects it via a fault.
 //
-// A resent commit answered with INVALID_TXN_STATE is definitive and ends End,
+// Before KIP-447, End stops resending EndTxn after the rebalance timeout. A
+// resent commit answered with INVALID_TXN_STATE is definitive and ends End,
 // even when a producer ID reload would get UNKNOWN_SERVER_ERROR.
 func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		name          string
-		faults        int         // EndTxn requests that get UNKNOWN_SERVER_ERROR; -1 is every one
+		err           *kerr.Error // what the faulted EndTxn requests get
+		faults        int         // EndTxn requests that get err; -1 is every one
 		then          *kerr.Error // if non-nil, the next EndTxn gets this answer, and an InitProducerID gets UNKNOWN_SERVER_ERROR
+		pre447        bool        // pin TxnOffsetCommit below KIP-447, with a short rebalance timeout
 		wantCommitted bool
 	}{
-		{"every-end", -1, nil, false},
-		{"one-end", 1, nil, true},
-		{"resend-invalid-txn-state", 1, kerr.InvalidTxnState, false},
+		{"every-end", kerr.UnknownServerError, -1, nil, false, false},
+		{"one-end", kerr.UnknownServerError, 1, nil, false, true},
+		{"resend-invalid-txn-state", kerr.UnknownServerError, 1, kerr.InvalidTxnState, false, false},
+		{"pre447-not-coordinator", kerr.NotCoordinator, -1, nil, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -49,14 +54,20 @@ func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 			c := newCluster(t, NumBrokers(1), SeedTopics(1, topic))
 			produceN(t, c, topic, msgs)
 
-			s, err := kgo.NewGroupTransactSession(
+			opts := []kgo.Opt{
 				kgo.SeedBrokers(c.ListenAddrs()...),
 				kgo.ConsumeTopics(topic),
 				kgo.ConsumerGroup(group),
 				kgo.TransactionalID("audit-endtxn-use-id"),
 				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-				kgo.FetchMaxWait(100*time.Millisecond),
-			)
+				kgo.FetchMaxWait(100 * time.Millisecond),
+			}
+			if test.pre447 {
+				v := kversion.Stable()
+				v.SetMaxKeyVersion(int16(kmsg.TxnOffsetCommit), 2)
+				opts = append(opts, kgo.MaxVersions(v), kgo.RebalanceTimeout(time.Second))
+			}
+			s, err := kgo.NewGroupTransactSession(opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +96,7 @@ func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 
 			endtxns := c.Fault(Fault{
 				Keys:  []kmsg.Key{kmsg.EndTxn},
-				Err:   kerr.UnknownServerError,
+				Err:   test.err,
 				Count: test.faults,
 			})
 			if test.then != nil {
@@ -99,6 +110,9 @@ func TestAuditTxnEndTxnUnknownServerErrorNotFalseCommit(t *testing.T) {
 			}
 			if committed != test.wantCommitted || (err == nil) != test.wantCommitted {
 				t.Fatalf("End returned committed=%v err=%v, want committed=%v", committed, err, test.wantCommitted)
+			}
+			if test.pre447 && ctx.Err() != nil {
+				t.Fatal("End resent EndTxn past the rebalance timeout")
 			}
 		})
 	}
