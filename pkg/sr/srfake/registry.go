@@ -265,7 +265,8 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 		panic(fmt.Sprintf("subject %q version %d already seeded", subject, version))
 	}
 
-	if err := r.validateReferences(subject, sch); err != nil {
+	sch, err := r.validateReferences(subject, sch)
+	if err != nil {
 		panic(fmt.Sprintf("invalid references: %v", err))
 	}
 
@@ -298,6 +299,13 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 
 // RegisterSchema emulates POST /subjects/{subject}/versions.
 func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version int, err error) {
+	return r.register(subject, schema, -1, 0)
+}
+
+// Registers schema under subject, as POST /subjects/{subject}/versions does
+// with reqID and reqVersion from the id and version fields of its body, which
+// are -1 and 0 when the body has neither.
+func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion int) (id, version int, err error) {
 	if err = r.validateSubject(subject); err != nil {
 		return 0, 0, err
 	}
@@ -307,13 +315,17 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// As in Confluent's registry, only a subject in read-write mode accepts
-	// a schema, and the mode is checked before the schema.
-	switch r.modeInScopeLocked(subject) {
-	case sr.ModeReadWrite:
-	case sr.ModeReadOnly:
+	// As in Confluent's registry, the mode is checked before the schema: a
+	// request with an ID needs import mode, and any other request needs
+	// read-write mode. srfake does not support import mode.
+	switch mode := r.modeInScopeLocked(subject); {
+	case mode == sr.ModeReadOnly:
 		return 0, 0, errModeRefuses(subject, "is in read-only mode")
-	default:
+	case reqID >= 0 && mode != sr.ModeImport:
+		return 0, 0, errModeRefuses(subject, "is not in import mode")
+	case reqID >= 0:
+		return 0, 0, errImportUnsupported()
+	case mode != sr.ModeReadWrite:
 		return 0, 0, errModeRefuses(subject, "is not in read-write mode")
 	}
 	if err = r.validateSchema(schema); err != nil {
@@ -321,19 +333,28 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	}
 
 	// Validate references under write lock to prevent dangling references
-	if err = r.validateReferences(subject, schema); err != nil {
+	if schema, err = r.validateReferences(subject, schema); err != nil {
 		return 0, 0, err
 	}
 
-	// Get or create subject data. A soft-deleted subject gets the next
-	// version, as in Confluent's registry.
-	subj := r.getOrCreateSubject(subject)
+	// Get subject data, which the registry keeps only once a version is
+	// stored. A soft-deleted subject gets the next version, as in Confluent's
+	// registry.
+	subj := r.subjects[subject]
+	if subj == nil {
+		subj = &subjectData{versions: make(map[int]*versionData)}
+	}
 
-	// existing identical schema under same subject?
+	// existing identical schema under same subject? As in Confluent's
+	// registry, a request with a version skips this lookup, and its version
+	// must be the next one.
 	for v, versionData := range subj.versions {
-		if !versionData.isDeleted && r.schemasEqual(versionData.schema.Schema, schema) {
+		if reqVersion == 0 && !versionData.isDeleted && r.schemasEqual(versionData.schema.Schema, schema) {
 			return versionData.schema.ID, v, nil
 		}
+	}
+	if reqVersion > 0 && reqVersion != subj.highestVersion+1 {
+		return 0, 0, errInvalidSchema("Version is not one more than previous version")
 	}
 
 	// reuse id from other subject in the same context?
@@ -348,6 +369,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 		}
 
 		// Store schema version data
+		r.subjects[subject] = subj
 		subj.versions[version] = &versionData{
 			schema: sr.SubjectSchema{
 				Subject: subject,
@@ -376,6 +398,7 @@ func (r *Registry) RegisterSchema(subject string, schema sr.Schema) (id, version
 	r.idsByGUID[contextGUID{ctx, guid}] = id
 
 	// Store schema version data
+	r.subjects[subject] = subj
 	subj.versions[version] = &versionData{
 		schema: sr.SubjectSchema{
 			Subject: subject,
@@ -665,31 +688,35 @@ func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) 
 
 // deleteVersion performs a soft or permanent delete of a specific version, as
 // Confluent's registry does: a permanent delete requires a soft delete first,
-// and a soft-deleted version cannot be soft-deleted again. This method
-// assumes the caller already holds the necessary lock.
-func (r *Registry) deleteVersion(subject string, version int, permanent bool) error {
+// and a soft-deleted version cannot be soft-deleted again. Version -1 is the
+// latest version that is not soft-deleted. Returns the deleted version. This
+// method assumes the caller already holds the necessary lock.
+func (r *Registry) deleteVersion(subject string, version int, permanent bool) (int, error) {
 	subj, ok := r.subjects[subject]
 	if !ok || len(subj.versions) == 0 {
-		return errSubjectNotFound(subject)
+		return 0, errSubjectNotFound(subject)
+	}
+	if version == -1 && subj.active() {
+		version = subj.latestVersion
 	}
 
 	versionData, ok := subj.versions[version]
 	if !ok {
-		return errVersionNotFound(subject, version)
+		return 0, errVersionNotFound(version)
 	}
 	if !permanent && versionData.isDeleted {
-		return errVersionSoftDeleted(subject, version)
+		return 0, errVersionSoftDeleted(subject, version)
 	}
 	if err := r.errReadOnlyLocked(subject); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Check if schema is still referenced
 	if blocksDelete(r.referrersLocked(subject, version), permanent) {
-		return errSchemaIsReferenced(subject, version)
+		return 0, errSchemaIsReferenced(subject, version)
 	}
 	if permanent && !versionData.isDeleted {
-		return errVersionNotSoftDeleted(subject, version)
+		return 0, errVersionNotSoftDeleted(subject, version)
 	}
 
 	if permanent {
@@ -711,11 +738,29 @@ func (r *Registry) deleteVersion(subject string, version int, permanent bool) er
 		subj.recalculateLatestVersion()
 	}
 
-	return nil
+	return version, nil
+}
+
+// Returns the version that s names, as Confluent's registry parses it: a
+// positive number, or -1 or "latest" in any case for the latest version.
+func parseVersion(s string) (int, error) {
+	t := strings.TrimSpace(s)
+	if strings.EqualFold(t, "latest") {
+		return -1, nil
+	}
+	v, err := strconv.Atoi(t)
+	if err != nil || v <= 0 && v != -1 {
+		return 0, errInvalidVersion(s)
+	}
+	return v, nil
 }
 
 func (r *Registry) resolveVersion(subject, versionStr string, includeDeleted bool) (int, error) {
-	if versionStr == "latest" {
+	v, err := parseVersion(versionStr)
+	if err != nil {
+		return 0, err
+	}
+	if v == -1 {
 		r.mu.RLock()
 		defer r.mu.RUnlock()
 
@@ -731,10 +776,6 @@ func (r *Registry) resolveVersion(subject, versionStr string, includeDeleted boo
 			return 0, errSubjectNotFound(subject)
 		}
 	}
-	v, err := strconv.Atoi(versionStr)
-	if err != nil {
-		return 0, errInvalidVersion("invalid version")
-	}
 	return v, nil
 }
 
@@ -746,7 +787,7 @@ func (r *Registry) errMissingVersion(subject string, version int, includeDeleted
 	defer r.mu.RUnlock()
 
 	if subj, ok := r.subjects[subject]; ok && (subj.active() || includeDeleted && len(subj.versions) > 0) {
-		return errVersionNotFound(subject, version)
+		return errVersionNotFound(version)
 	}
 	return errSubjectNotFound(subject)
 }
@@ -826,31 +867,39 @@ func (*Registry) validateSchema(s sr.Schema) error {
 	return nil
 }
 
-func (r *Registry) validateReferences(subject string, s sr.Schema) error {
-	for _, ref := range s.References {
+// Returns s with its references checked. As in Confluent's registry, a
+// reference to version -1 is to the latest version that is not soft-deleted,
+// and s comes back with that version in place of -1. The caller must hold the
+// lock.
+func (r *Registry) validateReferences(subject string, s sr.Schema) (sr.Schema, error) {
+	refs := append([]sr.SchemaReference(nil), s.References...)
+	for i, ref := range refs {
 		if ref.Name == "" {
-			return errInvalidSchema("reference missing name")
+			return s, errInvalidSchema("reference missing name")
 		}
 		if ref.Subject == "" {
-			return errInvalidSchema(fmt.Sprintf("reference %q missing subject", ref.Name))
+			return s, errInvalidSchema(fmt.Sprintf("reference %q missing subject", ref.Name))
 		}
-		if ref.Version <= 0 {
-			return errInvalidSchema(fmt.Sprintf("reference %q has invalid version %d", ref.Name, ref.Version))
+		if ref.Version <= 0 && ref.Version != -1 {
+			return s, errInvalidSchema(fmt.Sprintf("reference %q has invalid version %d", ref.Name, ref.Version))
 		}
 
 		// Check if the referenced schema exists and is not soft-deleted
-		// This assumes the caller already holds the necessary lock
 		subj, ok := r.subjects[refSubject(subject, ref.Subject)]
 		if !ok {
-			return errInvalidReference(ref)
+			return s, errInvalidReference(ref)
+		}
+		if ref.Version == -1 {
+			refs[i].Version = subj.latestVersion
 		}
 
-		versionData, ok := subj.versions[ref.Version]
+		versionData, ok := subj.versions[refs[i].Version]
 		if !ok || versionData.isDeleted {
-			return errInvalidReference(ref)
+			return s, errInvalidReference(ref)
 		}
 	}
-	return nil
+	s.References = refs
+	return s, nil
 }
 
 // validateCircularReferences checks for circular dependencies in schema references.

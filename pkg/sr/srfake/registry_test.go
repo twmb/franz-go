@@ -210,7 +210,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method:     "GET",
 			path:       "/subjects/no-such-subject/versions",
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"no-such-subject\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'no-such-subject' not found."}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions - list versions",
@@ -258,7 +258,7 @@ func TestSubjectHandlers(t *testing.T) {
 				del(r, "/subjects/user-topic-value/versions/1")
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - latest on soft-deleted subject",
@@ -269,7 +269,7 @@ func TestSubjectHandlers(t *testing.T) {
 				del(r, "/subjects/user-topic-value")
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - version of soft-deleted subject",
@@ -280,7 +280,7 @@ func TestSubjectHandlers(t *testing.T) {
 				del(r, "/subjects/user-topic-value")
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - latest with deleted is the highest version",
@@ -314,7 +314,7 @@ func TestSubjectHandlers(t *testing.T) {
 				// No setup needed - subject doesn't exist
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"non-existent-subject\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'non-existent-subject' not found."}`,
 		},
 		{
 			name:   "GET /subjects/{s}/versions/{v} - version not found",
@@ -324,7 +324,7 @@ func TestSubjectHandlers(t *testing.T) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40402, "message": "version 99 not found for \"user-topic-value\""}`,
+			wantBody:   `{"error_code": 40402, "message": "Version 99 not found."}`,
 		},
 
 		// DELETE /subjects/{subject}
@@ -460,7 +460,7 @@ func TestSubjectHandlers(t *testing.T) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+			wantBody:   `{"error_code": 40403, "message": "Schema not found"}`,
 		},
 		{
 			name:   "POST /subjects/{s} - soft-deleted subject",
@@ -479,7 +479,7 @@ func TestSubjectHandlers(t *testing.T) {
 				resp.Body.Close()
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 
 		// Config and mode
@@ -558,7 +558,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method:     "DELETE",
 			path:       "/config/user-topic-value",
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40401, "message": "subject \"user-topic-value\" not found"}`,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 		{
 			name:       "GET /subjects?deleted=true - a subject level does not create a subject",
@@ -631,6 +631,122 @@ func TestSubjectHandlers(t *testing.T) {
 			body:       `{"compatibility": "SIDEWAYS"}`,
 			wantStatus: http.StatusUnprocessableEntity,
 			wantBody:   `{"error_code": 42203, "message": "Invalid compatibility level. Valid values are none, backward, forward, full, backward_transitive, forward_transitive, and full_transitive"}`,
+		},
+
+		// Versions
+		{
+			name:       "GET /subjects/{s}/versions/{v} - version 0 returns 42202",
+			method:     "GET",
+			path:       "/subjects/user-topic-value/versions/0",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("user-topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42202, "message": "The specified version '0' is not a valid version id. Allowed values are between [1, 2^31-1] and the string \"latest\""}`,
+		},
+		{
+			name:       "GET /subjects/{s}/versions/{v} - word returns 42202",
+			method:     "GET",
+			path:       "/subjects/user-topic-value/versions/newest",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("user-topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42202, "message": "The specified version 'newest' is not a valid version id. Allowed values are between [1, 2^31-1] and the string \"latest\""}`,
+		},
+		{
+			name:       "GET /subjects/{s}/versions/{v} - version -1 is the latest",
+			method:     "GET",
+			path:       "/subjects/user-topic-value/versions/-1",
+			setup:      func(r *srfake.Registry) { r.SeedSchema("user-topic-value", 1, 1, userSchema) },
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":"user-topic-value","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
+		},
+		{
+			name:   "DELETE /subjects/{s}/versions/latest - deletes the latest version",
+			method: "DELETE",
+			path:   "/subjects/user-topic-value/versions/latest",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("user-topic-value", 1, 1, userSchema)
+				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `2`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v} - reference to version -1 stores the latest version",
+			method: "GET",
+			path:   "/subjects/order-value/versions/1",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				r.SeedSchema("product-value", 2, 2, userSchema)
+				r.RegisterSchema("order-value", sr.Schema{
+					Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+					References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: -1}},
+				})
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"subject":"order-value","version":1,"id":3,"guid":"b8f7b70a-6bdb-8122-9dc2-c917a4f6adee","schema":"{\"type\":\"record\",\"name\":\"Order\",\"fields\":[{\"name\":\"p\",\"type\":\"Product\"}]}","references":[{"name":"Product","subject":"product-value","version":2}]}`,
+		},
+
+		// Request bodies
+		{
+			name:       "POST /subjects/{s}/versions - unknown field is ignored",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}","color":"blue"}`,
+			wantStatus: http.StatusOK,
+			wantBody:   `{"id": 1}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - id needs import mode",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}","id":7}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42205, "message": "Subject user-topic-value in context  is not in import mode"}`,
+		},
+		{
+			name:       "POST /subjects/{s}/versions - version must be the next one",
+			method:     "POST",
+			path:       "/subjects/user-topic-value/versions",
+			body:       `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}","version":5}`,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42201, "message": "Version is not one more than previous version"}`,
+		},
+		{
+			name:   "GET /subjects?deleted=true - a failed registration leaves no subject",
+			method: "GET",
+			path:   "/subjects?deleted=true",
+			setup: func(r *srfake.Registry) {
+				resp, err := http.Post(r.URL()+"/subjects/user-topic-value/versions", "application/json",
+					strings.NewReader(`{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}","version":5}`))
+				if err != nil {
+					t.Fatalf("setup failed: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+		{
+			name:   "GET /subjects/{s}/versions/{v}/referencedby - numbered soft-deleted version",
+			method: "GET",
+			path:   "/subjects/product-value/versions/1/referencedby",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("product-value", 1, 1, productSchema)
+				r.SeedSchema("order-value", 1, 2, sr.Schema{
+					Schema:     `{"type":"record","name":"Order","fields":[{"name":"p","type":"Product"}]}`,
+					References: []sr.SchemaReference{{Name: "Product", Subject: "product-value", Version: 1}},
+				})
+				del(r, "/subjects/order-value/versions/1")
+				del(r, "/subjects/product-value/versions/1")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[]`,
+		},
+		{
+			name:       "GET /subjects/{s}/versions/{v}/referencedby - missing subject returns 40401",
+			method:     "GET",
+			path:       "/subjects/user-topic-value/versions/1/referencedby",
+			wantStatus: http.StatusNotFound,
+			wantBody:   `{"error_code": 40401, "message": "Subject 'user-topic-value' not found."}`,
 		},
 	}
 
@@ -915,7 +1031,7 @@ func TestSchemaHandlers(t *testing.T) {
 			name:       "GET /schemas/ids/{id} - not found",
 			path:       "/schemas/ids/999",
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+			wantBody:   `{"error_code": 40403, "message": "Schema 999 not found"}`,
 		},
 		{
 			name:       "GET /schemas/ids/{id}/schema - found",
@@ -927,7 +1043,7 @@ func TestSchemaHandlers(t *testing.T) {
 			name:       "GET /schemas/ids/{id}/schema - not found",
 			path:       "/schemas/ids/999/schema",
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+			wantBody:   `{"error_code": 40403, "message": "Schema 999 not found"}`,
 		},
 		{
 			name: "GET /schemas/ids/{id} - hard-deleted schema returns 404",
@@ -937,7 +1053,7 @@ func TestSchemaHandlers(t *testing.T) {
 				del(r, "/subjects/user-topic/versions/1?permanent=true")
 			},
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+			wantBody:   `{"error_code": 40403, "message": "Schema 123 not found"}`,
 		},
 		{
 			name:       "GET /schemas/ids/{id}?subject={s} - subject of another context answers",
@@ -1032,7 +1148,7 @@ func TestSchemaByGUIDHandlers(t *testing.T) {
 			name:       "GET /schemas/guids/{guid} - not found",
 			path:       "/schemas/guids/" + missing,
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+			wantBody:   `{"error_code": 40403, "message": "Schema 00000000-0000-0000-0000-000000000000 not found"}`,
 		},
 		{
 			name:       "GET /schemas/guids/{guid}/ids - found",
@@ -1044,7 +1160,7 @@ func TestSchemaByGUIDHandlers(t *testing.T) {
 			name:       "GET /schemas/guids/{guid}/ids - not found",
 			path:       "/schemas/guids/" + missing + "/ids",
 			wantStatus: http.StatusNotFound,
-			wantBody:   `{"error_code": 40403, "message": "schema not found"}`,
+			wantBody:   `{"error_code": 40403, "message": "Schema not found"}`,
 		},
 	}
 
@@ -1996,7 +2112,7 @@ func TestClientIntegration(t *testing.T) {
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
 				return nil, cl.DeleteContext(context.Background(), ".myctx")
 			},
-			wantErr: &sr.ResponseError{StatusCode: http.StatusConflict},
+			wantErr: &sr.ResponseError{StatusCode: http.StatusUnprocessableEntity},
 		},
 		{
 			name: "Context Subjects - found",
@@ -2585,7 +2701,8 @@ func TestContextHandlers(t *testing.T) {
 			setup: func(r *srfake.Registry) {
 				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
 			},
-			wantStatus: http.StatusConflict,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42211, "message": "The specified context ':.myctx:' is not empty."}`,
 		},
 
 		// GET /contexts/{context}/schemas/ids/{id}
@@ -2894,13 +3011,30 @@ func TestContextHandlers(t *testing.T) {
 			wantBody:   `{"error_code": 400, "message": "Context name 'a:b' cannot contain a colon"}`,
 		},
 		{
+			name:   "DELETE /contexts/.myctx - soft-deleted subject keeps the context",
+			method: "DELETE",
+			path:   "/contexts/.myctx",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/:.myctx:topic-value", http.NoBody)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("setup failed: could not delete subject: %v", err)
+				}
+				resp.Body.Close()
+			},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42211, "message": "The specified context ':.myctx:' is not empty."}`,
+		},
+		{
 			name:   "DELETE /contexts/myctx - name without a leading dot",
 			method: "DELETE",
 			path:   "/contexts/myctx",
 			setup: func(r *srfake.Registry) {
 				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
 			},
-			wantStatus: http.StatusConflict,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody:   `{"error_code": 42211, "message": "The specified context ':.myctx:' is not empty."}`,
 		},
 
 		// References without a context in a context

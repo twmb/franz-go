@@ -34,15 +34,20 @@ func newErr(httpStatus, srCode int, format string, a ...any) *registryError {
 // Specific error constructors for common error scenarios
 
 func errSubjectNotFound(subject string) *registryError {
-	return newErr(http.StatusNotFound, sr.ErrSubjectNotFound.Code, "subject %q not found", subject)
+	return newErr(http.StatusNotFound, sr.ErrSubjectNotFound.Code, "Subject '%s' not found.", subject)
 }
 
-func errVersionNotFound(subject string, version int) *registryError {
-	return newErr(http.StatusNotFound, sr.ErrVersionNotFound.Code, "version %d not found for %q", version, subject)
+func errVersionNotFound(version int) *registryError {
+	return newErr(http.StatusNotFound, sr.ErrVersionNotFound.Code, "Version %d not found.", version)
 }
 
-func errSchemaNotFound() *registryError {
-	return newErr(http.StatusNotFound, sr.ErrSchemaNotFound.Code, "schema not found")
+// errSchemaNotFound names the ID or GUID that was not found, if any, as
+// Confluent's registry does.
+func errSchemaNotFound(what string) *registryError {
+	if what == "" {
+		return newErr(http.StatusNotFound, sr.ErrSchemaNotFound.Code, "Schema not found")
+	}
+	return newErr(http.StatusNotFound, sr.ErrSchemaNotFound.Code, "Schema %s not found", what)
 }
 
 func errSchemaIsReferenced(subject string, version int) *registryError {
@@ -77,8 +82,8 @@ func errInvalidSchemaWithCause(_ error, msg string) *registryError {
 	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "%s", msg)
 }
 
-func errInvalidVersion(msg string) *registryError {
-	return newErr(http.StatusBadRequest, sr.ErrInvalidVersion.Code, "%s", msg)
+func errInvalidVersion(version string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidVersion.Code, "The specified version '%s' is not a valid version id. Allowed values are between [1, 2^31-1] and the string \"latest\"", version)
 }
 
 func errInvalidCompatLevel() *registryError {
@@ -91,6 +96,10 @@ func errCompatNotConfigured(subject string) *registryError {
 
 func errModeNotConfigured(subject string) *registryError {
 	return newErr(http.StatusNotFound, sr.ErrSubjectLevelModeNotConfigured.Code, "Subject '%s' does not have subject-level mode configured", subject)
+}
+
+func errImportUnsupported() *registryError {
+	return newErr(http.StatusUnprocessableEntity, sr.ErrOperationNotPermitted.Code, "srfake does not support registering a schema with an ID in import mode")
 }
 
 // errModeRefuses is the error for an operation that the mode of subject
@@ -112,6 +121,6 @@ func errCircularDependency(subject string) *registryError {
 }
 
 func errContextNotEmpty(context string) *registryError {
-	return newErr(http.StatusConflict, sr.ErrOperationNotPermitted.Code,
-		"context %q is not empty", context)
+	return newErr(http.StatusUnprocessableEntity, sr.ErrContextNotEmpty.Code,
+		"The specified context '%s' is not empty.", qualifiedContext(context))
 }

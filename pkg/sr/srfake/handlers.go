@@ -190,7 +190,7 @@ func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request)
 
 	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(strconv.Itoa(id)))
 		return
 	}
 	body := idSchema{GUID: ss.GUID, Schema: ss.Schema}
@@ -214,7 +214,7 @@ func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Reque
 
 	ss, ok := r.schemaByIDLocked(id, subject, hasSubject)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(strconv.Itoa(id)))
 		return
 	}
 	respondJSON(w, http.StatusOK, ss.Schema.Schema)
@@ -236,7 +236,7 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 
 	usages, ok := r.idUsagesLocked(id, subject, hasSubject, deleted)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
 	respondJSON(w, http.StatusOK, usages)
@@ -257,7 +257,7 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 
 	usages, ok := r.idUsagesLocked(id, subject, hasSubject, deleted)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
 	subjects := make([]string, 0, len(usages))
@@ -312,7 +312,7 @@ func (r *Registry) handleGetSchemaByGUID(w http.ResponseWriter, req *http.Reques
 
 	ss, ok := r.subjectSchemaByGUIDLocked(guid)
 	if !ok {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(guid))
 		return
 	}
 	respondJSON(w, http.StatusOK, ss)
@@ -341,7 +341,7 @@ func (r *Registry) handleGetSchemaIDsByGUID(w http.ResponseWriter, req *http.Req
 		}
 	}
 	if len(byContext) == 0 {
-		r.handleAPIError(w, errSchemaNotFound())
+		r.handleAPIError(w, errSchemaNotFound(""))
 		return
 	}
 	ids := make([]sr.ContextID, 0, len(byContext))
@@ -500,13 +500,24 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 	req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
 	subject := req.PathValue("subject")
 
-	var body sr.Schema
+	var body struct {
+		sr.Schema
+		ID      *int `json:"id"`
+		Version *int `json:"version"`
+	}
 	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
 		return
 	}
+	reqID, reqVersion := -1, 0
+	if body.ID != nil {
+		reqID = *body.ID
+	}
+	if body.Version != nil {
+		reqVersion = *body.Version
+	}
 
-	id, _, err := r.RegisterSchema(subject, body)
+	id, _, err := r.register(subject, body.Schema, reqID, reqVersion)
 	if err != nil {
 		r.handleAPIError(w, err)
 		return
@@ -572,10 +583,16 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Check if the target schema exists
-	_, exists := r.getSchemaBySubjectVersionLocked(subject, version, del.any())
-	if !exists {
-		r.handleAPIError(w, errVersionNotFound(subject, version))
+	// Check if the target schema exists. As in Confluent's registry, a
+	// numbered version is found even if it is soft-deleted, and latest
+	// honors ?deleted.
+	asked, _ := parseVersion(versionStr)
+	if _, exists := r.getSchemaBySubjectVersionLocked(subject, version, del.any() || asked != -1); !exists {
+		if subj, ok := r.subjects[subject]; !ok || len(subj.versions) == 0 {
+			r.handleAPIError(w, errSubjectNotFound(subject))
+			return
+		}
+		r.handleAPIError(w, errVersionNotFound(version))
 		return
 	}
 
@@ -626,16 +643,17 @@ func (r *Registry) handleDeleteVersion(w http.ResponseWriter, req *http.Request)
 	verStr := req.PathValue("version")
 	permanent := req.URL.Query().Get("permanent") == "true"
 
-	version, err := strconv.Atoi(verStr)
+	version, err := parseVersion(verStr)
 	if err != nil {
-		r.handleAPIError(w, errInvalidVersion("invalid version"))
+		r.handleAPIError(w, err)
 		return
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if err := r.deleteVersion(subject, version, permanent); err != nil {
+	version, err = r.deleteVersion(subject, version, permanent)
+	if err != nil {
 		r.handleAPIError(w, err)
 		return
 	}
@@ -692,7 +710,7 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 		respondJSON(w, http.StatusOK, resp)
 		return
 	}
-	r.handleAPIError(w, errSchemaNotFound())
+	r.handleAPIError(w, errSchemaNotFound(""))
 }
 
 // handleCheckCompatibility emulates POST /compatibility/subjects/{subject}/versions/{version}
@@ -1011,11 +1029,9 @@ func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// As in Confluent's registry, a soft-deleted subject keeps its context.
 	for subject, subj := range r.subjects {
-		if !subj.active() {
-			continue
-		}
-		if subjectContext(subject) == ctx {
+		if len(subj.versions) > 0 && subjectContext(subject) == ctx {
 			r.handleAPIError(w, errContextNotEmpty(ctx))
 			return
 		}
