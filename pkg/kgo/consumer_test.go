@@ -64,6 +64,13 @@ func TestConsumeTopicRetrieval(t *testing.T) {
 	if len(topics) != 1 || topics[0] != topicName {
 		t.Fatalf("expected to see %v, got %v", topicName, topics)
 	}
+
+	// A name that no topic can have is skipped.
+	cl.AddConsumeTopics("", strings.Repeat("t", maxTopicLen+1))
+	cl.AddConsumePartitions(map[string]map[int32]Offset{"": {0: NewOffset()}})
+	if topics = cl.GetConsumeTopics(); len(topics) != 1 {
+		t.Fatalf("expected an empty and a too-long name to be skipped, got %d topics", len(topics))
+	}
 }
 
 // Allow adding a topic to consume after the client is initialized with nothing

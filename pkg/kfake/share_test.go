@@ -1240,6 +1240,7 @@ func TestShareGroupAckRenew(t *testing.T) {
 	// the gap between renews bounded by sleep + FlushAcks latency,
 	// not by ticker drift when FlushAcks stalls.
 	renewCount := 0
+	firstDeadline := acquired.AcquisitionDeadline()
 	deadline := time.Now().Add(900 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		acquired.Ack(kgo.AckRenew)
@@ -1267,6 +1268,9 @@ func TestShareGroupAckRenew(t *testing.T) {
 	// true correctness check is the "no redelivery on cl2" below.
 	if renewCount < 1 {
 		t.Fatalf("expected >=1 renew, got %d", renewCount)
+	}
+	if d := acquired.AcquisitionDeadline(); !d.After(firstDeadline) {
+		t.Errorf("AcquisitionDeadline is %v after %d renews, want later than the first deadline %v", d, renewCount, firstDeadline)
 	}
 
 	acquired.Ack(kgo.AckAccept)
@@ -2690,6 +2694,7 @@ func TestShareFetchAcquiredRanges(t *testing.T) {
 // Kafka. The group's member joins after two records are produced, and
 // share.auto.offset.reset is latest. Describing every offset right after the
 // join lists the partition with the start offset it has so far, -1 for none.
+// A row can also acknowledge offsets below the start offset after its fetch.
 func TestShareGroupStartOffset(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2699,6 +2704,7 @@ func TestShareGroupStartOffset(t *testing.T) {
 		addPart   bool // add partition 1 after the join, produce one record to it, and fetch it
 		described int64
 		want      [][2]int64
+		ackTo     int64 // after the fetch, acknowledge offsets 0 through ackTo, if positive
 	}{
 		// Altering to -1 leaves the partition without a start offset.
 		{name: "altered to -1", alter: new(int64(-1)), described: -1},
@@ -2709,6 +2715,9 @@ func TestShareGroupStartOffset(t *testing.T) {
 		// A new partition of a topic the group knows starts at 0, so
 		// a record produced to it before its first fetch is kept.
 		{name: "new partition of a known topic", addPart: true, described: -1, want: [][2]int64{{0, 0}}},
+		// An ack loop that stepped over every offset below the start
+		// offset would spin run() here for decades.
+		{name: "ack below a far start offset", alter: new(int64(1 << 62)), described: 1 << 62, ackTo: 1<<62 - 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -2805,6 +2814,11 @@ func TestShareGroupStartOffset(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("acquired %v, want %v", got, tc.want)
+			}
+			if tc.ackTo > 0 {
+				if code := rawShareAck(t, cl, group, memberID, topicID, 1, 0, tc.ackTo, int8(kgo.AckAccept)); code != 0 {
+					t.Errorf("ack: %v", kerr.ErrorForCode(code))
+				}
 			}
 		})
 	}
@@ -3250,6 +3264,15 @@ func TestShareGroupFetchAfterTimerWhileBuffered(t *testing.T) {
 	before := fetches.Load()
 	cl.PollFetches(ctx) // takes the buffered fetch
 	waitFor(t, 3*time.Second, "no ShareFetch after taking the buffered fetch", func() bool { return fetches.Load() > before })
+
+	// Closing with a fetch buffered and not polled counts the fetch's
+	// record as unbuffered.
+	produceShareN(t, c, topic, group, 1)
+	waitFor(t, 5*time.Second, "the next fetch was not buffered", func() bool { return cl.BufferedFetchRecords() == 1 })
+	cl.Close()
+	if n := cl.BufferedFetchRecords(); n != 0 {
+		t.Errorf("%d records still count as buffered after Close, want 0", n)
+	}
 }
 
 // TestShareGroupFetchPastDeadline verifies that a share source keeps

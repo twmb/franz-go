@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"hash/crc32"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -6084,5 +6085,155 @@ func TestKadmLogDirsRetriedShard(t *testing.T) {
 		if n, err := test.run(); err != nil || n != 4 {
 			t.Errorf("%s with a retried shard: %d replicas, err %v; want 4", test.key.Name(), n, err)
 		}
+	}
+}
+
+// TestRequestRefusedBeforeWrite verifies that the client refuses a request
+// larger than BrokerMaxWriteBytes, or with a field too long to encode,
+// instead of writing it. No other test covers the client's write limit, and
+// kgo's own tests have no broker to reach these checks.
+func TestRequestRefusedBeforeWrite(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(200, "many"))
+	cl := newPlainClient(t, c, kgo.ProducerBatchMaxBytes(512), kgo.BrokerMaxWriteBytes(1<<10))
+
+	req := kmsg.NewPtrMetadataRequest()
+	for i := range 100 { // over 1KiB of topic names
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr("topic-" + strconv.Itoa(i))
+		req.Topics = append(req.Topics, rt)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := req.RequestWith(ctx, cl); err == nil || !strings.Contains(err.Error(), "exceeds BrokerMaxWriteBytes") {
+		t.Fatalf("got error %v, want one saying the request exceeds BrokerMaxWriteBytes", err)
+	}
+
+	// A string too long for its length prefix is refused on every path to a
+	// broker, at a flexible version and at a classic one: through the
+	// client, through a chosen broker, and for a request the client pins
+	// to an old version.
+	long := strings.Repeat("a", math.MaxInt16+1)
+	big := newPlainClient(t, c) // the default BrokerMaxWriteBytes, so only the string's length refuses
+	v := kversion.Stable()
+	v.SetMaxKeyVersion(int16(kmsg.IncrementalAlterConfigs), 0)
+	pinned := newPlainClient(t, c, kgo.MaxVersions(v))
+	offsetDelete := kmsg.NewPtrOffsetDeleteRequest() // never flexible
+	offsetDelete.Group = "g"
+	odt := kmsg.NewOffsetDeleteRequestTopic()
+	odt.Topic = long
+	offsetDelete.Topics = append(offsetDelete.Topics, odt)
+	alter := kmsg.NewPtrIncrementalAlterConfigsRequest() // classic only at v0
+	ar := kmsg.NewIncrementalAlterConfigsRequestResource()
+	ar.ResourceType, ar.ResourceName = kmsg.ConfigResourceTypeTopic, "many"
+	ac := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+	ac.Name, ac.Value = "retention.ms", &long
+	ar.Configs = append(ar.Configs, ac)
+	alter.Resources = append(alter.Resources, ar)
+	for name, fn := range map[string]func() error{
+		"Client.Request": func() error { _, err := big.Request(ctx, offsetDelete); return err },
+		"Broker.Request": func() error { _, err := discoverBroker(t, big).Request(ctx, offsetDelete); return err },
+		"flexible":       func() error { _, err := big.Request(ctx, alter); return err },
+		"pinned classic": func() error { _, err := pinned.Request(ctx, alter); return err },
+	} {
+		if err := fn(); err == nil || !strings.Contains(err.Error(), "too long to encode") {
+			t.Errorf("%s: got error %v, want one saying a field is too long to encode", name, err)
+		}
+	}
+
+	// A fetch of 200 partitions is over 1KiB as well. The poller gets the
+	// error, rather than a consumer that stalls. The first fetch can go
+	// out before every partition is assigned and fit in 1KiB, so a short
+	// FetchMaxWait ends that fetch well before our context ends.
+	offsets := make(map[int32]kgo.Offset)
+	for p := range int32(200) {
+		offsets[p] = kgo.NewOffset().At(0)
+	}
+	consumer := newPlainClient(t, c, kgo.ProducerBatchMaxBytes(512), kgo.BrokerMaxWriteBytes(1<<10), kgo.FetchMaxWait(250*time.Millisecond), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"many": offsets}))
+	if err := consumer.PollFetches(ctx).Err0(); err == nil || !strings.Contains(err.Error(), "exceeds BrokerMaxWriteBytes") {
+		t.Errorf("poll got error %v, want one saying the request exceeds BrokerMaxWriteBytes", err)
+	}
+}
+
+// TestPausedTopicSplitAcrossFetchEntries verifies that pausing a topic whose
+// partitions a fetch response carries in two entries keeps the cursors of the
+// later entry (#1592). Like Kafka, we answer an incremental fetch in session
+// order and move a partition that returned records to the end. Once b/0 and
+// then a/1 return records, the order is a/0, b/0, a/1, so a fetch of all
+// three splits topic "a". A fetch of only a/0 and a/1 does not: we drop the
+// unchanged b/0 before we group partitions into entries.
+func TestPausedTopicSplitAcrossFetchEntries(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t, NumBrokers(1), SeedTopics(2, "a"), SeedTopics(1, "b"))
+	cl := newPlainClient(t, c, kgo.ConsumeTopics("a", "b"))
+	producer := newPlainClient(t, c, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// toEnd moves each partition, in turn, to the end of the session order.
+	toEnd := func(tps ...tp) {
+		for _, tp := range tps {
+			produceSync(t, producer, &kgo.Record{Topic: tp.t, Partition: tp.p})
+			consumeN(t, cl, 1, 5*time.Second)
+		}
+	}
+	// produce sends one request, so that one fetch response has every
+	// partition, and waits for the client to buffer that response.
+	produce := func(tps ...tp) {
+		t.Helper()
+		req := kmsg.NewProduceRequest()
+		req.Acks = -1
+		req.TimeoutMillis = 5000
+		for _, tp := range tps {
+			rt := kmsg.NewProduceRequestTopic()
+			rt.Topic, rt.TopicID = tp.t, c.TopicInfo(tp.t).TopicID
+			rp := kmsg.NewProduceRequestTopicPartition()
+			rp.Partition = tp.p
+			rp.Records = rawBatch(0, -1, -1, -1, kvRecord())
+			rt.Partitions = append(rt.Partitions, rp)
+			req.Topics = append(req.Topics, rt)
+		}
+		resp, err := req.RequestWith(ctx, producer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rt := range resp.Topics {
+			for _, rp := range rt.Partitions {
+				if err := kerr.ErrorForCode(rp.ErrorCode); err != nil {
+					t.Fatalf("produce to %s/%d: %v", rt.Topic, rp.Partition, err)
+				}
+			}
+		}
+		for cl.BufferedFetchRecords() < int64(len(tps)) {
+			if ctx.Err() != nil {
+				t.Fatalf("buffered %d records, want %d", cl.BufferedFetchRecords(), len(tps))
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	toEnd(tp{"a", 0}, tp{"b", 0}, tp{"a", 1})
+	produce(tp{"a", 0}, tp{"a", 1})
+	var entries int
+	for _, f := range cl.PollFetches(ctx) {
+		entries += len(f.Topics)
+	}
+	if entries != 1 {
+		t.Errorf("a fetch of a/0 and a/1 has %d topic entries, want 1", entries)
+	}
+
+	// The fetch above moved a/0 and a/1 to the end: b/0, a/0, a/1.
+	toEnd(tp{"b", 0}, tp{"a", 1})
+	produce(tp{"a", 0}, tp{"a", 1}, tp{"b", 0})
+
+	// With "a" paused, the poll strips a/0 and takes b/0's record,
+	// leaving a/1's entry buffered.
+	cl.PauseFetchTopics("a")
+	if fs := cl.PollRecords(ctx, 1); fs.NumRecords() != 1 || fs.Records()[0].Topic != "b" {
+		t.Fatalf("first poll got %v, want one record from b", fs.Records())
+	}
+	cl.ResumeFetchTopics("a")
+	if fs := cl.PollRecords(ctx, 10); fs.NumRecords() != 1 || fs.Records()[0].Partition != 1 {
+		t.Errorf("second poll got %v, want one record from a/1", fs.Records())
 	}
 }

@@ -99,6 +99,7 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				session.forgetPartition(name, p)
 			}
 		}
+		session.dropForgotten()
 	}
 	if session != nil {
 		resp.SessionID = session.id
@@ -159,17 +160,19 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		}
 	}
 
-	// For incremental fetches (session exists and not new), add session partitions
-	// that weren't in the request
+	// An incremental fetch (session exists and not new) answers every
+	// session partition, in session order as Kafka does, not request order.
 	if session != nil && !newSession {
-		inRequest := make(map[tp]bool)
+		fromRequest := make(map[tp]fetchPartition, len(toFetch))
 		inRequestUnknown := make(map[idp]bool)
+		var unknown []fetchPartition
 		for _, fp := range toFetch {
 			if fp.topic == "" {
 				inRequestUnknown[idp{fp.topicID, fp.partition}] = true
+				unknown = append(unknown, fp)
 				continue
 			}
-			inRequest[tp{fp.topic, fp.partition}] = true
+			fromRequest[tp{fp.topic, fp.partition}] = fp
 		}
 		for key, sp := range session.unknownIDs {
 			if inRequestUnknown[key] {
@@ -180,10 +183,13 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 			// the loop below picks up.
 			if topic := c.data.id2t[key.id]; topic != "" {
 				delete(session.unknownIDs, key)
+				if _, ok := session.partitions[tp{topic, key.p}]; !ok {
+					session.order = append(session.order, tp{topic, key.p})
+				}
 				session.partitions[tp{topic, key.p}] = sp
 				continue
 			}
-			toFetch = append(toFetch, fetchPartition{
+			unknown = append(unknown, fetchPartition{
 				topicID:      key.id,
 				partition:    key.p,
 				fetchOffset:  sp.fetchOffset,
@@ -191,33 +197,37 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				currentEpoch: sp.currentEpoch,
 			})
 		}
-		for key, sp := range session.partitions {
-			if !inRequest[key] {
-				topic := key.t
-				var staleID bool
-				if sp.topicID != (uuid{}) {
-					// v13+ entries are addressed by the ID they
-					// were added with. If it no longer resolves,
-					// the entry keeps the name it was inserted
-					// under, like a real broker: a deleted topic
-					// answers UNKNOWN_TOPIC_OR_PARTITION, a
-					// recreated one INCONSISTENT_TOPIC_ID from a
-					// broker hosting the new incarnation.
-					if _, ok := c.data.id2t[sp.topicID]; !ok {
-						staleID = true
-					}
-				}
-				toFetch = append(toFetch, fetchPartition{
-					topic:        topic,
-					topicID:      sp.topicID,
-					partition:    key.p,
-					fetchOffset:  sp.fetchOffset,
-					maxBytes:     sp.maxBytes,
-					currentEpoch: sp.currentEpoch,
-					staleID:      staleID,
-				})
+		ordered := make([]fetchPartition, 0, len(session.order)+len(unknown))
+		for _, key := range session.order {
+			if fp, ok := fromRequest[key]; ok {
+				ordered = append(ordered, fp)
+				continue
 			}
+			sp := session.partitions[key]
+			var staleID bool
+			if sp.topicID != (uuid{}) {
+				// v13+ entries are addressed by the ID they
+				// were added with. If it no longer resolves,
+				// the entry keeps the name it was inserted
+				// under, like a real broker: a deleted topic
+				// answers UNKNOWN_TOPIC_OR_PARTITION, a
+				// recreated one INCONSISTENT_TOPIC_ID from a
+				// broker hosting the new incarnation.
+				if _, ok := c.data.id2t[sp.topicID]; !ok {
+					staleID = true
+				}
+			}
+			ordered = append(ordered, fetchPartition{
+				topic:        key.t,
+				topicID:      sp.topicID,
+				partition:    key.p,
+				fetchOffset:  sp.fetchOffset,
+				maxBytes:     sp.maxBytes,
+				currentEpoch: sp.currentEpoch,
+				staleID:      staleID,
+			})
 		}
+		toFetch = append(ordered, unknown...)
 	}
 
 	// An unknown v13 topic ID has no name to authorize.
@@ -347,19 +357,15 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 		return nil, nil
 	}
 
-	id2t := make(map[uuid]string)
-	tidx := make(map[tkey]int)
-
+	// Kafka merges a partition into the previous topic entry only when
+	// that entry is the same topic and ID, so a topic whose partitions
+	// are not adjacent in the answer order appears in more than one entry.
 	donet := func(t string, id uuid) *kmsg.FetchResponseTopic {
-		key := tkey{t: t}
-		if t == "" {
-			key.id = id // unresolvable v13 IDs each get their own entry
+		if n := len(resp.Topics); n > 0 {
+			if last := &resp.Topics[n-1]; last.Topic == t && last.TopicID == id {
+				return last
+			}
 		}
-		if i, ok := tidx[key]; ok {
-			return &resp.Topics[i]
-		}
-		id2t[id] = t
-		tidx[key] = len(resp.Topics)
 		st := kmsg.NewFetchResponseTopic()
 		st.Topic = t
 		st.TopicID = id
@@ -621,6 +627,10 @@ type fetchSession struct {
 	id         int32
 	epoch      int32
 	partitions map[tp]fetchSessionPartition
+	// order is the order we answer an incremental fetch in, as Kafka
+	// does: a partition is added at the end, and a partition that
+	// returns records moves to the end.
+	order []tp
 	// unknownIDs holds v13+ entries whose topic ID did not resolve when
 	// they were added. Kafka caches these with no name and answers
 	// UNKNOWN_TOPIC_ID for them on every fetch of the session; a client
@@ -748,6 +758,7 @@ func (s *fetchSession) updatePartition(topic string, topicID uuid, partition int
 			lastHighWatermark:  -1,
 			lastLogStartOffset: -1,
 		}
+		s.order = append(s.order, key)
 	}
 }
 
@@ -756,6 +767,19 @@ func (s *fetchSession) forgetPartition(topic string, partition int32) {
 		return
 	}
 	delete(s.partitions, tp{topic, partition})
+}
+
+// dropForgotten removes forgotten partitions from order. We call it once per
+// request rather than once per forgotten partition, which would rewrite order
+// once per partition.
+func (s *fetchSession) dropForgotten() {
+	if s == nil || len(s.order) == len(s.partitions) {
+		return
+	}
+	s.order = slices.DeleteFunc(s.order, func(k tp) bool {
+		_, ok := s.partitions[k]
+		return !ok
+	})
 }
 
 // nameOfID returns the name of the session entry added under topicID for
@@ -806,11 +830,16 @@ func (s *fetchSession) bumpEpoch() {
 // updateAndFilterResponse records the HWM and logStartOffset from each
 // partition as baseline state. When filter is true, unchanged partitions
 // (no records, same HWM/logStartOffset, no error) are removed from the
-// response for incremental fetch.
+// response for incremental fetch, and partitions that returned records
+// move to the end of the session's order.
 func (s *fetchSession) updateAndFilterResponse(resp *kmsg.FetchResponse, filter bool) {
 	if s == nil {
 		return
 	}
+	var (
+		moved    map[tp]struct{}
+		movedSeq []tp
+	)
 	n := 0
 	for i := range resp.Topics {
 		rt := &resp.Topics[i]
@@ -819,6 +848,13 @@ func (s *fetchSession) updateAndFilterResponse(resp *kmsg.FetchResponse, filter 
 			rp := &rt.Partitions[j]
 			key := tp{rt.Topic, rp.Partition}
 			sp, ok := s.partitions[key]
+			if filter && ok && len(rp.RecordBatches) > 0 {
+				if moved == nil {
+					moved = make(map[tp]struct{})
+				}
+				moved[key] = struct{}{}
+				movedSeq = append(movedSeq, key)
+			}
 
 			include := !filter || !ok ||
 				len(rp.RecordBatches) > 0 ||
@@ -843,12 +879,31 @@ func (s *fetchSession) updateAndFilterResponse(resp *kmsg.FetchResponse, filter 
 			}
 		}
 		rt.Partitions = rt.Partitions[:np]
-		if len(rt.Partitions) > 0 {
-			resp.Topics[n] = *rt
-			n++
+		if len(rt.Partitions) == 0 {
+			continue
 		}
+		// Kafka drops unchanged partitions before it groups the rest
+		// into topic entries, so two entries of one topic that are
+		// adjacent only now are one entry.
+		if n > 0 && resp.Topics[n-1].Topic == rt.Topic && resp.Topics[n-1].TopicID == rt.TopicID {
+			resp.Topics[n-1].Partitions = append(resp.Topics[n-1].Partitions, rt.Partitions...)
+			continue
+		}
+		resp.Topics[n] = *rt
+		n++
 	}
 	resp.Topics = resp.Topics[:n]
+
+	// Kafka moves an incremental session's partition that returned records
+	// to the end of the session's order, so the next fetch answers the
+	// other partitions first.
+	if len(movedSeq) > 0 {
+		s.order = slices.DeleteFunc(s.order, func(k tp) bool {
+			_, ok := moved[k]
+			return ok
+		})
+		s.order = append(s.order, movedSeq...)
+	}
 }
 
 // fetchFaultKey is the fault key for a fetched partition. A fetch is served

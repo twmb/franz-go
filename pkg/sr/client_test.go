@@ -4,10 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -167,10 +172,18 @@ func TestSchemaRegistryAPI(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
+	// notSent reports whether err is an error from the client itself: the
+	// test server answers a path it does not know with a ResponseError.
+	notSent := func(err error) bool {
+		_, isResp := errors.AsType[*ResponseError](err)
+		return err != nil && !isResp
+	}
+
 	tests := []struct {
 		name     string
 		fn       func() (any, error)
 		expected string
+		err      bool
 	}{
 		{
 			name:     "get supported types",
@@ -361,10 +374,58 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			fn:       func() (any, error) { return c.SchemaVersionsByID(InContext(ctx, ".mycontext"), 1) },
 			expected: `[{"subject":"foo","version":1}]`,
 		},
+		{
+			name: "reject subject named dot", // would be PUT /mode, the global mode
+			fn:   func() (any, error) { return nil, c.SetMode(ctx, ModeReadOnly, ".")[0].Err },
+			err:  true,
+		},
+		{
+			name: "reject empty subject before sending", // would be GET /subjects/versions
+			fn: func() (any, error) {
+				_, err := c.SubjectVersions(ctx, "")
+				return notSent(err), nil
+			},
+			expected: `true`,
+		},
+		{
+			name: "a URL's password stays out of errors",
+			fn: func() (any, error) {
+				pc, err := NewClient(URLs("http://user:secret@127.0.0.1:1")) // nothing listens on port 1
+				if err != nil {
+					return nil, err
+				}
+				_, err = pc.Subjects(ctx)
+				return err != nil && !strings.Contains(err.Error(), "secret"), nil
+			},
+			expected: `true`,
+		},
+		{
+			name: "reject Do path with a bad escape before sending", // would be GET on the base URL
+			fn: func() (any, error) {
+				return notSent(c.Do(ctx, http.MethodGet, "/subjects/100%/versions", nil, nil)), nil
+			},
+			expected: `true`,
+		},
+		{
+			name:     "context dot is the default context",
+			fn:       func() (any, error) { return c.SubjectVersions(InContext(ctx, "."), dummySchema.Subject) },
+			expected: `[1]`,
+		},
+		{
+			name: "reject context named dot dot", // would be GET /subjects
+			fn:   func() (any, error) { return c.Subjects(InContext(ctx, "..")) },
+			err:  true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := test.fn()
+			if test.err {
+				if err == nil {
+					t.Errorf("expected an error, got %v", result)
+				}
+				return
+			}
 			if err != nil {
 				t.Errorf("failed to call test function: %s", err)
 				return
@@ -386,9 +447,10 @@ func TestOptValue(t *testing.T) {
 	httpcl := &http.Client{}
 	tlscfg := &tls.Config{}
 
+	urls := []string{"localhost:8081", "localhost2:8082"}
 	c, err := NewClient(
 		HTTPClient(httpcl),
-		URLs("localhost:8081", "localhost2:8082"),
+		URLs(urls...),
 		UserAgent("some-ua"),
 		DialTLSConfig(tlscfg),
 		BasicAuth("some-user", "some-pass"),
@@ -401,6 +463,9 @@ func TestOptValue(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("unable to create client: %s", err)
+	}
+	if urls[0] != "localhost:8081" {
+		t.Errorf("URLs wrote %q into the slice passed to it", urls[0])
 	}
 
 	cd, err := NewClient()
@@ -633,5 +698,58 @@ func TestCommSubjectSchemasDuplicates(t *testing.T) {
 		if !reflect.DeepEqual(tt.got, tt.exp) {
 			t.Errorf("%s: got %v != exp %v", tt.name, tt.got, tt.exp)
 		}
+	}
+}
+
+// TestRequestsInFlight verifies that a client has at most
+// maxConcurrentRequests requests in flight. Mode issues one request per
+// subject. TestSchemaRegistryAPI runs one call per row, so it cannot observe
+// requests in flight together.
+func TestRequestsInFlight(t *testing.T) {
+	t.Parallel()
+	var (
+		inFlight, peak atomic.Int32
+		full           = make(chan struct{})
+		closeFull      sync.Once
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for p := peak.Load(); n > p; p = peak.Load() {
+			if peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		// The first requests wait until maxConcurrentRequests are in
+		// flight, so the peak does not depend on timing. If the client
+		// allows fewer, the wait times out and the peak check fails.
+		if n >= maxConcurrentRequests {
+			closeFull.Do(func() { close(full) })
+		}
+		select {
+		case <-full:
+		case <-time.After(5 * time.Second):
+		}
+		// The sleep keeps requests in flight together, so that a
+		// client with no limit shows a higher peak.
+		time.Sleep(20 * time.Millisecond)
+		w.Write([]byte(`{"mode":"READONLY"}`))
+	}))
+	defer ts.Close()
+	cl, err := NewClient(URLs(ts.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjects := make([]string, 4*maxConcurrentRequests)
+	for i := range subjects {
+		subjects[i] = "s" + strconv.Itoa(i)
+	}
+	for _, r := range cl.Mode(context.Background(), subjects...) {
+		if r.Err != nil {
+			t.Fatal(r.Err)
+		}
+	}
+	if p := peak.Load(); p != maxConcurrentRequests {
+		t.Errorf("peak requests in flight: got %d, want %d", p, maxConcurrentRequests)
 	}
 }

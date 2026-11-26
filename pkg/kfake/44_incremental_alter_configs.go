@@ -114,12 +114,14 @@ outer:
 				rc := &rr.Configs[i]
 				switch rc.Op {
 				case kmsg.IncrementalAlterConfigOpSet:
-					if !validateBrokerConfig(rc.Name, rc.Value) {
+					if !validateBrokerConfig(rc.Name, rc.Value) || rc.Name == maxRequestBytesKey {
 						code = kerr.InvalidRequest.Code
 					}
 					dup[rc.Name] = rc.Value
 				case kmsg.IncrementalAlterConfigOpDelete:
-					delete(dup, rc.Name)
+					if rc.Name != maxRequestBytesKey { // Kafka accepts the delete and keeps a static config's value
+						delete(dup, rc.Name)
+					}
 				case kmsg.IncrementalAlterConfigOpAppend, kmsg.IncrementalAlterConfigOpSubtract:
 					if !isListConfig(rc.Name) {
 						code = kerr.InvalidConfig.Code

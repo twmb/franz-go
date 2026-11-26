@@ -552,6 +552,10 @@ func replaceFile(fsys fs, f file, tmpPath, path string) error {
 	return fsys.SyncDir(filepath.Dir(path))
 }
 
+// fileMode lets only the user running kfake read what we persist, which
+// includes SASL passwords and SCRAM salted passwords.
+const fileMode = 0o600
+
 // createTemp creates the temporary file path, which we rename over a live
 // file. We remove what is at path first and create with O_EXCL, so that a
 // symlink planted at path is replaced rather than followed, and its target
@@ -560,7 +564,7 @@ func createTemp(fsys fs, path string) (file, error) {
 	if err := fsys.Remove(path); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	return fsys.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	return fsys.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
 }
 
 // readJSONFile reads and unmarshals a JSON file. Returns false if the
@@ -797,11 +801,16 @@ func (c *Cluster) forEachPartition(fn func(topic string, part int32, pd *partDat
 		mu.Unlock()
 	}
 
+	// Each job renames and syncs files, and a goroutine blocked in a
+	// syscall holds an OS thread: thousands of such goroutines can
+	// exhaust the process's threads.
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, 64)
 	for _, j := range jobs {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(j partJob) {
-			defer wg.Done()
+			defer func() { <-sem; wg.Done() }()
 			if err := fn(j.topic, j.part, j.pd); err != nil {
 				setErr(fmt.Errorf("partition %s-%d: %w", j.topic, j.part, err))
 			}
@@ -913,10 +922,10 @@ func (c *Cluster) rebuildSegments(pd *partData, batches []*partBatch) bool {
 		}
 		si := segmentInfo{base: g.base, lastModified: time.Now().UnixMilli()}
 		var sf, xf file
-		if sf, err = c.fs.OpenFile(filepath.Join(tmp, segmentFileName(g.base)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil {
+		if sf, err = c.fs.OpenFile(filepath.Join(tmp, segmentFileName(g.base)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode); err != nil {
 			break
 		}
-		if xf, err = c.fs.OpenFile(filepath.Join(tmp, indexFileName(g.base)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err != nil {
+		if xf, err = c.fs.OpenFile(filepath.Join(tmp, indexFileName(g.base)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode); err != nil {
 			sf.Close()
 			break
 		}
@@ -1782,7 +1791,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 		c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: truncating %d corrupt bytes",
 			pd.t, pd.p, base, len(raw)-pos)
 		path := filepath.Join(pdir, segmentFileName(base))
-		if f, err := fsys.OpenFile(path, os.O_WRONLY, 0o644); err != nil {
+		if f, err := fsys.OpenFile(path, os.O_WRONLY, fileMode); err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "partition %s-%d segment %d: open for truncate: %v", pd.t, pd.p, base, err)
 		} else {
 			defer f.Close()
@@ -1801,7 +1810,7 @@ func (c *Cluster) loadSegmentBatches(pd *partData, fsys fs, pdir string, base in
 	expectedIdxBytes := int64(batchIdx * indexEntrySize)
 	if int64(len(idxRaw)) > expectedIdxBytes {
 		idxPath := filepath.Join(pdir, indexFileName(base))
-		if f, err := fsys.OpenFile(idxPath, os.O_WRONLY, 0o644); err == nil {
+		if f, err := fsys.OpenFile(idxPath, os.O_WRONLY, fileMode); err == nil {
 			f.Truncate(expectedIdxBytes)
 			f.Close()
 		}
@@ -1888,7 +1897,7 @@ func (c *Cluster) readLog(fsys fs, path string) ([]entryData, int64, error) {
 	entries, validBytes := readEntries(raw)
 	if validBytes < len(raw) {
 		c.cfg.logger.Logf(LogLevelWarn, "%s: discarding %d corrupt trailing bytes", filepath.Base(path), len(raw)-validBytes)
-		if f, err := fsys.OpenFile(path, os.O_WRONLY, 0o644); err == nil {
+		if f, err := fsys.OpenFile(path, os.O_WRONLY, fileMode); err == nil {
 			f.Truncate(int64(validBytes))
 			f.Close()
 		}
@@ -2076,12 +2085,12 @@ func (c *Cluster) loadSeqWindows(fsys fs, dir string, replayed map[*partData]boo
 func (c *Cluster) openSegmentFiles(pd *partData, pdir string) error {
 	base := pd.segments[len(pd.segments)-1].base
 	segPath := filepath.Join(pdir, segmentFileName(base))
-	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+	sf, err := c.fs.OpenFile(segPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, fileMode)
 	if err != nil {
 		return err
 	}
 	idxPath := filepath.Join(pdir, indexFileName(base))
-	idxF, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	idxF, err := c.fs.OpenFile(idxPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, fileMode)
 	if err != nil {
 		sf.Close()
 		return err
@@ -2176,7 +2185,7 @@ func (c *Cluster) persistGroupEntry(entry groupLogEntry) error {
 	}
 	if c.groupsLogFile == nil {
 		path := filepath.Join(c.cfg.dataDir, "groups.log")
-		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, fileMode)
 		if err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist group entry open: %v", err)
 			return err
@@ -2211,7 +2220,7 @@ func (c *Cluster) persistPIDEntry(entry pidLogEntry) error {
 	}
 	if c.pidsLogFile == nil {
 		path := filepath.Join(c.cfg.dataDir, "pids.log")
-		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := c.fs.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, fileMode)
 		if err != nil {
 			c.cfg.logger.Logf(LogLevelWarn, "persist pid entry open: %v", err)
 			return err
@@ -2667,7 +2676,8 @@ func (c *Cluster) saveSessionState() error {
 				ID:    fs.id,
 				Epoch: fs.epoch,
 			}
-			for k, p := range fs.partitions {
+			for _, k := range fs.order { // in order, so a restored session answers in the same order
+				p := fs.partitions[k]
 				sf.Partitions = append(sf.Partitions, sessionFetchSessionPart{
 					TopicID:            p.topicID,
 					Topic:              k.t,
@@ -2871,7 +2881,11 @@ func (c *Cluster) loadSessionState() error {
 				lastUsed:   time.Now(),
 			}
 			for _, p := range sf.Partitions {
-				fs.partitions[tp{p.Topic, p.Partition}] = fetchSessionPartition{
+				key := tp{p.Topic, p.Partition}
+				if _, ok := fs.partitions[key]; !ok {
+					fs.order = append(fs.order, key)
+				}
+				fs.partitions[key] = fetchSessionPartition{
 					topicID:            p.TopicID,
 					fetchOffset:        p.FetchOffset,
 					maxBytes:           p.MaxBytes,

@@ -36,7 +36,8 @@ import (
 type ResponseError struct {
 	// Method is the requested http method.
 	Method string `json:"-"`
-	// URL is the full path that was requested that resulted in this error.
+	// URL is the full path that was requested that resulted in this error,
+	// with any password in it replaced by "xxxxx".
 	URL string `json:"-"`
 	// StatusCode is the status code that was returned for this error.
 	StatusCode int `json:"-"`
@@ -79,6 +80,8 @@ type Client struct {
 	}
 	bearerToken string
 	preReq      func(req *http.Request) error
+
+	sem chan struct{} // a slot per request in flight, see maxConcurrentRequests
 }
 
 // NewClient returns a new schema registry client.
@@ -90,6 +93,7 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 		opts:     opts,
 		logFn:    func(int8, string, ...any) {},
 		logLvlFn: func() int8 { return LogLevelInfo },
+		sem:      make(chan struct{}, maxConcurrentRequests),
 	}
 
 	for _, opt := range opts {
@@ -261,34 +265,70 @@ func (cl *Client) Do(ctx context.Context, method, path string, v, into any) erro
 }
 
 func (cl *Client) get(ctx context.Context, path string, into any) error {
-	return cl.do(ctx, http.MethodGet, path, nil, into)
+	return cl.doOwn(ctx, http.MethodGet, path, nil, into)
 }
 
 func (cl *Client) post(ctx context.Context, path string, v, into any) error {
-	return cl.do(ctx, http.MethodPost, path, v, into)
+	return cl.doOwn(ctx, http.MethodPost, path, v, into)
 }
 
 func (cl *Client) put(ctx context.Context, path string, v, into any) error {
-	return cl.do(ctx, http.MethodPut, path, v, into)
+	return cl.doOwn(ctx, http.MethodPut, path, v, into)
 }
 
 func (cl *Client) delete(ctx context.Context, path string, into any) error {
-	return cl.do(ctx, http.MethodDelete, path, nil, into)
+	return cl.doOwn(ctx, http.MethodDelete, path, nil, into)
+}
+
+// JoinPath removes empty, "." and ".." segments, and PathEscape keeps them,
+// so a subject, GUID, or context that is empty or named either would change
+// the endpoint. doOwn checks a path our helpers built from such a name; a
+// path given to Do is the caller's.
+func (cl *Client) doOwn(ctx context.Context, method, path string, v, into any) error {
+	if p := path + "/"; strings.Contains(p, "//") || strings.Contains(p, "/./") || strings.Contains(p, "/../") {
+		return fmt.Errorf("invalid path %q: a subject, GUID, or context cannot be empty, %q, or %q", path, ".", "..")
+	}
+	return cl.do(ctx, method, path, v, into)
 }
 
 func (cl *Client) do(ctx context.Context, method, path string, v, into any) error {
+	// "." is the registry's default context, which has no path prefix.
 	ctxName := cl.schemaContext(ctx)
-	if ctxName != "" && !strings.HasPrefix(path, "/contexts/") {
+	if ctxName == ".." {
+		return fmt.Errorf("invalid schema context %q", ctxName)
+	}
+	if ctxName != "" && ctxName != "." && !strings.HasPrefix(path, "/contexts/") {
 		path = "/contexts/" + url.PathEscape(ctxName) + path
+	}
+	// URL.JoinPath returns the base URL alone for a path with an invalid
+	// escape, which would send the request to the registry's root.
+	if _, err := url.PathUnescape(path); err != nil {
+		return fmt.Errorf("invalid path %q: %w", path, err)
+	}
+
+	// At most maxConcurrentRequests requests are in flight per client.
+	select {
+	case cl.sem <- struct{}{}:
+		defer func() { <-cl.sem }()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	urls := cl.urls
 
 start:
-	reqURL, err := url.JoinPath(urls[0], path)
+	base, err := url.Parse(urls[0])
 	if err != nil {
-		return fmt.Errorf("unable to join path for %q and %q: %w", urls[0], path, err)
+		// A url.Error quotes the whole URL, password included.
+		if ue, ok := errors.AsType[*url.Error](err); ok {
+			err = ue.Err
+		}
+		return fmt.Errorf("unable to parse URL to join with %q: %w", path, err)
 	}
+	u := base.JoinPath(path)
+	// Logs and errors use logURL, which replaces a password in the URL with
+	// "xxxxx".
+	logURL := u.Redacted()
 
 	urls = urls[1:]
 
@@ -296,14 +336,14 @@ start:
 	if v != nil {
 		marshaled, err := json.Marshal(v)
 		if err != nil {
-			return fmt.Errorf("unable to encode body for %s %q: %w", method, reqURL, err)
+			return fmt.Errorf("unable to encode body for %s %q: %w", method, logURL, err)
 		}
 		reqBody = bytes.NewReader(marshaled)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), reqBody)
 	if err != nil {
-		return fmt.Errorf("unable to create request for %s %q: %v", method, reqURL, err)
+		return fmt.Errorf("unable to create request for %s %q: %v", method, logURL, err)
 	}
 	req.Header.Set("Content-Type", "application/vnd.schemaregistry.v1+json")
 	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
@@ -318,33 +358,33 @@ start:
 
 	if cl.preReq != nil {
 		if err := cl.preReq(req); err != nil {
-			return fmt.Errorf("pre-request hook failed for %s %q: %w", method, reqURL, err)
+			return fmt.Errorf("pre-request hook failed for %s %q: %w", method, logURL, err)
 		}
 	}
 	if cl.logLvlFn() >= LogLevelDebug {
-		cl.logFn(LogLevelDebug, "sending request", "method", method, "URL", req.URL.String(), "has_bearer", cl.bearerToken != "", "has_basic_auth", cl.basicAuth != nil)
+		cl.logFn(LogLevelDebug, "sending request", "method", method, "URL", req.URL.Redacted(), "has_bearer", cl.bearerToken != "", "has_basic_auth", cl.basicAuth != nil)
 	} else {
-		cl.logFn(LogLevelInfo, "sending request", "method", method, "URL", reqURL)
+		cl.logFn(LogLevelInfo, "sending request", "method", method, "URL", logURL)
 	}
 	resp, err := cl.httpcl.Do(req)
 	if err != nil {
 		if len(urls) == 0 {
-			return fmt.Errorf("unable to %s %q: %w", method, reqURL, err)
+			return fmt.Errorf("unable to %s %q: %w", method, logURL, err)
 		}
-		cl.logFn(LogLevelDebug, "retrying request", "method", method, "URL", reqURL, "error", err)
+		cl.logFn(LogLevelDebug, "retrying request", "method", method, "URL", logURL, "error", err)
 		goto start
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("unable to read response body from %s %q: %w", method, reqURL, err)
+		return fmt.Errorf("unable to read response body from %s %q: %w", method, logURL, err)
 	}
 
 	if resp.StatusCode >= 300 {
 		e := &ResponseError{
 			Method:     method,
-			URL:        reqURL,
+			URL:        logURL,
 			StatusCode: resp.StatusCode,
 			Raw:        bytes.TrimSpace(body),
 		}
@@ -361,7 +401,7 @@ start:
 			*into = body // return raw body to caller
 		default:
 			if err := json.Unmarshal(body, into); err != nil {
-				return fmt.Errorf("unable to decode ok response body from %s %q: %w", method, reqURL, err)
+				return fmt.Errorf("unable to decode ok response body from %s %q: %w", method, logURL, err)
 			}
 		}
 	}

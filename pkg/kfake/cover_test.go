@@ -1259,6 +1259,22 @@ func TestIncrementalAlterConfigsOperations(t *testing.T) {
 		t.Fatal(kerr.ErrorForCode(resp2.Resources[0].ErrorCode))
 	}
 
+	// Kafka reads socket.request.max.bytes only at startup, so both alter
+	// requests refuse to set it.
+	static := []kadm.AlterConfig{{Name: "socket.request.max.bytes", Value: kadm.StringPtr("5")}}
+	for name, alter := range map[string]func(context.Context, []kadm.AlterConfig, ...int32) (kadm.AlterConfigsResponses, error){
+		"IncrementalAlterConfigs": adm.AlterBrokerConfigs,
+		"AlterConfigs":            adm.AlterBrokerConfigsState,
+	} {
+		rs, err := alter(ctx, static)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rs) != 1 || !errors.Is(rs[0].Err, kerr.InvalidRequest) {
+			t.Errorf("%s of socket.request.max.bytes: got %+v, want INVALID_REQUEST", name, rs)
+		}
+	}
+
 	// Verify it was deleted (should not appear as dynamic config).
 	bcfgs2, err := adm.DescribeBrokerConfigs(ctx)
 	if err != nil {

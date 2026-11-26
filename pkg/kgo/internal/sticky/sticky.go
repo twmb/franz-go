@@ -478,9 +478,9 @@ type topicPartition struct {
 func deserializeUserData(userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation uint32) {
 	memberPlan = base[:0]
 	b := kbin.Reader{Src: userdata}
-	for numAssignments := b.ArrayLen(); numAssignments > 0; numAssignments-- {
+	for numAssignments := b.ArrayLen(); numAssignments > 0 && b.Ok(); numAssignments-- {
 		topic := b.UnsafeString()
-		for numPartitions := b.ArrayLen(); numPartitions > 0; numPartitions-- {
+		for numPartitions := b.ArrayLen(); numPartitions > 0 && b.Ok(); numPartitions-- {
 			memberPlan = append(memberPlan, topicPartition{
 				topic,
 				b.Int32(),

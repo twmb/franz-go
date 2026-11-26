@@ -229,6 +229,16 @@ var (
 	// a record batch too large for the client to ever read.
 	errResponseTooLarge = errors.New("response exceeds BrokerMaxReadBytes")
 
+	// A broker refuses a request larger than its socket.request.max.bytes,
+	// which BrokerMaxWriteBytes is set to match.
+	errRequestTooLarge = errors.New("request exceeds BrokerMaxWriteBytes")
+
+	// kmsg refuses to encode a string, bytes, array, or tagged field that
+	// is too long for its length prefix, and a request over math.MaxInt32
+	// bytes: the length would wrap, and the broker would read the excess
+	// as later fields or later requests.
+	errRequestFieldTooLong = errors.New("request has a field too long to encode")
+
 	// Returned when trying to call group functions when the client is not
 	// assigned a group.
 	errNotGroup = errors.New("invalid group function call when not assigned a group")
@@ -506,6 +516,10 @@ type errApiVersionsReset struct {
 // situation is non-actionable -- the broker session is gone. Users
 // should treat this as fatal-for-this-record and not retry.
 var errShareConsumerLeft = errors.New("share consumer has left the group; ack will not be delivered")
+
+// The broker answered an ack with a retryable error until no retry could go
+// out before the acquisition lock deadline of the ack's records.
+var errShareAckDeadline = errors.New("unable to acknowledge before the record's acquisition lock deadline")
 
 // errBrokerOmittedAckPartition is reported via shareAckCallback when
 // the broker's ShareFetch or ShareAcknowledge response did not echo a

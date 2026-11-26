@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -17,13 +18,16 @@ import (
 // This client may add fields to this struct in the future if Kafka adds more
 // capabilities to Oauth.
 type Auth struct {
-	// Zid is an optional authorization ID to use in authenticating.
+	// Zid is an optional authorization ID to use in authenticating. It
+	// cannot contain \x01.
 	Zid string
 
 	// Token is the oauthbearer token to use for a single session's
-	// authentication.
+	// authentication. It cannot contain \x01.
 	Token string
 	// Extensions are key value pairs to add to the authentication request.
+	// A key cannot be "auth" or contain '=', and neither a key nor a value
+	// can contain \x01.
 	Extensions map[string]string
 
 	_ struct{} // require explicit field initialization
@@ -52,6 +56,10 @@ func Oauth(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 
 type oauth func(context.Context) (Auth, error)
 
+// The authorization ID is a saslname in the gs2-header (RFC 5801), in which
+// ',' and '=' are escaped.
+var saslnameEscaper = strings.NewReplacer("=", "=3D", ",", "=2C")
+
 func (oauth) Name() string { return "OAUTHBEARER" }
 func (fn oauth) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte, error) {
 	auth, err := fn(ctx)
@@ -61,11 +69,17 @@ func (fn oauth) Authenticate(ctx context.Context, _ string) (sasl.Session, []byt
 	if auth.Token == "" {
 		return nil, nil, errors.New("OAUTHBEARER token must be non-empty")
 	}
+	// A \x01 ends a key value pair, so a token, zid, or extension
+	// containing a \x01 could add pairs of its own, including a second
+	// auth pair that replaces our token.
+	if strings.ContainsRune(auth.Token, '\x01') || strings.ContainsRune(auth.Zid, '\x01') {
+		return nil, nil, errors.New("OAUTHBEARER token and zid cannot contain \\x01")
+	}
 
 	// https://tools.ietf.org/html/rfc7628#section-3.1
 	gs2Header := "n," // no channel binding
 	if auth.Zid != "" {
-		gs2Header += "a=" + auth.Zid
+		gs2Header += "a=" + saslnameEscaper.Replace(auth.Zid)
 	}
 	gs2Header += ","
 	init := []byte(gs2Header + "\x01auth=Bearer ")
@@ -76,9 +90,13 @@ func (fn oauth) Authenticate(ctx context.Context, _ string) (sasl.Session, []byt
 		if k == "" {
 			continue
 		}
+		v := auth.Extensions[k]
+		if k == "auth" || strings.ContainsAny(k, "=\x01") || strings.ContainsRune(v, '\x01') {
+			return nil, nil, fmt.Errorf("OAUTHBEARER extension %q has an invalid key or value", k)
+		}
 		init = append(init, k...)
 		init = append(init, '=')
-		init = append(init, auth.Extensions[k]...)
+		init = append(init, v...)
 		init = append(init, '\x01')
 	}
 	init = append(init, '\x01')

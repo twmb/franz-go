@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -532,31 +533,47 @@ func TestReadersWaitForFirstPartitions(t *testing.T) {
 // record's Offset was its index within the failed batch and its
 // ProducerID/ProducerEpoch were 0 - plausible-looking garbage. Failures must
 // carry the -1 unknown-sentinels (the success path already does for acks=0's
-// unknown base offset).
+// unknown base offset). Each row is a record we refuse before buffering it,
+// with the error we refuse it with.
 func TestAuditFailedRecordSentinels(t *testing.T) {
 	t.Parallel()
 
-	cl, err := NewClient(SeedBrokers("127.0.0.1:1"))
+	cl, err := NewClient(
+		SeedBrokers("127.0.0.1:1"), // never successfully dialed
+		ProducerBatchMaxBytes(512),
+		BrokerMaxWriteBytes(1<<10),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cl.Close()
 
-	done := make(chan struct{})
-	cl.TryProduce(context.Background(), &Record{}, func(r *Record, err error) {
-		defer close(done)
-		if err == nil {
-			t.Error("expected topic-less record to fail")
+	// Each record fails before it is buffered, so before any request.
+	for _, tc := range []struct {
+		name string
+		r    *Record
+		want string
+	}{
+		{"no topic", &Record{}, errNoTopic.Error()},
+		{"long topic", &Record{Topic: strings.Repeat("t", maxTopicLen+1)}, "invalid long topic name"},
+		{"record over BrokerMaxWriteBytes", &Record{Topic: "t", Value: make([]byte, 2<<10)}, "MESSAGE_TOO_LARGE"},
+	} {
+		done := make(chan struct{})
+		cl.TryProduce(context.Background(), tc.r, func(r *Record, err error) {
+			defer close(done)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("%s: got error %v, want one containing %q", tc.name, err, tc.want)
+			}
+			if r.Offset != -1 || r.ProducerID != -1 || r.ProducerEpoch != -1 || r.LeaderEpoch != -1 {
+				t.Errorf("%s: failed record carries offset=%d pid=%d pepoch=%d lepoch=%d, want -1 sentinels",
+					tc.name, r.Offset, r.ProducerID, r.ProducerEpoch, r.LeaderEpoch)
+			}
+		})
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: promise never fired", tc.name)
 		}
-		if r.Offset != -1 || r.ProducerID != -1 || r.ProducerEpoch != -1 || r.LeaderEpoch != -1 {
-			t.Errorf("failed record carries offset=%d pid=%d pepoch=%d lepoch=%d, want -1 sentinels",
-				r.Offset, r.ProducerID, r.ProducerEpoch, r.LeaderEpoch)
-		}
-	})
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("promise never fired")
 	}
 }
 

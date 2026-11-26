@@ -636,13 +636,20 @@ func (cl *Client) produce(
 		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNoTopic)
 		return
 	}
+	if len(r.Topic) > maxTopicLen {
+		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, fmt.Errorf("invalid long topic name of (len %d) greater than max allowed %d", len(r.Topic), maxTopicLen))
+		return
+	}
 	if cl.cfg.txnID != nil && !p.producingTxn.Load() {
 		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNotInTransaction)
 		return
 	}
 
+	// A record larger than any request we write can never be sent, and
+	// a record past math.MaxInt32 bytes would wrap the int32 length we
+	// encode it with.
 	userSize := r.userSize()
-	if cl.cfg.maxBufferedBytes > 0 && userSize > cl.cfg.maxBufferedBytes {
+	if userSize > int64(cl.cfg.maxBrokerWriteBytes) || cl.cfg.maxBufferedBytes > 0 && userSize > cl.cfg.maxBufferedBytes {
 		p.promiseRecordBeforeBuf(
 			promisedRec{ctx, promise, r},
 			fmt.Errorf("%w (uncompressed_bytes=%d)", kerr.MessageTooLarge, userSize),

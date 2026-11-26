@@ -4,10 +4,10 @@ package kerberos
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
-	"strings"
 
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/gssapi"
@@ -110,11 +110,23 @@ var _ sasl.ClosingMechanism = new(closing)
 
 // Close implements sasl.ClosingMechanism.
 func (c *closing) Close() {
-	c.auth.Client.Destroy()
+	if c.auth.Client != nil { // nil if the Auth has only a ClientFn
+		c.auth.Client.Destroy()
+	}
 }
 
 func (k) Name() string { return "GSSAPI" }
 func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {
+	// A host without a port, including a bare IPv6 address, fails to
+	// split and is used as is.
+	addr := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "" {
+		return nil, nil, fmt.Errorf("kerberos: address %q has no host to request a service ticket for", addr)
+	}
+
 	kerb, err := k(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -125,6 +137,9 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 	if kerb.ClientFn != nil {
 		persist = false
 		c.Client = kerb.ClientFn(ctx)
+	}
+	if c.Client == nil {
+		return nil, nil, errors.New("kerberos: Client or ClientFn must provide a non-nil client")
 	}
 
 	if !persist {
@@ -137,12 +152,6 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 
 	if err := c.AffirmLogin(); err != nil {
 		return nil, nil, err
-	}
-
-	if strings.IndexByte(host, ':') != 0 {
-		if host, _, err = net.SplitHostPort(host); err != nil {
-			return nil, nil, err
-		}
 	}
 
 	ticket, encKey, err := c.GetServiceTicket(kerb.Service + "/" + host)

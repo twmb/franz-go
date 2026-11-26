@@ -65,6 +65,7 @@ type (
 		sasls              sasls
 		acls               clusterACLs
 		bcfgs              map[string]*string
+		maxRequestBytes    int32 // socket.request.max.bytes, set once before any listener starts; the connection read loops run outside run() and cannot read bcfgs
 		quotas             map[string]quotaEntry
 		telem              map[[16]byte]telemClient // client instance ID -> the client, see telemClientFor
 		telemVersion       int                      // bumped when a client metrics subscription changes, see telemClientFor
@@ -349,6 +350,8 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 
 	c.refreshCompactTicker() // before run, for seeded and loaded topics
+	// Static, and set before the deferred listens above accept anything.
+	c.maxRequestBytes = c.brokerConfigInt(maxRequestBytesKey, defMaxRequestBytes)
 	go c.run()
 
 	return c, nil
@@ -424,8 +427,19 @@ func (c *Cluster) drainReqChForShutdown() {
 	for {
 		select {
 		case creq := <-c.reqCh:
-			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); ok {
-				creq.reply(c.groups.handleOffsetCommit(creq))
+			if _, ok := creq.kreq.(*kmsg.OffsetCommitRequest); !ok {
+				continue
+			}
+			// We run what run() runs for a request, minus controls: a
+			// control can sleep the request, and nothing wakes it now.
+			// OffsetCommit has no top-level error, so its faults fire
+			// in the handler.
+			if c.cfg.enableSASL && !c.handleSASL(creq) {
+				continue
+			}
+			creq.faults = c.faultsFor(creq)
+			if kresp, err := c.handleOffsetCommit(creq); err == nil {
+				creq.reply(kresp)
 			}
 		default:
 			return

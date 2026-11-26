@@ -39,8 +39,9 @@ func TestConfigHeartbeatExceedsSessionTimeout(t *testing.T) {
 // Empty topic names and negative partitions are never valid; today they spin
 // on UNKNOWN_TOPIC metadata (or an eternal load) with no surfaced error, so we
 // reject them at construction. An empty string in regex mode is a valid
-// match-all pattern and is left alone.
-func TestConfigRejectsEmptyTopicNames(t *testing.T) {
+// match-all pattern and is left alone. A topic name over 249 bytes and a
+// group or instance ID over 16382 bytes are rejected as well.
+func TestConfigRejectsInvalidNames(t *testing.T) {
 	bad := []struct {
 		name string
 		opts []Opt
@@ -48,6 +49,10 @@ func TestConfigRejectsEmptyTopicNames(t *testing.T) {
 		{"empty ConsumeTopics name", []Opt{ConsumeTopics("ok", "")}},
 		{"empty ConsumePartitions topic", []Opt{ConsumePartitions(map[string]map[int32]Offset{"": {0: NewOffset().AtStart()}})}},
 		{"negative ConsumePartitions partition", []Opt{ConsumePartitions(map[string]map[int32]Offset{"t": {-1: NewOffset().AtStart()}})}},
+		{"long ConsumeTopics name", []Opt{ConsumeTopics(strings.Repeat("t", maxTopicLen+1))}},
+		{"long ConsumePartitions topic", []Opt{ConsumePartitions(map[string]map[int32]Offset{strings.Repeat("t", maxTopicLen+1): {0: NewOffset().AtStart()}})}},
+		{"long ConsumerGroup", []Opt{ConsumerGroup(strings.Repeat("g", 16383))}},
+		{"long InstanceID", []Opt{ConsumerGroup("g"), InstanceID(strings.Repeat("i", 16383))}},
 	}
 	for _, b := range bad {
 		if _, _, err := validateCfg(b.opts...); err == nil {
@@ -62,6 +67,8 @@ func TestConfigRejectsEmptyTopicNames(t *testing.T) {
 		{"valid ConsumeTopics", []Opt{ConsumeTopics("a", "b")}},
 		{"valid ConsumePartitions", []Opt{ConsumePartitions(map[string]map[int32]Offset{"t": {0: NewOffset().AtStart()}})}},
 		{"empty regex is match-all", []Opt{ConsumeRegex(), ConsumeTopics("")}},
+		{"ConsumerGroup at the limit", []Opt{ConsumerGroup(strings.Repeat("g", 16382))}},
+		{"ConsumeTopics name at the limit", []Opt{ConsumeTopics(strings.Repeat("t", maxTopicLen))}},
 	}
 	for _, g := range good {
 		if _, _, err := validateCfg(g.opts...); err != nil {

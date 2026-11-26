@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/binary"
 	"hash/crc32"
+	"runtime"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kbin"
@@ -53,6 +54,9 @@ func processLegacySet(t *testing.T, askOffset int64, set []byte) (FetchPartition
 		Offset:    askOffset,
 		Topic:     "t",
 		Partition: 0,
+		shareAckSlab: func(n int, r *Record) *shareAckSlab {
+			return &shareAckSlab{states: make([]shareAckState, n), records0: r}
+		},
 	}
 	return ProcessFetchPartition(opts, rp, DefaultDecompressor(), nil)
 }
@@ -164,6 +168,9 @@ func TestLegacyMessageSetInnerOffsets(t *testing.T) {
 			var got []int64
 			for _, r := range fp.Records {
 				got = append(got, r.Offset)
+				if shareAckFromCtx(r) == nil { // a share consumer acks every record it returns
+					t.Errorf("record at offset %d has no share ack state", r.Offset)
+				}
 			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("got offsets %v, want %v", got, tc.want)
@@ -241,5 +248,41 @@ func TestEmptyBatchClaimingRecords(t *testing.T) {
 	}
 	if next != 15 {
 		t.Errorf("compacted-empty batch advanced to %d; want 15 (past the preserved last offset)", next)
+	}
+}
+
+// A batch's claimed record count and a record's claimed header count are
+// limited to what the bytes can hold, since we allocate for every claimed
+// element before decoding any. TestEmptyBatchClaimingRecords runs in
+// parallel; this test measures allocation, so it does not.
+func TestBatchCountsBoundAllocation(t *testing.T) {
+	process := func(numRecords int32, records []byte) uint64 {
+		rp := &kmsg.FetchResponseTopicPartition{
+			Partition:     0,
+			HighWatermark: 1 << 30,
+			RecordBatches: encodeV2Batch(10, numRecords-1, numRecords, records),
+		}
+		opts := ProcessFetchPartitionOpts{Offset: 10, Topic: "t", Partition: 0}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		ProcessFetchPartition(opts, rp, DefaultDecompressor(), nil)
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	const n = 1 << 20
+
+	// 2^20 claimed records in 2^20 bytes: at most 2^20/7 fit.
+	if got := process(n, make([]byte, n)); got > 64<<20 {
+		t.Errorf("a false record count allocated %d bytes", got)
+	}
+
+	// One record with attributes, a timestamp delta, an offset delta, a
+	// null key, and a null value, claiming 2^20 headers in 2^20 bytes: at
+	// most 2^19 fit.
+	rec := kbin.AppendVarint([]byte{0, 0, 0, 1, 1}, n)
+	rec = append(rec, make([]byte, n)...)
+	rec = append(kbin.AppendVarint(nil, int32(len(rec))), rec...)
+	if got := process(1, rec); got > 8<<20 {
+		t.Errorf("a false header count allocated %d bytes", got)
 	}
 }

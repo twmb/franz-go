@@ -198,11 +198,11 @@ type Record struct {
 }
 
 func (r *Record) userSize() int64 {
-	s := len(r.Key) + len(r.Value)
+	s := int64(len(r.Key)) + int64(len(r.Value)) // int64: an int sum can wrap on 32-bit
 	for _, h := range r.Headers {
-		s += len(h.Key) + len(h.Value)
+		s += int64(len(h.Key)) + int64(len(h.Value))
 	}
-	return int64(s)
+	return s
 }
 
 // When buffering records, we calculate the length and tsDelta ahead of time
@@ -247,6 +247,8 @@ func (r *Record) DeliveryCount() int32 {
 // time. Returns the zero time for records that are not from a share group
 // fetch.
 //
+// After a successful AckRenew of the record, this is the renewed deadline.
+//
 // Note this is computed from the acquisition timeout millis in the Kafka
 // ShareFetch response when the client decodes the response. The milliseconds
 // are computed on the broker, and the timeout begins before the fetch is sent
@@ -260,6 +262,13 @@ func (r *Record) AcquisitionDeadline() time.Time {
 	slab, _ := r.Context.Value(shareAckKey).(*shareAckSlab)
 	if slab == nil {
 		return time.Time{}
+	}
+	// A record that was not acquired has a state with no slab, and a copy
+	// of a record has no state we can find: both read the batch's deadline.
+	if st := shareAckFromCtx(r); st != nil {
+		if renewed := st.renewedDeadline.Load(); renewed != 0 {
+			return time.Unix(0, renewed)
+		}
 	}
 	return time.Unix(0, slab.acqLockDeadlineNanos)
 }
@@ -668,7 +677,8 @@ func (fs Fetches) RecordsAll() iter.Seq[*Record] {
 // EachPartition calls fn for each partition in Fetches.
 //
 // Partitions are not visited in any specific order, and a topic may be visited
-// multiple times if it is spread across fetches.
+// multiple times if it is spread across fetches or across the entries of one
+// fetch.
 func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
 	for _, fetch := range fs {
 		for _, topic := range fetch.Topics {
@@ -684,31 +694,42 @@ func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
 
 // EachTopic calls fn for each topic in Fetches.
 //
-// This is a convenience function that groups all partitions for the same topic
-// from many fetches into one FetchTopic. A map is internally allocated to
-// group partitions per topic before calling fn.
+// This is a convenience function that groups all partitions for the same
+// topic, across fetches and across the entries of one fetch, into one
+// FetchTopic. A map is internally allocated to group partitions per topic
+// before calling fn.
 func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 	switch len(fs) {
 	case 0:
 		return
 	case 1:
-		for _, topic := range fs[0].Topics {
-			fn(topic)
+		// A broker can split a topic across entries of one response,
+		// when the topic's partitions are not adjacent in the fetch
+		// session's order. Only a response with one entry needs no
+		// grouping.
+		if topics := fs[0].Topics; len(topics) <= 1 {
+			for _, topic := range topics {
+				fn(topic)
+			}
+			return
 		}
-		return
 	}
 
 	// A topic's partitions are led by different brokers, so the same topic
 	// is spread across multiple Fetch entries (one per broker response); we
 	// must carry the TopicID across them rather than zeroing it. The broker
-	// returns the same ID in every fetch response for the topic, so the
-	// first non-zero copy is authoritative. Without this, EachTopic returns
-	// a zero TopicID whenever more than one broker replied -- i.e. nearly
+	// returns the same ID in every fetch response for the topic, so any
+	// non-zero copy is authoritative. Without this, EachTopic returns a
+	// zero TopicID whenever more than one broker replied -- i.e. nearly
 	// always in a real cluster, yet never in a single-broker test.
 	topics := make(map[string][]FetchPartition)
 	ids := make(map[string][16]byte)
+	var order []string // we call fn in the order topics first appear
 	for _, fetch := range fs {
 		for _, topic := range fetch.Topics {
+			if _, seen := topics[topic.Topic]; !seen {
+				order = append(order, topic.Topic)
+			}
 			topics[topic.Topic] = append(topics[topic.Topic], topic.Partitions...)
 			if topic.TopicID != noID {
 				ids[topic.Topic] = topic.TopicID
@@ -716,11 +737,11 @@ func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 		}
 	}
 
-	for topic, partitions := range topics {
+	for _, topic := range order {
 		fn(FetchTopic{
 			topic,
 			ids[topic],
-			partitions,
+			topics[topic],
 		})
 	}
 }

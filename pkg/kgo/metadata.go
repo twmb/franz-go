@@ -201,6 +201,42 @@ func (cl *Client) triggerUpdateMetadataNow(why string) {
 	}
 }
 
+// Deletes the sink and source of every broker that is no longer in metadata
+// once nothing uses them, so that a cluster replacing brokers with new IDs
+// does not grow sinksAndSources for the life of the client. An entry that
+// still has partitions, cursors, or purged acks to send stays until a later
+// update finds the entry empty. We kill a source before we forget it: a
+// share source's fetch loop can still be running, and the source must not
+// write to a broker that returns under the same ID.
+//
+// Only the metadata goroutine moves partitions onto an entry, and we run on
+// it, so nothing is added to an entry between our check and our delete. The
+// exception is a preferred replica move, which can also recreate its
+// leader's entry, and which keeps sinksAndSourcesMu locked from its lookup
+// through adding its cursor.
+func (cl *Client) pruneSinksAndSources() {
+	known := make(map[int32]struct{})
+	cl.brokersMu.RLock()
+	for _, bs := range [][]*broker{cl.brokers, cl.loadSeeds()} {
+		for _, b := range bs {
+			known[b.meta.NodeID] = struct{}{}
+		}
+	}
+	cl.brokersMu.RUnlock()
+
+	cl.sinksAndSourcesMu.Lock()
+	defer cl.sinksAndSourcesMu.Unlock()
+	for id, sns := range cl.sinksAndSources {
+		if _, ok := known[id]; ok {
+			continue
+		}
+		if sns.sink.empty() && sns.source.empty() {
+			sns.source.kill()
+			delete(cl.sinksAndSources, id)
+		}
+	}
+}
+
 func (cl *Client) blockingMetadataFn(fn func()) {
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -283,6 +319,9 @@ loop:
 
 		retryWhy, err := cl.updateMetadata()
 		lastAt = time.Now()
+		if err == nil {
+			cl.pruneSinksAndSources()
+		}
 		if retryWhy != nil || err != nil {
 			// If err is non-nil, the metadata request failed
 			// itself and already retried 3x; we do not loop more.
@@ -718,8 +757,8 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 		}
 
 		// This 249 limit is in Kafka itself, we copy it here to rely on it while producing.
-		if len(topic) > 249 {
-			mt.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed 249", len(topic))
+		if len(topic) > maxTopicLen {
+			mt.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed %d", len(topic), maxTopicLen)
 			continue
 		}
 
@@ -784,7 +823,9 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string, prune bool) (
 				cl.sinksAndSources[mp.leader] = sns
 			}
 			for _, replica := range partMeta.Replicas {
-				if replica < 0 {
+				// A replica missing from Brokers has no address, and
+				// skipping it keeps made-up IDs out of the map.
+				if _, ok := brokers[replica]; !ok || replica < 0 {
 					continue
 				}
 				if _, exists = cl.sinksAndSources[replica]; !exists {

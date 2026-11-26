@@ -63,11 +63,19 @@ type sourceShare struct {
 	cursorsStart int
 	sessionEpoch int32              // 0=new, incremented on success, -1=close
 	sessionGen   uint32             // incremented on every session reset; stamps acks so we drop those from an earlier session
-	sessionParts map[tidp]struct{}  // broker-confirmed session partitions; createShareFetchReq diffs WANT against this to compute add/forget
+	sessionParts map[tidp]struct{}  // broker-confirmed session partitions; createShareReq diffs WANT against this to compute add/forget
 	ackCh        chan struct{}      // acks pending, batch on timer
 	ackFlushCh   chan struct{}      // flush acks immediately
 	buffered     shareBufferedFetch // decoded share fetch waiting for poll
 	purgedAcks   []cursorAckDrain   // acks drained from purged cursors, sent with the next request
+	dead         chan struct{}      // closed by kill: the loop exits, and the source builds, buffers, and sends nothing more
+
+	// After a ShareAcknowledge sent by itself has acks requeued, we send
+	// acks by themselves again only at ackRetryAt. Only the loop uses
+	// these three.
+	ackRequeues  int         // consecutive requeues, for the backoff
+	ackRetryAt   time.Time   // shareAck drains nothing before this
+	ackRetryWake *time.Timer // signals a flush at ackRetryAt
 }
 
 func (cl *Client) newSource(nodeID int32) *source {
@@ -84,6 +92,7 @@ func (cl *Client) newSource(nodeID int32) *source {
 	s.share.ackCh = make(chan struct{}, 1)
 	s.share.ackFlushCh = make(chan struct{}, 1)
 	s.share.sessionParts = make(map[tidp]struct{})
+	s.share.dead = make(chan struct{})
 	close(s.sem)
 	return s
 }
@@ -120,6 +129,20 @@ func (s *source) removeCursor(rm *cursor) {
 	if s.cursorsStart == len(s.cursors) {
 		s.cursorsStart = 0
 	}
+}
+
+// Returns whether the source has no partitions and no purged share acks
+// left to send, which pruneSinksAndSources requires before forgetting the
+// source: leaving and FlushAcks reach a source's acks only through
+// sinksAndSources.
+func (s *source) empty() bool {
+	s.cursorsMu.Lock()
+	n := len(s.cursors)
+	s.cursorsMu.Unlock()
+	s.share.mu.Lock()
+	n += len(s.share.cursors) + len(s.share.purgedAcks)
+	s.share.mu.Unlock()
+	return n == 0
 }
 
 // cursor is where we are consuming from for an individual partition.
@@ -186,11 +209,11 @@ type cursor struct {
 	// CurrentLeader hint, preventing a spin loop.
 	moving atomic.Bool
 
-	// fetchFails counts the partition's errored fetches in a row. While
-	// it is non-zero, fetch requests skip the cursor until the source's
-	// retryAt. Kafka answers a fetch immediately when reading any
-	// partition errors, so refetching the partition without a wait would
-	// spin loop.
+	// fetchFails counts, in a row, the partition's errored fetches and
+	// its fetches that named a preferred replica that metadata does not
+	// list. While it is non-zero, fetch requests skip the cursor until
+	// the source's retryAt. Kafka answers a fetch immediately in both
+	// cases, so refetching the partition without a wait would spin loop.
 	fetchFails atomic.Int32
 
 	topicPartitionData // updated in metadata when session is stopped
@@ -342,33 +365,61 @@ func (p *cursorOffsetPreferred) move() {
 
 	// Before we migrate the cursor, we check if the destination source
 	// exists. If not, we do not migrate and instead force a metadata.
+	//
+	// A metadata update can run pruneSinksAndSources at the same time as
+	// us. Until addCursor below, the replica's source has no cursors, and
+	// pruneSinksAndSources can delete the replica's entry if the broker
+	// left metadata. Our cursor would then be on a source that allSources
+	// does not reach, so we keep sinksAndSourcesMu locked from our lookup
+	// through addCursor.
+	cl := c.source.cl
+	cl.sinksAndSourcesMu.Lock()
+	sns, exists := cl.sinksAndSources[p.preferredReplica]
 
-	c.source.cl.sinksAndSourcesMu.Lock()
-	sns, exists := c.source.cl.sinksAndSources[p.preferredReplica]
-	c.source.cl.sinksAndSourcesMu.Unlock()
+	// pruneSinksAndSources deletes our leader's entry if the leader left
+	// metadata while we fetched from a follower and nothing else used the
+	// leader. We recreate the entry, as a metadata update does for a
+	// partition's leader, and move back: a fetch to the leader fails and
+	// backs off until metadata names a new leader. If we instead kept the
+	// cursor on the follower, createReq would recheck it immediately, in a
+	// spin loop.
+	if !exists && p.preferredReplica == c.leader {
+		sns = sinkAndSource{sink: cl.newSink(c.leader), source: cl.newSource(c.leader)}
+		cl.sinksAndSources[c.leader] = sns
+		exists = true
+	}
 
 	if !exists {
+		cl.sinksAndSourcesMu.Unlock()
+
 		// The preferred replica is a broker we have not yet learned from
 		// metadata - e.g. a freshly added replica that the broker we
 		// fetched from already knows about, before our periodic refresh
 		// caught up. We force a metadata update so the source comes to
 		// exist for a future move, but we must also re-enable the cursor
-		// on its current (leader) source. The caller (source.fetch) deletes
+		// on its current (leader) source. After a fetch, our caller deletes
 		// this cursor from the request's used offsets right after we return,
 		// so neither the fetch's used-offset finishing nor a later buffered
 		// poll will re-enable it: leaving it unusable here would strand the
-		// partition. The leader is unchanged, so no cursor
-		// migration re-enables it, and a metadata refresh that merely
-		// learns the new broker never touches cursor usability - the
-		// partition would silently never be consumed again until an
-		// unrelated session restart (rebalance, assign, leader change).
+		// partition. The leader is unchanged, so no cursor migration
+		// re-enables it, and a metadata refresh that merely learns the new
+		// broker never touches cursor usability - the partition would
+		// silently never be consumed again until an unrelated session
+		// restart (rebalance, assign, leader change).
 		//
 		// Re-enabling on the current source keeps us consuming from the
 		// leader until a later fetch's preferred replica can be honored.
-		c.source.cl.triggerUpdateMetadataNow("cursor moving to a different broker that is not yet known")
+		//
+		// The leader answers a fetch that names a preferred replica
+		// immediately, so we wait a backoff before fetching the
+		// partition again, rather than fetching in a loop until
+		// metadata knows the replica.
+		cl.triggerUpdateMetadataNow("cursor moving to a different broker that is not yet known")
+		c.source.setRetryAt(cl.cfg.retryBackoff(int(c.fetchFails.Add(1))))
 		c.allowUsable()
 		return
 	}
+	defer cl.sinksAndSourcesMu.Unlock()
 
 	c.source.removeCursor(c)
 	c.source = sns.source
@@ -720,15 +771,22 @@ func (s *source) takeNBuffered(paused pausedTopics, n int, one *pollOne) (Fetch,
 		t := &bf.Topics[0]
 		tCursors := b.usedOffsets[t.Topic]
 
-		// If the topic is outright paused, we allowUsable all
-		// partitions in the topic and skip the topic entirely.
+		// If the topic is outright paused, we allowUsable the topic's
+		// partitions in this entry and skip the entry entirely. Kafka
+		// merges a topic's partitions into one entry only when they are
+		// adjacent in its response, so a later entry can hold more of
+		// the topic; their cursors stay until we reach that entry. Any
+		// cursor left when the fetch drains is released by takeBuffered.
 		if paused.has(t.Topic, -1) {
 			rstrip.Topics = append(rstrip.Topics, *t)
 			bf.Topics = bf.Topics[1:]
-			for _, pCursor := range tCursors {
-				pCursor.from.allowUsable()
+			for _, p := range t.Partitions {
+				tCursors[p.Partition].from.allowUsable()
+				delete(tCursors, p.Partition)
 			}
-			delete(b.usedOffsets, t.Topic)
+			if len(tCursors) == 0 {
+				delete(b.usedOffsets, t.Topic)
+			}
 			continue
 		}
 
@@ -1130,11 +1188,11 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- bool) 
 	// but that is fine; we may just re-request too early and fall into
 	// another backoff.
 	if err != nil {
-		// A response over BrokerMaxReadBytes will likely be too large
-		// again when we retry, so we surface the error rather than
-		// stall silently.
-		if errors.Is(err, errResponseTooLarge) {
-			s.cl.consumer.addFakeReadyForDraining("", -1, err, "fetch response is larger than BrokerMaxReadBytes")
+		// A request over BrokerMaxWriteBytes or a response over
+		// BrokerMaxReadBytes will likely be too large again when we
+		// retry, so we surface the error rather than stall silently.
+		if errors.Is(err, errRequestTooLarge) || errors.Is(err, errResponseTooLarge) {
+			s.cl.consumer.addFakeReadyForDraining("", -1, err, "fetch request or response is over its size limit")
 		}
 		s.fallBackToLeaders(req, err)
 		backoff(err)
@@ -1670,9 +1728,10 @@ type ProcessFetchPartitionOpts struct {
 	// Pools contain potential pools to use for memory pooling.
 	Pools []Pool
 
-	// shareAckSlab, if non-nil, is called once per decoded batch
-	// to allocate a slab for share group ack state tracking. The
-	// slab is injected into each record's context via shareAckKey.
+	// shareAckSlab, if non-nil, is called once per decoded batch, and
+	// once per v0 or v1 record, to allocate a slab for share group ack
+	// state tracking. The slab is injected into each record's context
+	// via shareAckKey.
 	shareAckSlab func(numRecords int, firstRecord *Record) *shareAckSlab
 
 	// lastEpoch, if non-nil, is set to the leader epoch of each decoded
@@ -1990,38 +2049,37 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	// NumRecords is decoded straight off the wire and is therefore
 	// attacker/bug controlled. A negative count would panic the slice
 	// sizing below (ensureLen does s[:n], which panics for n<0); reject it
-	// as a corrupt batch, matching the Java client's InvalidRecordException
-	// guard (DefaultRecordBatch: "Found invalid record count"). A count
-	// larger than the available record bytes is likewise impossible for a
-	// well-formed batch - every record needs at least one byte - so clamp
-	// the up-front allocation to the byte count to keep a bogus huge count
-	// from driving a massive allocation. The true decodable count is
-	// recomputed by readRawRecordsDirect, and the truncation defer below
-	// leaves the offset unadvanced whenever it disagrees with numRecords.
+	// as a corrupt batch, as Kafka's client does. A count larger than the
+	// available record bytes is likewise impossible for a well-formed
+	// batch, so alloc below bounds the up-front allocation, to keep a
+	// bogus huge count from driving a massive allocation. The true
+	// decodable count is recomputed by readRawRecordsDirect, and the
+	// truncation defer below leaves the offset unadvanced whenever it
+	// disagrees with numRecords.
 	if numRecords < 0 {
 		fp.Err = fmt.Errorf("invalid record batch: negative record count %d", numRecords)
 		return 0, 0
 	}
-	if numRecords > len(rawRecords) {
-		// A batch claiming records with ZERO record bytes deserves a
-		// special word: the clamp below would make it decode zero
-		// records "successfully", and the KAFKA-5443 defer would then
-		// advance the offset past the batch's whole claimed range -- a
-		// silent skip of offsets the broker asserts hold records. The
-		// legitimate compacted-empty batch (KAFKA-5443) claims ZERO
-		// records, so claiming more with no bytes is corruption; error
-		// loudly like the Java client's InvalidRecordException instead
-		// of silently skipping.
-		if len(rawRecords) == 0 {
-			fp.Err = fmt.Errorf("invalid record batch: %d claimed records with no record bytes", numRecords)
-			return 0, uncompressedBytes
-		}
-		numRecords = len(rawRecords)
+	// A batch claiming records with ZERO record bytes deserves a special
+	// word. The legitimate compacted-empty batch (KAFKA-5443) claims zero
+	// records, so claiming more with no bytes is corruption; error loudly,
+	// as Kafka's client does, rather than decode zero records and leave
+	// the offset unadvanced.
+	if numRecords > 0 && len(rawRecords) == 0 {
+		fp.Err = fmt.Errorf("invalid record batch: %d claimed records with no record bytes", numRecords)
+		return 0, uncompressedBytes
 	}
+
+	// We allocate for every claimed record before decoding any, so we
+	// allocate for no more records than the bytes can hold. A record is
+	// at least 7 bytes: its length, attributes, timestamp delta, offset
+	// delta, key length, value length, and header count. numRecords
+	// itself stays as is for the truncation check in the defer below.
+	alloc := min(numRecords, len(rawRecords)/7)
 
 	// Presize for the first batch; later batches grow the slice normally.
 	if cap(fp.Records) == 0 {
-		fp.Records = make([]*Record, 0, numRecords)
+		fp.Records = make([]*Record, 0, alloc)
 	}
 
 	var ndecoded int // set once we decode, below
@@ -2050,13 +2108,13 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	var rrecords []Record
 	pools(o.Pools).each(func(p Pool) bool {
 		if precs, ok := p.(PoolRecords); ok {
-			rrecords = precs.GetRecords(numRecords)
+			rrecords = precs.GetRecords(alloc)
 			usesPools = true
 			return true
 		}
 		return false
 	})
-	rrecords = ensureLen(rrecords, numRecords)
+	rrecords = ensureLen(rrecords, alloc)
 
 	var p *recordPools
 	var poolsCtx context.Context
@@ -2067,7 +2125,7 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	recordCtx := poolsCtx
 	var slabbed bool
 	if o.shareAckSlab != nil && len(rrecords) > 0 {
-		if slab := o.shareAckSlab(numRecords, &rrecords[0]); slab != nil {
+		if slab := o.shareAckSlab(alloc, &rrecords[0]); slab != nil {
 			slabbed = true
 			parent := poolsCtx
 			if parent == nil {
@@ -2153,6 +2211,12 @@ func readRawRecordsDirect(ctx context.Context, rs []Record, in []byte, topic str
 		value := b.VarintBytes()
 		var headers []RecordHeader
 		if nh := int(b.VarintArrayLen()); nh > 0 {
+			// As with records, we allocate every header before
+			// reading any, and a header is at least a key length
+			// and a value length.
+			if nh > len(b.Src)/2 {
+				break
+			}
 			headers = make([]RecordHeader, nh)
 			for i := range headers {
 				headers[i] = RecordHeader{Key: b.VarintString(), Value: b.VarintBytes()}
@@ -2338,6 +2402,7 @@ func (o *ProcessFetchPartitionOpts) processV1Message(
 		return false
 	}
 	record := v1MessageToRecord(o.Topic, fp.Partition, message)
+	o.attachShareSlab(record)
 	o.maybeKeepRecord(fp, record, false)
 	return true
 }
@@ -2425,8 +2490,17 @@ func (o *ProcessFetchPartitionOpts) processV0Message(
 		return false
 	}
 	record := v0MessageToRecord(o.Topic, fp.Partition, message)
+	o.attachShareSlab(record)
 	o.maybeKeepRecord(fp, record, false)
 	return true
+}
+
+// A v0 or v1 record is allocated on its own rather than in a batch's
+// []Record, so a share consumer gives it a one-record slab to ack it with.
+func (o *ProcessFetchPartitionOpts) attachShareSlab(r *Record) {
+	if o.shareAckSlab != nil {
+		r.Context = context.WithValue(context.Background(), shareAckKey, o.shareAckSlab(1, r))
+	}
 }
 
 // maybeKeepRecord keeps a record if it is within our range of offsets to keep.

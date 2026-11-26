@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -32,7 +33,29 @@ import (
 // waits on. Pre-fix the migration takes sinksAndSourcesMu as its first action
 // with no incWorker, so it never touches sc.workers and the registration poll
 // times out.
+//
+// After the migration, the test covers a source that the client forgets:
+// the prune kills the old source, whose fetch loop must exit in every fetch
+// concurrency mode, and leave takes the buffered fetch of a source that
+// sinksAndSources does not have.
 func TestAuditShareMetadataMigrationWaitsForLeave(t *testing.T) {
+	t.Parallel()
+	// The fetch manager lets a source fetch only during a poll in the last
+	// two modes, which is where a killed source's loop waits.
+	for name, opts := range map[string][]Opt{
+		"default":                 nil,
+		"MaxConcurrentFetches(0)": {MaxConcurrentFetches(0)},
+		"ShareMaxRecordsStrict":   {ShareMaxRecords(10), ShareMaxRecordsStrict()},
+	} {
+		t.Run(name, func(t *testing.T) { testShareMetadataMigration(t, opts...) })
+	}
+}
+
+type unbufferedHook chan bool
+
+func (h unbufferedHook) OnFetchRecordUnbuffered(_ *Record, polled bool) { h <- polled }
+
+func testShareMetadataMigration(t *testing.T, opts ...Opt) {
 	t.Parallel()
 
 	// A guaranteed-refused seed keeps the metadata loop alive (cycling fast
@@ -46,11 +69,13 @@ func TestAuditShareMetadataMigrationWaitsForLeave(t *testing.T) {
 	deadAddr := ln.Addr().String()
 	ln.Close()
 
-	cl, err := NewClient(
+	unbuffered := make(unbufferedHook, 1)
+	cl, err := NewClient(append([]Opt{
 		SeedBrokers(deadAddr),
 		ShareGroup("audit-share-meta-migrate"),
 		ConsumeTopics("audit-share-meta-migrate-topic"),
-	)
+		WithHooks(unbuffered),
+	}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +99,7 @@ func TestAuditShareMetadataMigrationWaitsForLeave(t *testing.T) {
 
 	cl.sinksAndSourcesMu.Lock()
 	newSrc := cl.newSource(1)
+	cl.sinksAndSources[0] = sinkAndSource{sink: cl.newSink(0), source: s0}
 	cl.sinksAndSources[1] = sinkAndSource{sink: cl.newSink(1), source: newSrc}
 	cl.sinksAndSourcesMu.Unlock()
 
@@ -125,5 +151,112 @@ func TestAuditShareMetadataMigrationWaitsForLeave(t *testing.T) {
 	}
 	if newtp.shareCursor != c {
 		t.Errorf("new.shareCursor was not set after migration")
+	}
+
+	// The old source now has no cursor, and no metadata knows broker 0,
+	// so a prune forgets the source. The source can have a share session,
+	// and a fetch loop waiting on a buffered fetch that no poll has taken:
+	// the prune kills the source, so the loop exits and can build no more
+	// requests.
+	//
+	// Removing the cursor started the source's loop. With a fetch limit
+	// of 0, the fetch manager lets a source fetch only during a poll, so
+	// that loop is waiting for its turn, and the kill must end it there.
+	// Otherwise the loop finds nothing and exits, and we give the source
+	// a buffered fetch and a loop waiting on it.
+	strict := len(opts) > 0
+	exited := func() bool {
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			sc.mu.Lock()
+			n := sc.workers
+			sc.mu.Unlock()
+			// With a fetch limit of 0, the new source's loop is
+			// waiting for its turn as well, so the worker count
+			// stays up; the old source's loop state is the test.
+			if (strict || n == baseline) && s0.fetchState.state.Load() == stateUnstarted {
+				return true
+			}
+		}
+		return false
+	}
+	if !strict && !exited() {
+		t.Fatal("the old source's fetch loop did not exit after its cursor moved")
+	}
+	s0.share.mu.Lock()
+	s0.share.sessionEpoch = 1
+	s0.share.sessionParts[tidp{c.topicID, c.partition}] = struct{}{}
+	s0.share.mu.Unlock()
+	parked := make(chan bool, 1)
+	if !strict {
+		fetch := Fetch{Topics: []FetchTopic{{Topic: "t", Partitions: []FetchPartition{{Records: []*Record{{}}}}}}}
+		s0.hookBuffered(&fetch)
+		s0.share.buffered = shareBufferedFetch{fetch: fetch, doneFetch: parked}
+		s0.sem = make(chan struct{})
+		sc.c.addSourceReadyForDraining(s0)
+		s0.maybeShareConsume()
+	}
+
+	cl.pruneSinksAndSources()
+	cl.sinksAndSourcesMu.Lock()
+	_, exists := cl.sinksAndSources[0]
+	_, kept := cl.sinksAndSources[1]
+	cl.sinksAndSourcesMu.Unlock()
+	if exists {
+		t.Error("the old source was not pruned")
+	}
+	if !kept {
+		t.Error("the new source, which has the cursor, was pruned")
+	}
+	if !strict {
+		select {
+		case <-parked:
+		default:
+			t.Error("the prune did not take the old source's buffered fetch")
+		}
+		select {
+		case polled := <-unbuffered:
+			if polled {
+				t.Error("the unbuffered hook ran with polled true for a dropped record")
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("the unbuffered hook did not run for the dropped record before any poll")
+		}
+	}
+	if !exited() {
+		t.Errorf("the old source's fetch loop did not exit after the prune (old loop state %d, new loop state %d)", s0.fetchState.state.Load(), newSrc.fetchState.state.Load())
+	}
+	// A request would have failed and reset the session, so the epoch
+	// shows that the loop sent none.
+	s0.share.mu.Lock()
+	epoch := s0.share.sessionEpoch
+	s0.share.mu.Unlock()
+	if epoch != 1 {
+		t.Errorf("the pruned source's session epoch is %d, want 1: its loop built a request", epoch)
+	}
+	if req, _, _, _, _, _, _, _ := s0.createShareReq(false); req != nil {
+		t.Errorf("the pruned source built a request at session epoch %d", req.ShareSessionEpoch)
+	}
+	// The broker returns under the same ID: the pruned source must not
+	// find it.
+	cl.brokersMu.Lock()
+	cl.brokers = append(cl.brokers, cl.newBroker(0, "127.0.0.1", 1, nil))
+	cl.brokersMu.Unlock()
+	if _, err := s0.shareBroker(nil); err == nil {
+		t.Error("the pruned source found the returned broker to send to")
+	}
+
+	// Leaving takes every buffered fetch in sourcesReadyForDraining,
+	// which finishes each fetch for the fetch manager, whether or not
+	// sinksAndSources has the fetch's source.
+	gone := cl.newSource(2)
+	doneFetch := make(chan bool, 1)
+	gone.share.buffered = shareBufferedFetch{doneFetch: doneFetch}
+	gone.sem = make(chan struct{})
+	sc.c.addSourceReadyForDraining(gone)
+	sc.leave(context.Background())
+	select {
+	case <-doneFetch:
+	default:
+		t.Error("leave did not take the buffered fetch of a source that sinksAndSources does not have")
 	}
 }

@@ -1694,6 +1694,9 @@ func TestProduceBatch(t *testing.T) {
 		{name: "crc", rec: kvRecord(), mod: func(b []byte) []byte { b[len(b)-1] ^= 1; return b }, want: kerr.CorruptMessage},
 		{name: "first-offset", rec: kvRecord(), mod: func(b []byte) []byte { b[7] = 1; return b }, want: kerr.InvalidRecord},
 		{name: "last-offset-delta", rec: kvRecord(), mod: func(b []byte) []byte { b[26] = 1; return sealBatch(b) }, want: kerr.InvalidRecord},
+		// Bytes 26 and 60 end the last offset delta and the record
+		// count: one record that claims to be two.
+		{name: "record-count", rec: kvRecord(), mod: func(b []byte) []byte { b[26], b[60] = 1, 2; return sealBatch(b) }, want: kerr.InvalidRecord},
 		{name: "append-fails", rec: kvRecord(), want: kerr.KafkaStorageError, failWrite: true},
 		// Byte 61 starts the record: a length varint of 63 runs past
 		// the batch, and one byte more than its fields take pads it.
@@ -1778,9 +1781,9 @@ func TestProduceBatch(t *testing.T) {
 }
 
 // TestConnectionClose verifies that we close a connection as Kafka does: on
-// a request key we do not know, and on an acks=0 produce with a partition
-// error. An acks=0 client reads no response, so the close is how it learns
-// to refresh its metadata.
+// a request key we do not know, on a request over socket.request.max.bytes,
+// and on an acks=0 produce with a partition error. An acks=0 client reads no
+// response, so the close is how it learns to refresh its metadata.
 func TestConnectionClose(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "t"))
@@ -1803,6 +1806,7 @@ func TestConnectionClose(t *testing.T) {
 	}{
 		// size, key 9999, version 0, correlation ID 1, null client ID
 		{"unknown key", []byte{0, 0, 0, 10, 0x27, 0x0f, 0, 0, 0, 0, 0, 1, 0xff, 0xff}, true},
+		{"size over socket.request.max.bytes", []byte{0xff, 0xff, 0xff, 0xff}, true},
 		{"acks=0 to a missing topic", produce("missing", 0), true},
 		{"acks=0 transactional without a transactional ID", produce("t", 0x0010), true},
 		{"acks=0", produce("t", 0), false},
@@ -4893,6 +4897,78 @@ func TestShareGroupForgottenTopics(t *testing.T) {
 		if nrecs > 0 {
 			t.Logf("poll %d: got %d records (unexpected after consume phase)", pollCount, nrecs)
 		}
+	}
+}
+
+// A ShareAcknowledge sent by itself that the broker answers with a retryable
+// error is sent again after a backoff, until the acquisition lock deadline of
+// its records. TestShareGroupAckRequeue covers acks that are sent again with
+// the next ShareFetch; here the source sends no fetch, because the fetch it
+// has buffered is not polled.
+func TestShareGroupAckRequeueStandalone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		failing int // how many ShareAcknowledge requests we answer COORDINATOR_NOT_AVAILABLE; -1 is all
+		sends   [2]int
+		wantErr string
+	}{
+		{"broker recovers", 2, [2]int{3, 3}, ""},
+		{"broker never recovers", -1, [2]int{1, 6}, "acquisition lock deadline"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			topic, group := "share-ack-alone", "share-ack-alone-g"
+			c := newCluster(t, SeedTopics(1, topic))
+			cfgs := map[string]string{"share.auto.offset.reset": "earliest"}
+			if tc.failing < 0 {
+				cfgs["share.record.lock.duration.ms"] = "1000" // the retries end at this deadline
+			}
+			c.SetGroupConfigs(group, cfgs)
+			admin := newPlainClient(t, c, kgo.DefaultProduceTopic(topic))
+			produceNStrings(t, admin, topic, 1)
+
+			sends := c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareAcknowledge}, Observe: true, Count: -1})
+			// The partition selects the fault for the partition's answer, not for the request's top level.
+			c.Fault(Fault{Keys: []kmsg.Key{kmsg.ShareAcknowledge}, TopicID: c.TopicInfo(topic).TopicID, Partitions: []int32{0}, Err: kerr.CoordinatorNotAvailable, Count: tc.failing})
+
+			var ackErr atomic.Pointer[error]
+			cl := newPlainClient(t, c, kgo.ConsumeTopics(topic), kgo.ShareGroup(group),
+				kgo.ShareAckCallback(func(_ *kgo.Client, rs kgo.ShareAckResults) {
+					for _, r := range rs {
+						if r.Err != nil {
+							ackErr.Store(&r.Err)
+						}
+					}
+				}))
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			var first []*kgo.Record
+			for len(first) == 0 && ctx.Err() == nil {
+				first = cl.PollFetches(ctx).Records()
+			}
+			if len(first) != 1 {
+				t.Fatalf("polled %d records, want 1", len(first))
+			}
+			// A second record stays buffered, so the source sends no fetch
+			// that could take the ack along.
+			produceNStrings(t, admin, topic, 1)
+			waitFor(t, 15*time.Second, "the second record is buffered", func() bool { return cl.BufferedFetchRecords() == 1 })
+
+			first[0].Ack(kgo.AckAccept)
+			if err := cl.FlushAcks(ctx); err != nil {
+				t.Fatalf("FlushAcks returned %v after %d ShareAcknowledge requests", err, sends.Hits())
+			}
+			if n := sends.Hits(); n < tc.sends[0] || n > tc.sends[1] {
+				t.Errorf("got %d ShareAcknowledge requests, want %d to %d", n, tc.sends[0], tc.sends[1])
+			}
+			switch err := ackErr.Load(); {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("ack failed with %v", *err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains((*err).Error(), tc.wantErr) || !errors.Is(*err, kerr.CoordinatorNotAvailable)):
+				t.Errorf("ack result is %v, want an error with %q that wraps COORDINATOR_NOT_AVAILABLE", err, tc.wantErr)
+			}
+		})
 	}
 }
 

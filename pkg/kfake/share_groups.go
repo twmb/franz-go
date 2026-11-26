@@ -1547,10 +1547,9 @@ func (sp *sharePartition) validateAcks(memberID string, first, last int64) int16
 		return kerr.InvalidRecordState.Code
 	}
 
-	for offset := first; offset <= last; offset++ {
-		if offset < sp.spso {
-			continue
-		}
+	// Offsets below the SPSO are finalized and need no check. Starting at
+	// the SPSO keeps a client's huge range from spinning run() over them.
+	for offset := max(first, sp.spso); offset <= last; offset++ {
 		sr, ok := sp.records[offset]
 		if !ok {
 			return kerr.InvalidRecordState.Code
@@ -1588,10 +1587,7 @@ func (sp *sharePartition) processAcks(memberID string, first, last int64, ackTyp
 		uniformType = ackTypes[0]
 	}
 	now := time.Now()
-	for offset := first; offset <= last; offset++ {
-		if offset < sp.spso {
-			continue // already finalized
-		}
+	for offset := max(first, sp.spso); offset <= last; offset++ { // below the SPSO is already finalized
 		sr, ok := sp.records[offset]
 		if !ok {
 			continue // compacted or never tracked
