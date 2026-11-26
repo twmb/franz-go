@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -840,6 +841,14 @@ func (s *sink) firstRespCheck(idempotent bool, version int16) {
 // handleReqClientErr is called when the client errors before receiving a
 // produce response.
 func (s *sink) handleReqClientErr(req *produceRequest, err error) {
+	// A record's context ended. Nothing is wrong with the broker, so we
+	// retry the other batches without a metadata update.
+	if isContextErr(err) {
+		s.cl.cfg.logger.Log(LogLevelDebug, "produce request failed with a context error, retrying without a metadata update", "broker", logID(s.nodeID), "err", err)
+		s.handleRetryBatches(req.batches, nil, req.backoffSeq, false, false, "produce request failed with a context error")
+		return
+	}
+
 	switch {
 	default:
 		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", logID(s.nodeID), "err", err)
@@ -1926,7 +1935,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 	for _, batch := range recBuf.batches {
 		// We need to guard our clearing of records against a
 		// concurrent produceRequest's write, which can have this batch
-		// buffered wile we are failing.
+		// buffered while we are failing.
 		//
 		// We do not need to worry about concurrent recBuf
 		// modifications to this batch because the recBuf is already
@@ -2971,48 +2980,65 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 
 	dst = kbin.AppendInt16(dst, p.acks)
 	dst = kbin.AppendInt32(dst, p.timeout)
+
+	// A batch can fail after we built this request, and Kafka 3.8+ does
+	// not respond to null records. We leave a failed batch out, leave out
+	// a topic with no batch left, and correct each count we wrote.
+	// A shorter compact count can take fewer bytes, in which case we
+	// shift everything after it.
+	fixLen := func(dst []byte, at, n, m int) []byte {
+		if m == n {
+			return dst
+		}
+		if !flexible {
+			binary.BigEndian.PutUint32(dst[at:], uint32(m))
+			return dst
+		}
+		was := int(uvarlen(n))
+		now := binary.PutUvarint(dst[at:], uint64(m+1))
+		return append(dst[:at+now], dst[at+was:]...)
+	}
+
+	topicsAt := len(dst)
 	if flexible {
 		dst = kbin.AppendCompactArrayLen(dst, len(p.batches.bs))
 	} else {
 		dst = kbin.AppendArrayLen(dst, len(p.batches.bs))
 	}
+	ntopics := len(p.batches.bs)
 
 	for topic, partitions := range p.batches.bs {
+		topicAt := len(dst)
 		if p.version >= 13 {
 			id := p.batches.t2id[topic]
 			dst = append(dst, id[:]...)
-			dst = kbin.AppendCompactArrayLen(dst, len(partitions))
 		} else if flexible {
 			dst = kbin.AppendCompactString(dst, topic)
-			dst = kbin.AppendCompactArrayLen(dst, len(partitions))
 		} else {
 			dst = kbin.AppendString(dst, topic)
+		}
+		partitionsAt := len(dst)
+		if flexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(partitions))
+		} else {
 			dst = kbin.AppendArrayLen(dst, len(partitions))
 		}
+		npartitions := len(partitions)
 
 		tmetrics := make(map[int32]ProduceBatchMetrics, len(partitions))
 		p.metrics[topic] = tmetrics
 
 		for partition, batch := range partitions {
-			dst = kbin.AppendInt32(dst, partition)
 			batch.mu.Lock()
 			if batch.records == nil || batch.isFailingFromLoadErr { // concurrent failAllRecords OR concurrent bumpRepeatedLoadErr
-				if flexible {
-					dst = kbin.AppendCompactNullableBytes(dst, nil)
-					// Flexible versions terminate every partition
-					// element with a tagged-field count; the healthy
-					// arm appends it after the batch bytes below.
-					// Skipping it here left the request one byte
-					// short per failed batch, desyncing the broker's
-					// parse of every following partition and killing
-					// the connection.
-					dst = append(dst, 0)
-				} else {
-					dst = kbin.AppendNullableBytes(dst, nil)
-				}
 				batch.mu.Unlock()
+				// Deleting the batch keeps handleReqResp from
+				// retrying it as unanswered. A failed batch stays
+				// failed, so a retried AppendTo leaves it out too.
+				delete(partitions, partition)
 				continue
 			}
+			dst = kbin.AppendInt32(dst, partition)
 			// canFailFromLoadErrs is a monotonic one-way mutation
 			// (true -> false, never the other way). It is safe inside
 			// AppendTo even under the broker-level zero-bytes-written
@@ -3044,10 +3070,18 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				dst = append(dst, 0)
 			}
 		}
+		if len(partitions) == 0 {
+			dst = dst[:topicAt]
+			delete(p.batches.bs, topic)
+			delete(p.metrics, topic)
+			continue
+		}
+		dst = fixLen(dst, partitionsAt, npartitions, len(partitions))
 		if flexible {
 			dst = append(dst, 0)
 		}
 	}
+	dst = fixLen(dst, topicsAt, ntopics, len(p.batches.bs))
 	if flexible {
 		dst = append(dst, 0)
 	}

@@ -140,6 +140,20 @@ func TestUndoStagedBatchesAfterFailAllRecords(t *testing.T) {
 	}
 }
 
+// A record's canceled context fails its produce request before the request is
+// written. The other partitions in the request retry without waiting for a
+// metadata update.
+func TestCanceledProduceRequestNotFailing(t *testing.T) {
+	t.Parallel()
+
+	_, s, r := sinkHarness(t, DisableIdempotentWrite())
+	bufferOne(t, r)
+	s.handleReqClientErr(stageOne(t, s), context.Canceled)
+	if r.failing {
+		t.Error("a partition in a canceled produce request waits for a metadata update")
+	}
+}
+
 func TestCreateReqSkipsPendingSeqResetWithInflight(t *testing.T) {
 	t.Parallel()
 
