@@ -94,6 +94,11 @@ type Registry struct {
 	// soft-deleted with the GUID.
 	idsByGUID map[contextGUID]int
 
+	// contexts are the contexts besides the default context that a schema
+	// was seeded or registered in. As in Confluent's registry, a context
+	// stays until DELETE /contexts removes it.
+	contexts map[string]bool
+
 	// compats and modes are the compatibility levels and modes that are set,
 	// by subject. As in Confluent's registry, the empty subject is the global
 	// setting, and ":.ctx:" is the setting of context .ctx. A zero level is a
@@ -139,6 +144,7 @@ func NewRegistry(opts ...Option) *Registry {
 		subjects:      make(map[string]*subjectData),
 		highestID:     make(map[string]int),
 		idsByGUID:     make(map[contextGUID]int),
+		contexts:      make(map[string]bool),
 		compats:       make(map[string]sr.CompatibilityLevel),
 		modes:         make(map[string]sr.Mode),
 		defaultCompat: sr.CompatBackward,
@@ -272,6 +278,9 @@ func (r *Registry) SeedSchema(subject string, version, id int, sch sr.Schema) {
 
 	guid := schemaGUID(sch)
 	r.idsByGUID[contextGUID{ctx, guid}] = id
+	if ctx != "." {
+		r.contexts[ctx] = true
+	}
 
 	// Store schema version data
 	subj.versions[version] = &versionData{
@@ -369,7 +378,7 @@ func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion 
 		}
 
 		// Store schema version data
-		r.subjects[subject] = subj
+		r.keepSubjectLocked(subject, subj)
 		subj.versions[version] = &versionData{
 			schema: sr.SubjectSchema{
 				Subject: subject,
@@ -398,7 +407,7 @@ func (r *Registry) register(subject string, schema sr.Schema, reqID, reqVersion 
 	r.idsByGUID[contextGUID{ctx, guid}] = id
 
 	// Store schema version data
-	r.subjects[subject] = subj
+	r.keepSubjectLocked(subject, subj)
 	subj.versions[version] = &versionData{
 		schema: sr.SubjectSchema{
 			Subject: subject,
@@ -462,6 +471,7 @@ func (r *Registry) Reset() {
 	r.subjects = make(map[string]*subjectData)
 	r.highestID = make(map[string]int)
 	r.idsByGUID = make(map[contextGUID]int)
+	r.contexts = make(map[string]bool)
 	r.compats = make(map[string]sr.CompatibilityLevel)
 	r.modes = make(map[string]sr.Mode)
 }
@@ -512,6 +522,26 @@ func (r *Registry) errReadOnlyLocked(subject string) error {
 		return errModeRefuses(subject, "is in read-only mode")
 	}
 	return nil
+}
+
+// Keeps subj as subject, whose context becomes known. The caller must hold the
+// lock.
+func (r *Registry) keepSubjectLocked(subject string, subj *subjectData) {
+	r.subjects[subject] = subj
+	if ctx := subjectContext(subject); ctx != "." {
+		r.contexts[ctx] = true
+	}
+}
+
+// Returns the known contexts besides the default context, sorted. The caller
+// must hold the lock.
+func (r *Registry) sortedContextsLocked() []string {
+	contexts := make([]string, 0, len(r.contexts))
+	for c := range r.contexts {
+		contexts = append(contexts, c)
+	}
+	sort.Strings(contexts)
+	return contexts
 }
 
 // Removes the settings of subject, as Confluent's registry does when the last
@@ -586,18 +616,7 @@ func (r *Registry) schemaByIDLocked(id int, subject string, hasSubject bool) (sr
 	if ss, ok := r.versionByIDLocked(ctx, id, subject); ok || ctx != "." {
 		return ss, ok
 	}
-	contexts := make(map[string]bool)
-	for s := range r.subjects {
-		if c := subjectContext(s); c != "." {
-			contexts[c] = true
-		}
-	}
-	sorted := make([]string, 0, len(contexts))
-	for c := range contexts {
-		sorted = append(sorted, c)
-	}
-	sort.Strings(sorted)
-	for _, c := range sorted {
+	for _, c := range r.sortedContextsLocked() {
 		if ss, ok := r.versionByIDLocked(c, id, qualifiedContext(c)+name); ok {
 			return ss, true
 		}

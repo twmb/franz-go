@@ -2593,6 +2593,15 @@ func TestDeletionWithReferences(t *testing.T) {
 }
 
 func TestContextHandlers(t *testing.T) {
+	del := func(r *srfake.Registry, path string) {
+		req, _ := http.NewRequest(http.MethodDelete, r.URL()+path, http.NoBody)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("setup failed: DELETE %s: %v", path, err)
+		}
+		resp.Body.Close()
+	}
+
 	// The order subject of .myctx references the product subject without a
 	// context.
 	withOrder := func(r *srfake.Registry) {
@@ -2635,22 +2644,88 @@ func TestContextHandlers(t *testing.T) {
 			wantBody:   `[".", ".myctx"]`,
 		},
 		{
-			name:   "GET /contexts - soft-deleted contexted subject excluded",
+			name:   "GET /contexts - soft-deleted contexted subject is still listed",
 			method: "GET",
 			path:   "/contexts",
 			setup: func(r *srfake.Registry) {
 				r.SeedSchema("plain-topic", 1, 1, userSchema)
 				r.SeedSchema(":.myctx:topic-value", 1, 2, productSchema)
-				// Soft-delete the contexted subject
-				req, _ := http.NewRequest(http.MethodDelete, r.URL()+"/subjects/:.myctx:topic-value", http.NoBody)
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatalf("setup failed: could not delete subject: %v", err)
-				}
-				resp.Body.Close()
+				del(r, "/subjects/:.myctx:topic-value")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[".", ".myctx"]`,
+		},
+		{
+			name:   "GET /contexts - context of hard-deleted subjects is still listed",
+			method: "GET",
+			path:   "/contexts",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				del(r, "/subjects/:.myctx:topic-value")
+				del(r, "/subjects/:.myctx:topic-value?permanent=true")
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[".", ".myctx"]`,
+		},
+		{
+			name:   "GET /contexts - DELETE /contexts removes the context",
+			method: "GET",
+			path:   "/contexts",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				del(r, "/subjects/:.myctx:topic-value")
+				del(r, "/subjects/:.myctx:topic-value?permanent=true")
+				del(r, "/contexts/.myctx")
 			},
 			wantStatus: http.StatusOK,
 			wantBody:   `["."]`,
+		},
+
+		// subjectPrefix
+		{
+			name:   "GET /contexts/.myctx/subjects?subjectPrefix={p} - prefix within the context",
+			method: "GET",
+			path:   "/contexts/.myctx/subjects?subjectPrefix=topic",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:other-value", 1, 2, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[":.myctx:topic-value"]`,
+		},
+		{
+			name:   "GET /subjects?subjectPrefix= - empty prefix is the default context",
+			method: "GET",
+			path:   "/subjects?subjectPrefix=",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 1, userSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `["plain-topic"]`,
+		},
+		{
+			name:   "GET /subjects?subjectPrefix=:*:{p} - prefix in every context",
+			method: "GET",
+			path:   "/subjects?subjectPrefix=:*:topic",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("topic-a", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-b", 1, 1, userSchema)
+				r.SeedSchema("other", 1, 2, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[":.myctx:topic-b", "topic-a"]`,
+		},
+		{
+			name:   "GET /schemas - default context only",
+			method: "GET",
+			path:   "/schemas",
+			setup: func(r *srfake.Registry) {
+				r.SeedSchema("plain-topic", 1, 1, userSchema)
+				r.SeedSchema(":.myctx:topic-value", 1, 1, productSchema)
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `[{"subject":"plain-topic","version":1,"id":1,"guid":"5e7f40ce-ba13-8394-ab4a-c4e82c0ededd","schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}]`,
 		},
 		{
 			name:   "GET /contexts - contextPrefix filter",

@@ -21,20 +21,36 @@ func requestContext(req *http.Request) string {
 	return v
 }
 
-// Returns the subject query parameter of a schema ID lookup, and whether the
-// lookup has one. As in Confluent's registry, a context path adds its context
-// to a subject without one, and gives a lookup without a subject the context
-// as its subject.
-func idSubject(req *http.Request) (string, bool) {
+// Returns the query parameter name, a subject or subject prefix, and whether
+// the request has it. As in Confluent's registry, a context path adds its
+// context to a value without one, and gives a request without the parameter
+// the context as its value.
+func contextParam(req *http.Request, name string) (string, bool) {
 	q := req.URL.Query()
-	subject, ok := q.Get("subject"), q.Has("subject")
+	value, ok := q.Get(name), q.Has(name)
 	if ctx := requestContext(req); ctx != "" {
-		if !hasContext(subject) {
-			subject = qualifiedContext(ctx) + subject
+		if !hasContext(value) {
+			value = qualifiedContext(ctx) + value
 		}
 		ok = true
 	}
-	return subject, ok
+	return value, ok
+}
+
+// Reports whether subject matches a subjectPrefix, as Confluent's registry
+// matches it: ":*:" followed by a name prefix matches in every context, a
+// prefix that names a context matches the qualified subject, and any other
+// prefix matches subjects of the default context.
+func matchesPrefix(subject, prefix string) bool {
+	switch {
+	case strings.HasPrefix(prefix, ":*:"):
+		_, name := splitSubject(subject)
+		return strings.HasPrefix(name, prefix[len(":*:"):])
+	case strings.HasPrefix(prefix, ":."):
+		return strings.HasPrefix(subject, prefix)
+	default:
+		return subjectContext(subject) == "." && strings.HasPrefix(subject, prefix)
+	}
 }
 
 // Reports whether subject names its context, or the wildcard context.
@@ -184,7 +200,7 @@ func (r *Registry) handleGetSchemaByID(w http.ResponseWriter, req *http.Request)
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-	subject, hasSubject := idSubject(req)
+	subject, hasSubject := contextParam(req, "subject")
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -208,7 +224,7 @@ func (r *Registry) handleGetRawSchemaByID(w http.ResponseWriter, req *http.Reque
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-	subject, hasSubject := idSubject(req)
+	subject, hasSubject := contextParam(req, "subject")
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -228,7 +244,7 @@ func (r *Registry) handleGetSchemaVersionsByID(w http.ResponseWriter, req *http.
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-	subject, hasSubject := idSubject(req)
+	subject, hasSubject := contextParam(req, "subject")
 	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
@@ -249,7 +265,7 @@ func (r *Registry) handleGetSubjectsByID(w http.ResponseWriter, req *http.Reques
 		r.handleAPIError(w, errInvalidSchema("invalid schema id"))
 		return
 	}
-	subject, hasSubject := idSubject(req)
+	subject, hasSubject := contextParam(req, "subject")
 	deleted := req.URL.Query().Get("deleted") == "true"
 
 	r.mu.RLock()
@@ -394,9 +410,10 @@ func (f deletedFilter) any() bool { return f.includeDeleted || f.onlyDeleted }
 // and latestOnly query parameters.
 func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 	includeDeleted := req.URL.Query().Get("deleted") == "true"
-	subjPrefix := req.URL.Query().Get("subjectPrefix")
 	latestOnly := req.URL.Query().Get("latestOnly") == "true"
-	ctx := requestContext(req)
+	// As in Confluent's registry, GET /schemas without a prefix lists the
+	// default context.
+	subjPrefix, _ := contextParam(req, "subjectPrefix")
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -413,10 +430,7 @@ func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 		if !includeDeleted && !subj.active() {
 			continue
 		}
-		if ctx != "" && subjectContext(s) != ctx {
-			continue
-		}
-		if subjPrefix != "" && !strings.HasPrefix(s, subjPrefix) {
+		if !matchesPrefix(s, subjPrefix) {
 			continue
 		}
 
@@ -442,8 +456,12 @@ func (r *Registry) handleGetSchemas(w http.ResponseWriter, req *http.Request) {
 
 func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 	del := parseDeleted(req)
-	subjPrefix := req.URL.Query().Get("subjectPrefix")
-	ctx := requestContext(req)
+	// As in Confluent's registry, GET /subjects without a prefix lists every
+	// context.
+	subjPrefix, ok := contextParam(req, "subjectPrefix")
+	if !ok {
+		subjPrefix = ":*:"
+	}
 
 	r.mu.RLock()
 	subjects := make([]string, 0, len(r.subjects))
@@ -451,10 +469,7 @@ func (r *Registry) handleGetSubjects(w http.ResponseWriter, req *http.Request) {
 		if !del.keep(!subj.active()) {
 			continue
 		}
-		if ctx != "" && subjectContext(s) != ctx {
-			continue
-		}
-		if subjPrefix != "" && !strings.HasPrefix(s, subjPrefix) {
+		if !matchesPrefix(s, subjPrefix) {
 			continue
 		}
 		subjects = append(subjects, s)
@@ -972,21 +987,8 @@ func (r *Registry) handleGetContexts(w http.ResponseWriter, req *http.Request) {
 
 	r.mu.RLock()
 	ctxSet := map[string]bool{".": true}
-	for subject, subj := range r.subjects {
-		if !subj.active() {
-			continue
-		}
-		hasActive := false
-		for _, vd := range subj.versions {
-			if !vd.isDeleted {
-				hasActive = true
-				break
-			}
-		}
-		if !hasActive {
-			continue
-		}
-		ctxSet[subjectContext(subject)] = true
+	for c := range r.contexts {
+		ctxSet[c] = true
 	}
 	r.mu.RUnlock()
 
@@ -1037,6 +1039,7 @@ func (r *Registry) handleDeleteContext(w http.ResponseWriter, req *http.Request)
 		}
 	}
 
+	delete(r.contexts, ctx)
 	w.WriteHeader(http.StatusNoContent)
 }
 
