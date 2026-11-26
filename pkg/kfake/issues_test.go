@@ -4124,6 +4124,7 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		resend     bool        // after retryErr, a second retry resends the EndTxn
 		resendErr  *kerr.Error // if non-nil, the resent EndTxn gets this answer
 		askAbort   bool        // a ProducerID call runs while the retry's EndTxn is in flight
+		initErr    *kerr.Error // if non-nil, the reload after a healed retry gets this answer
 		purge      bool        // the client purges the topic before the retry
 		failProd   bool        // the transaction's produce fails, so no partition is added
 		// Before the retry: the coordinator committed or aborted at our
@@ -4161,6 +4162,7 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 		{name: "abortable-resend-mapping", commit: true, flip: true, firstErr: kerr.TransactionAbortable, retryErr: kerr.UnknownServerError, resend: true, resendErr: kerr.InvalidProducerIDMapping, wantEnds: 2, wantInits: 1},
 		{name: "tv1-commit-abortable", tv1: true, commit: true, flip: true, firstErr: kerr.TransactionAbortable, wantEnds: 1},
 		{name: "tv1-abortable-resend", tv1: true, commit: true, flip: true, firstErr: kerr.TransactionAbortable, retryErr: kerr.UnknownServerError, resend: true, wantEnds: 2, wantInits: 1},
+		{name: "tv1-abortable-reload-invalid-epoch", tv1: true, commit: true, flip: true, firstErr: kerr.TransactionAbortable, initErr: kerr.InvalidProducerEpoch, wantEnds: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -4303,6 +4305,13 @@ func TestEndTxnUnconfirmedRetry(t *testing.T) {
 				}
 			}
 			if test.wantErr != nil || test.wantMsg != "" || test.committed || test.purge {
+				return
+			}
+			if test.initErr != nil {
+				c.Fault(Fault{Keys: []kmsg.Key{kmsg.InitProducerID}, Err: test.initErr})
+				if err := cl.BeginTransaction(); !errors.Is(err, kerr.ProducerFenced) {
+					t.Fatalf("begin with a reload that gets %v: got %v, want PRODUCER_FENCED", test.initErr, err)
+				}
 				return
 			}
 

@@ -1275,6 +1275,14 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization resulted in retryable error, discarding initialization attempt", "err", err)
 			return &producerID{lastID, lastEpoch, err}, false
 		}
+		// Kafka answers a fenced InitProducerID with PRODUCER_FENCED from
+		// v4, and with INVALID_PRODUCER_EPOCH only below v4. At v4+, we
+		// turn INVALID_PRODUCER_EPOCH into the fatal PRODUCER_FENCED, so
+		// that maybeRecoverProducerID does not retry the InitProducerID
+		// on every produce (KIP-588).
+		if req.Version >= 4 && errors.Is(err, kerr.InvalidProducerEpoch) {
+			err = kerr.ProducerFenced
+		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
 		return &producerID{lastID, lastEpoch, err}, true
 	}
