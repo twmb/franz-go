@@ -53,7 +53,9 @@ func (l *Logger) Level() kgo.LogLevel {
 		kgo.LogLevelWarn,
 		kgo.LogLevelError,
 	} {
-		if l.logr.GetSink().Enabled(l.levelMap(level)) {
+		// We ask the logger rather than its sink: a discard logger
+		// has a nil sink.
+		if l.logr.V(l.levelMap(level)).Enabled() {
 			return level
 		}
 	}
