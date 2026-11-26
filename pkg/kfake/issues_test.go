@@ -6204,12 +6204,9 @@ func TestPausedTopicSplitAcrossFetchEntries(t *testing.T) {
 				}
 			}
 		}
-		for cl.BufferedFetchRecords() < int64(len(tps)) {
-			if ctx.Err() != nil {
-				t.Fatalf("buffered %d records, want %d", cl.BufferedFetchRecords(), len(tps))
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+		waitFor(t, 5*time.Second, "the client did not buffer the produced records", func() bool {
+			return cl.BufferedFetchRecords() >= int64(len(tps))
+		})
 	}
 
 	toEnd(tp{"a", 0}, tp{"b", 0}, tp{"a", 1})
