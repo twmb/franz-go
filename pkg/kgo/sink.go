@@ -314,12 +314,14 @@ func (s *sink) drain() {
 		s.mergeBacklogs()
 
 		sem := s.inflightSem
+		start := time.Now()
 		select {
 		case sem <- struct{}{}:
 		case <-s.cl.ctx.Done():
 			s.drainState.hardFinish()
 			return
 		}
+		inflightWait := time.Since(start)
 
 		// We back off after taking our inflight slot, not before. A
 		// response arrives, triggers a backoff, and only then frees the
@@ -328,7 +330,7 @@ func (s *sink) drain() {
 		// in this loop, so holding the slot while we wait costs nothing.
 		s.maybeBackoff()
 
-		again = s.drainState.maybeFinish(s.produce(sem))
+		again = s.drainState.maybeFinish(s.produce(sem, inflightWait))
 	}
 }
 
@@ -367,7 +369,7 @@ func (s *sink) anyCtx() context.Context {
 	return context.Background()
 }
 
-func (s *sink) produce(sem <-chan struct{}) bool {
+func (s *sink) produce(sem <-chan struct{}, inflightWait time.Duration) bool {
 	var produced bool
 	defer func() {
 		if !produced {
@@ -584,7 +586,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	produced = true
 
 	batches := req.batches.sliced()
-	s.doSequenced(req, func(br *broker, resp kmsg.Response, err error) {
+	s.doSequenced(req, inflightWait, func(br *broker, resp kmsg.Response, err error) {
 		s.handleReqResp(br, req, resp, err)
 		batches.eachOwnerLocked((*recBatch).decInflight)
 		<-sem
@@ -596,6 +598,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 // are handled in order. We use this guarantee while in handleReqResp below.
 func (s *sink) doSequenced(
 	req *produceRequest,
+	inflightWait time.Duration,
 	promise func(*broker, kmsg.Response, error),
 ) {
 	wait := &seqResp{
@@ -618,6 +621,7 @@ func (s *sink) doSequenced(
 		wait.err = err
 		close(wait.done)
 	} else {
+		s.startProduceRequest(br, inflightWait)
 		br.do(ctx, req, func(resp kmsg.Response, err error) {
 			wait.resp = resp
 			wait.err = err
@@ -629,6 +633,31 @@ func (s *sink) doSequenced(
 	if first, _ := s.seqResps.push(wait); first {
 		go s.handleSeqResps(wait)
 	}
+}
+
+// inflight returns how many inflightSem slots requests hold.
+//
+// An idempotent sink's sem holds four slots that no request owns until
+// firstRespCheck frees them, which it does only if the broker speaks produce
+// v4+.
+func (s *sink) inflight() int {
+	n := len(s.inflightSem)
+	if s.cl.idempotent() && s.produceVersion.Load() < 4 {
+		n -= 4
+	}
+	return n
+}
+
+func (s *sink) startProduceRequest(br *broker, inflightWait time.Duration) {
+	metrics := ProduceRequestStartMetrics{
+		Inflight:     s.inflight(),
+		InflightWait: inflightWait,
+	}
+	s.cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookProduceRequestStart); ok {
+			h.OnProduceRequestStart(br.meta, metrics)
+		}
+	})
 }
 
 // Ensures that all request responses are processed in order.
