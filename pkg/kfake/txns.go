@@ -58,9 +58,15 @@ type (
 		epoch   int16
 		windows tps[pidwindow] // topic/partition 5-window pid sequences
 
+		// The epoch before the last bump. A KIP-360 InitProducerID at
+		// this epoch gets our epoch without a bump, and -1 fences every
+		// older epoch.
+		lastEpoch int16
+
 		// The producer ID before an epoch overflow rotated to id, so
 		// that we accept a retry from a client that missed the
-		// rotation.
+		// rotation. As in Kafka, the next transition clears it: a
+		// transaction start, an end, or an InitProducerID.
 		prevID int64
 
 		txid         string
@@ -85,9 +91,12 @@ type (
 		// The decision of an end whose markers are not all written, and
 		// their epoch. The transaction stays open until a retry of the
 		// end, an InitProducerID, or the transaction timer writes the
-		// rest.
-		ending   *bool
-		endEpoch int16
+		// rest. endClearsLast is set while our own abort below
+		// transaction version 2 is pending: completing the abort clears
+		// the last epoch.
+		ending        *bool
+		endEpoch      int16
+		endClearsLast bool
 
 		// Whether a transaction ended since the last InitProducerID,
 		// and if so, whether it was a commit. EndTxn accepts a retry
@@ -190,9 +199,7 @@ func (pids *pids) updateTimer() {
 		pids.c.cfg.logger.Logf(LogLevelWarn,
 			"txn timeout abort: txn_id=%s producer_id=%d epoch=%d timeout=%dms elapsed=%v",
 			minPid.txid, minPid.id, minPid.epoch, minPid.txTimeout, elapsed)
-		// The abort fences the producer, and Kafka writes its markers
-		// at the bumped epoch.
-		if p, ok := minPid.endTx(false, minPid.epoch+1); ok {
+		if p, ok := minPid.fenceAbort(); ok {
 			p.persist()
 		}
 	}
@@ -316,40 +323,47 @@ func (pids *pids) doInitProducerID(creq *clientReq) kmsg.Response {
 	}
 
 	// KIP-360 (v3+): the request's producer ID must be the transactional
-	// ID's, or the one an epoch overflow rotated away from. We accept
-	// the current or a stale epoch (recovery after a timeout bump) and
-	// reject only epochs above ours.
-	if req.ProducerID != -1 {
-		switch {
-		case req.ProducerID == pidinf.id:
-			if req.ProducerEpoch > pidinf.epoch {
-				resp.ErrorCode = kerr.ProducerFenced.Code
-				return resp
-			}
-		case req.ProducerID == pidinf.prevID && req.ProducerEpoch >= math.MaxInt16-1:
-		default:
-			resp.ErrorCode = kerr.ProducerFenced.Code
-			return resp
-		}
+	// ID's, or the one an epoch overflow rotated away from.
+	if req.ProducerID != -1 && req.ProducerID != pidinf.id &&
+		(req.ProducerID != pidinf.prevID || req.ProducerEpoch < math.MaxInt16-1) {
+		resp.ErrorCode = kerr.ProducerFenced.Code
+		return resp
 	}
 
-	// Abort any in-flight transaction before bumping. Kafka fences the
-	// producer at E+1 and answers CONCURRENT_TRANSACTIONS, and the
-	// client's retry gets E+2; we abort at once and answer E+2 in one
-	// response. Leaving the old epoch's writes pending lets the next
-	// commit swallow them into its own range.
+	// Abort any in-flight transaction before deciding on the epoch.
+	// Kafka fences the producer and answers CONCURRENT_TRANSACTIONS, and
+	// decides the client's retry against the epoch the abort left; we
+	// abort immediately and decide in one response. Leaving the old
+	// epoch's writes pending lets the next commit swallow them into its
+	// own range.
 	if pidinf.inTx {
-		commit, epoch := false, pidinf.epoch+1
-		if pidinf.ending != nil {
-			commit, epoch = *pidinf.ending, pidinf.endEpoch
-		}
 		var ended bool
-		if pidinf, ended = pidinf.endTx(commit, epoch); !ended {
+		if pidinf.ending != nil {
+			pidinf, ended = pidinf.endTx(*pidinf.ending, pidinf.endEpoch)
+		} else {
+			pidinf, ended = pidinf.fenceAbort()
+		}
+		if !ended {
 			resp.ErrorCode = kerr.ConcurrentTransactions.Code
 			return resp
 		}
+		pidinf.persist()
 	}
-	pidinf = pids.bumpEpoch(pidinf)
+
+	// A KIP-360 request at our epoch bumps it, and one at our last epoch
+	// gets our epoch without a bump. Any other epoch is fenced.
+	if req.ProducerID != -1 && req.ProducerEpoch != pidinf.epoch && req.ProducerEpoch != pidinf.lastEpoch {
+		resp.ErrorCode = kerr.ProducerFenced.Code
+		return resp
+	}
+	pidinf.prevID = 0
+	switch {
+	case req.ProducerID == -1:
+		pidinf = pids.bumpEpoch(pidinf)
+		pidinf.lastEpoch = -1
+	case req.ProducerEpoch == pidinf.epoch:
+		pidinf = pids.bumpEpoch(pidinf)
+	}
 	pidinf.txTimeout = req.TransactionTimeoutMillis
 	pidinf.txStart = time.Time{}
 	pidinf.ended = false
@@ -365,6 +379,7 @@ func (pidinf *pidinfo) maybeStart() {
 		return
 	}
 	pidinf.inTx = true
+	pidinf.prevID = 0
 	pidinf.txStart = time.Now()
 	pidinf.pids.txs[pidinf] = struct{}{}
 	// If we crash before EndTxn logs its prepare entry, the restart
@@ -379,6 +394,7 @@ func (pidinf *pidinfo) logEntry() pidLogEntry {
 		Type:    "init",
 		PID:     pidinf.id,
 		Epoch:   pidinf.epoch,
+		Last:    pidinf.lastEpoch,
 		TxID:    pidinf.txid,
 		Timeout: pidinf.txTimeout,
 		PrevID:  pidinf.prevID,
@@ -497,8 +513,10 @@ func (pids *pids) doAddPartitions(creq *clientReq, t *kmsg.AddPartitionsToTxnReq
 		return st
 	}
 
+	// A pending end decided at a higher epoch already moved the epoch, as
+	// Kafka does when it writes the decision.
 	pidinf, code := pids.txnPid(txnID, t.ProducerID)
-	if code == 0 && pidinf.epoch != t.ProducerEpoch {
+	if code == 0 && (pidinf.epoch != t.ProducerEpoch || pidinf.ending != nil && pidinf.endEpoch > t.ProducerEpoch) {
 		code = kerr.ProducerFenced.Code
 	} else if code == 0 && pidinf.ending != nil {
 		code = kerr.ConcurrentTransactions.Code
@@ -542,8 +560,10 @@ func (pids *pids) doAddOffsets(creq *clientReq) kmsg.Response {
 		return resp
 	}
 
+	// A pending end decided at a higher epoch already moved the epoch, as
+	// Kafka does when it writes the decision.
 	pidinf, code := pids.txnPid(req.TransactionalID, req.ProducerID)
-	if code == 0 && pidinf.epoch != req.ProducerEpoch {
+	if code == 0 && (pidinf.epoch != req.ProducerEpoch || pidinf.ending != nil && pidinf.endEpoch > req.ProducerEpoch) {
 		code = kerr.ProducerFenced.Code
 	} else if code == 0 && pidinf.ending != nil {
 		code = kerr.ConcurrentTransactions.Code
@@ -740,6 +760,11 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 	case pidinf.epoch != req.ProducerEpoch:
 		resp.ErrorCode = kerr.ProducerFenced.Code
 		return resp
+	case req.Version < 5 && pidinf.ending != nil && pidinf.endEpoch > req.ProducerEpoch:
+		// When Kafka decides our own abort, Kafka moves the epoch,
+		// which fences an end below v5 at the old epoch.
+		resp.ErrorCode = kerr.ProducerFenced.Code
+		return resp
 	case pidinf.ending != nil && req.Commit != *pidinf.ending:
 		resp.ErrorCode = kerr.InvalidTxnState.Code
 		return resp
@@ -756,17 +781,20 @@ func (pids *pids) doEnd(creq *clientReq) kmsg.Response {
 	}
 
 	// A v5 end bumps the epoch, and Kafka writes its markers at the new
-	// epoch.
+	// epoch. A pending end keeps the epoch it was decided at.
 	markerEpoch := pidinf.epoch
 	if req.Version >= 5 {
 		markerEpoch++
+	}
+	if pidinf.ending != nil {
+		markerEpoch = pidinf.endEpoch
 	}
 
 	// The decision goes to disk before any marker or offset: a restart
 	// finishes an end that a crash cut off, as Kafka does from its
 	// prepare record. Kafka answers a failed write NOT_COORDINATOR, and
 	// the client retries.
-	if err := pids.c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Epoch: markerEpoch, Commit: &req.Commit, Offsets: persistTxOffsets(pidinf.txOffsets)}); err != nil {
+	if err := pids.c.persistPIDEntry(pidLogEntry{Type: "prepare", PID: pidinf.id, Epoch: markerEpoch, ClearLast: pidinf.endClearsLast, Commit: &req.Commit, Offsets: persistTxOffsets(pidinf.txOffsets)}); err != nil {
 		resp.ErrorCode = kerr.NotCoordinator.Code
 		return resp
 	}
@@ -847,9 +875,9 @@ func (pids *pids) randomID() int64 {
 	}
 }
 
-// bumpEpoch increments the epoch. If the epoch reaches the exhaustion
-// threshold (math.MaxInt16 - 1), a new producer ID is allocated, and the
-// caller must have ended any transaction.
+// bumpEpoch increments the epoch, and the old epoch becomes the last epoch.
+// If the epoch reaches the exhaustion threshold (math.MaxInt16 - 1), a new
+// producer ID is allocated, and the caller must have ended any transaction.
 func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 	if pidinf.epoch >= math.MaxInt16-1 {
 		newID := pids.randomID()
@@ -857,6 +885,7 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 			pids:          pids,
 			id:            newID,
 			epoch:         0,
+			lastEpoch:     pidinf.epoch,
 			prevID:        pidinf.id,
 			txid:          pidinf.txid,
 			txTimeout:     pidinf.txTimeout,
@@ -872,6 +901,7 @@ func (pids *pids) bumpEpoch(pidinf *pidinfo) *pidinfo {
 		}
 		return newPidinf
 	}
+	pidinf.lastEpoch = pidinf.epoch
 	pidinf.epoch++
 	return pidinf
 }
@@ -882,6 +912,7 @@ func (pids *pids) create(txidp *string, txTimeout int32) *pidinfo {
 	pidinf := &pidinfo{
 		pids:       pids,
 		id:         pids.randomID(),
+		lastEpoch:  -1,
 		lastActive: time.Now(),
 	}
 	if txidp != nil {
@@ -1011,11 +1042,25 @@ func (pidinf *pidinfo) endTx(commit bool, epoch int16) (*pidinfo, bool) {
 		}
 	}
 
+	clearsLast := pidinf.endClearsLast
 	pidinf.resetTx(commit)
 	if epoch > pidinf.epoch {
-		return pidinf.pids.bumpEpoch(pidinf), true
+		pidinf = pidinf.pids.bumpEpoch(pidinf)
+	}
+	if clearsLast {
+		pidinf.lastEpoch = -1
 	}
 	return pidinf, true
+}
+
+// Aborts an open transaction on our own: after a timeout, an
+// InitProducerID, or a crash restart. The abort bumps the epoch, which
+// fences the producer, and Kafka writes its markers at the bumped epoch.
+// Below transaction version 2, Kafka also clears the last epoch, so that
+// a KIP-360 InitProducerID from the aborted producer is fenced as well.
+func (pidinf *pidinfo) fenceAbort() (*pidinfo, bool) {
+	pidinf.endClearsLast = pidinf.pids.c.featureLevel("transaction.version") < 2
+	return pidinf.endTx(false, pidinf.epoch+1)
 }
 
 // txExpire returns when the timer aborts the transaction, or writes the
@@ -1036,8 +1081,10 @@ func (pidinf *pidinfo) resetTx(wasCommit bool) {
 	pidinf.txPartBytes = nil
 	pidinf.inTx = false
 	pidinf.ending = nil
+	pidinf.endClearsLast = false
 	pidinf.ended = true
 	pidinf.lastWasCommit = wasCommit
+	pidinf.prevID = 0
 	pidinf.lastActive = time.Now()
 	delete(pidinf.pids.txs, pidinf)
 }

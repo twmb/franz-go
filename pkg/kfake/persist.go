@@ -436,18 +436,20 @@ type (
 	// of its transactional ID; a Commit says a transaction ended since the
 	// last InitProducerID. "begin" opens a transaction, which a restart
 	// aborts unless session state restores it. "prepare" is EndTxn's
-	// decision, with its markers' epoch and the offsets a commit applies;
-	// a restart finishes the end if no init follows. "expire" drops the
-	// PID.
+	// decision, with its markers' epoch, whether the end clears the last
+	// epoch, and the offsets a commit applies; a restart finishes the end
+	// if no init follows. "expire" drops the PID.
 	pidLogEntry struct {
-		Type    string          `json:"type"` // init, begin, prepare, expire
-		PID     int64           `json:"pid"`
-		Epoch   int16           `json:"epoch"`
-		TxID    string          `json:"txid,omitempty"`
-		Timeout int32           `json:"timeout,omitempty"`
-		Commit  *bool           `json:"commit,omitempty"`
-		PrevID  int64           `json:"prev,omitempty"`
-		Offsets stagedTxOffsets `json:"offsets,omitempty"`
+		Type      string          `json:"type"` // init, begin, prepare, expire
+		PID       int64           `json:"pid"`
+		Epoch     int16           `json:"epoch"`
+		Last      int16           `json:"last,omitempty"`
+		ClearLast bool            `json:"clearlast,omitempty"`
+		TxID      string          `json:"txid,omitempty"`
+		Timeout   int32           `json:"timeout,omitempty"`
+		Commit    *bool           `json:"commit,omitempty"`
+		PrevID    int64           `json:"prev,omitempty"`
+		Offsets   stagedTxOffsets `json:"offsets,omitempty"`
 	}
 )
 
@@ -1092,7 +1094,7 @@ func (c *Cluster) savePIDsLog(fsys fs, dir string) error {
 			}
 		}
 		if pidinf.ending != nil {
-			if _, err := appendLogEntry(f, pidLogEntry{Type: "prepare", PID: pidinf.id, Epoch: pidinf.endEpoch, Commit: pidinf.ending, Offsets: persistTxOffsets(pidinf.txOffsets)}, false); err != nil {
+			if _, err := appendLogEntry(f, pidLogEntry{Type: "prepare", PID: pidinf.id, Epoch: pidinf.endEpoch, ClearLast: pidinf.endClearsLast, Commit: pidinf.ending, Offsets: persistTxOffsets(pidinf.txOffsets)}, false); err != nil {
 				return err
 			}
 		}
@@ -1302,11 +1304,15 @@ func (c *Cluster) loadFromDisk() (bool, error) {
 		}
 		c.cfg.logger.Logf(LogLevelDebug, "load: ending txn open at crash pid=%d epoch=%d decided=%v", pidinf.id, pidinf.epoch, decided)
 		pidinf.txOffsets = restoreTxOffsets(end.Offsets)
-		epoch := pidinf.epoch + 1 // the abort fences the producer
+		var p *pidinfo
+		var ok bool
 		if decided {
-			epoch = end.Epoch
+			pidinf.endClearsLast = end.ClearLast
+			p, ok = pidinf.endTx(*end.Commit, end.Epoch)
+		} else {
+			p, ok = pidinf.fenceAbort()
 		}
-		if p, ok := pidinf.endTx(decided && *end.Commit, epoch); ok {
+		if ok {
 			ended = append(ended, p)
 		}
 	}
@@ -1849,6 +1855,7 @@ func (c *Cluster) loadPIDsLog(fsys fs, dir string) (map[int64]pidLogEntry, error
 				pids:       &c.pids,
 				id:         entry.PID,
 				epoch:      entry.Epoch,
+				lastEpoch:  entry.Last,
 				prevID:     entry.PrevID,
 				txid:       entry.TxID,
 				txTimeout:  entry.Timeout,

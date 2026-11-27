@@ -87,13 +87,23 @@ type producer struct {
 
 	txnMu xsync.Mutex
 	inTxn bool
-	// endUnconfirmed, guarded by txnMu, is set when an attempted EndTxn
-	// outcome is unconfirmed (transport error, retries exhausted, or
-	// UNKNOWN_SERVER_ERROR). EndTransaction restores the transaction
-	// state it consumed so the documented TryAbort retry can heal via
-	// producer id reload; this flag tells the retry that the reload is
-	// the abort and no EndTxn should be sent.
-	endUnconfirmed bool
+	// endUnconfirmed is what an EndTxn sent, while we do not know whether
+	// that EndTxn happened: ctx ended or the client closed before an answer
+	// with an outcome, or the broker answered UNKNOWN_SERVER_ERROR.
+	// EndTransaction restores the transaction state it consumed, and a later
+	// EndTransaction with the same TransactionEndTry resends the same EndTxn.
+	//
+	// producerID loads the producer ID, then endUnconfirmed, and does not
+	// reload the producer ID while endUnconfirmed is set. EndTransaction
+	// sets endUnconfirmed before EndTransaction fails the producer ID for
+	// reload, and before EndTransaction sends EndTxn(abort) at a producer
+	// ID that needs recovery. EndTransaction clears endUnconfirmed only
+	// after EndTransaction replaces the producer ID, or once the
+	// coordinator has no open transaction for the producer ID, so a
+	// producerID call running at the same time does not reload the
+	// producer ID while the coordinator may still have our transaction
+	// open.
+	endUnconfirmed atomic.Pointer[sentEndTxn]
 	tx890p2        atomic.Bool
 
 	// producedInTxn is set when a record is buffered within the current
@@ -1029,7 +1039,8 @@ func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitions
 
 // ProducerID returns, loading if necessary, the current producer ID and epoch.
 // This returns an error if the producer ID could not be loaded, if the
-// producer ID has fatally errored, or if the context is canceled.
+// producer ID has fatally errored, if the context is canceled, or while
+// EndTransaction does not know whether its last commit or abort happened.
 func (cl *Client) ProducerID(ctx context.Context) (int64, int16, error) {
 	var (
 		id    int64
@@ -1058,7 +1069,16 @@ type producerID struct {
 	err   error
 }
 
-var errReloadProducerID = errors.New("producer id needs reloading")
+// The producer ID and epoch of an EndTxn, and whether the EndTxn commits.
+// EndTransaction recovers the producer ID after the EndTxn ends the
+// transaction if recoverID is set: the EndTxn is an abort at a producer ID that
+// needs recovery.
+type sentEndTxn struct {
+	id        int64
+	epoch     int16
+	commit    bool
+	recoverID bool
+}
 
 // producerID returns, loading if necessary, the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
@@ -1067,6 +1087,12 @@ func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error)
 	p := &cl.producer
 
 	id := p.id.Load().(*producerID)
+	// As in Java, nothing reloads the producer ID while we do not know
+	// whether an EndTxn happened: the reload's InitProducerID would abort a
+	// transaction whose commit the caller can still resend.
+	if p.endUnconfirmed.Load() != nil {
+		return id.id, id.epoch, errEndTxnUnconfirmed
+	}
 	if errors.Is(id.err, errReloadProducerID) {
 		p.idMu.Lock()
 		defer p.idMu.Unlock()
@@ -1248,6 +1274,14 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 		if kerr.IsRetriable(err) || errors.Is(err, kerr.ConcurrentTransactions) {
 			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization resulted in retryable error, discarding initialization attempt", "err", err)
 			return &producerID{lastID, lastEpoch, err}, false
+		}
+		// Kafka answers a fenced InitProducerID with PRODUCER_FENCED from
+		// v4, and with INVALID_PRODUCER_EPOCH only below v4. At v4+, we
+		// turn INVALID_PRODUCER_EPOCH into the fatal PRODUCER_FENCED, so
+		// that maybeRecoverProducerID does not retry the InitProducerID
+		// on every produce (KIP-588).
+		if req.Version >= 4 && errors.Is(err, kerr.InvalidProducerEpoch) {
+			err = kerr.ProducerFenced
 		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
 		return &producerID{lastID, lastEpoch, err}, true

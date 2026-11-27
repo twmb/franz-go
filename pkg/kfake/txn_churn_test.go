@@ -7,7 +7,10 @@ package kfake
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -86,6 +89,16 @@ func failAllProduces(c *Cluster, topic string) {
 	})
 }
 
+// bufferedReadHook calls BufferedProduceRecords on every response, as a
+// metrics hook can.
+type bufferedReadHook struct{ cl atomic.Pointer[kgo.Client] }
+
+func (h *bufferedReadHook) OnBrokerRead(kgo.BrokerMetadata, int16, int, time.Duration, time.Duration, error) {
+	if cl := h.cl.Load(); cl != nil {
+		cl.BufferedProduceRecords()
+	}
+}
+
 // observeEndTxns installs an observing fault that counts EndTxn requests
 // without altering them.
 func observeEndTxns(c *Cluster) *FaultHandle {
@@ -100,6 +113,10 @@ func observeEndTxns(c *Cluster) *FaultHandle {
 // append, so a failed append can leave a server-side ongoing transaction
 // that only the transaction timeout would otherwise clear, and under TV2
 // every transaction must end with an epoch bump before the next begins.
+//
+// The client also has a hook that calls BufferedProduceRecords on every
+// response, which must not deadlock with the producer ID reload in
+// BeginTransaction.
 func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-v2-abort"))
@@ -107,9 +124,18 @@ func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	endTxns := observeEndTxns(c)
 	failAllProduces(c, "audit-v2-abort")
 
-	cl := newPlainClient(t, c, kgo.TransactionalID("audit-v2-abort"))
-	if err := cl.BeginTransaction(); err != nil {
-		t.Fatalf("BeginTransaction: %v", err)
+	hook := new(bufferedReadHook)
+	cl := newPlainClient(t, c, kgo.TransactionalID("audit-v2-abort"), kgo.WithHooks(hook))
+	hook.cl.Store(cl)
+	begun := make(chan error, 1)
+	go func() { begun <- cl.BeginTransaction() }()
+	select {
+	case err := <-begun:
+		if err != nil {
+			t.Fatalf("BeginTransaction: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("BeginTransaction's producer ID load did not return within 5s while the hook calls BufferedProduceRecords")
 	}
 	r := &kgo.Record{Topic: "audit-v2-abort", Value: []byte("v")}
 	if err := cl.ProduceSync(context.Background(), r).FirstErr(); err == nil {
@@ -120,6 +146,34 @@ func TestAuditTxnV2AbortAfterFailedProduces(t *testing.T) {
 	}
 	if endTxns.Hits() == 0 {
 		t.Fatal("BUG REPRODUCED: EndTransaction(TryAbort) issued no EndTxn after failed transactional produces under KIP-890p2; the broker-side transaction is left ongoing until the transaction timeout")
+	}
+
+	// UNKNOWN_PRODUCER_ID after the log start moved past our last acked
+	// offset fails the produce, rather than reloading the producer ID
+	// mid-transaction and retrying into a new transaction.
+	if err := cl.BeginTransaction(); err != nil {
+		t.Fatalf("BeginTransaction: %v", err)
+	}
+	if err := cl.ProduceSync(context.Background(), r).FirstErr(); err != nil {
+		t.Fatalf("ProduceSync: %v", err)
+	}
+	c.ControlKey(int16(kmsg.Produce), func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		req := kreq.(*kmsg.ProduceRequest)
+		resp := req.ResponseKind().(*kmsg.ProduceResponse)
+		for _, rt := range req.Topics {
+			st := kmsg.ProduceResponseTopic{Topic: rt.Topic, TopicID: rt.TopicID}
+			for _, rp := range rt.Partitions {
+				st.Partitions = append(st.Partitions, kmsg.ProduceResponseTopicPartition{Partition: rp.Partition, ErrorCode: kerr.UnknownProducerID.Code, LogStartOffset: 1000})
+			}
+			resp.Topics = append(resp.Topics, st)
+		}
+		return resp, nil, true
+	})
+	if err := cl.ProduceSync(context.Background(), r).FirstErr(); !errors.Is(err, kerr.UnknownProducerID) {
+		t.Fatalf("produce after the truncation: got %v, want UNKNOWN_PRODUCER_ID", err)
+	}
+	if err := cl.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+		t.Fatalf("EndTransaction after the truncation: %v", err)
 	}
 }
 
@@ -182,13 +236,17 @@ func TestAuditTxnV2MaxVersionsPinnedProduce(t *testing.T) {
 
 // Coordinator-churn sound guard: an EndTxn that lands on a moved coordinator
 // gets NOT_COORDINATOR; the coordinator-request wrapper must delete the
-// cached coordinator, re-look it up, and retry, so a single NOT_COORDINATOR
-// never fails a commit. This holds today; keep it holding.
+// cached coordinator, re-look it up, and retry, so a NOT_COORDINATOR never
+// fails a commit. EndTransaction resends EndTxn past RequestRetries, so the
+// commit survives more NOT_COORDINATOR answers than RequestRetries allows.
 func TestAuditTxnEndTxnNotCoordinatorRetried(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t, NumBrokers(1), SeedTopics(1, "audit-endtxn-nc"))
 
-	cl := newPlainClient(t, c, kgo.TransactionalID("audit-endtxn-nc"))
+	cl := newPlainClient(t, c, kgo.TransactionalID("audit-endtxn-nc"),
+		kgo.RequestRetries(1),
+		kgo.RetryBackoffFn(func(int) time.Duration { return 10 * time.Millisecond }),
+	)
 	if err := cl.BeginTransaction(); err != nil {
 		t.Fatalf("BeginTransaction: %v", err)
 	}
@@ -197,12 +255,12 @@ func TestAuditTxnEndTxnNotCoordinatorRetried(t *testing.T) {
 		t.Fatalf("ProduceSync: %v", err)
 	}
 
-	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.NotCoordinator})
+	injected := c.Fault(Fault{Keys: []kmsg.Key{kmsg.EndTxn}, Err: kerr.NotCoordinator, Count: 3})
 
 	if err := cl.EndTransaction(context.Background(), kgo.TryCommit); err != nil {
-		t.Fatalf("EndTransaction did not survive one NOT_COORDINATOR (injected %d): %v", injected.Hits(), err)
+		t.Fatalf("EndTransaction did not survive three NOT_COORDINATOR (injected %d): %v", injected.Hits(), err)
 	}
-	if injected.Hits() != 1 {
-		t.Fatalf("expected exactly one injected NOT_COORDINATOR, got %d", injected.Hits())
+	if injected.Hits() != 3 {
+		t.Fatalf("expected exactly three injected NOT_COORDINATOR, got %d", injected.Hits())
 	}
 }

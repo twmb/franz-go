@@ -466,6 +466,9 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 			return true // whatever caused our produce, we did nothing, so keep going
 		case errors.Is(err, ErrClientClosed):
 			s.cl.failBufferedRecords(err)
+		case errors.Is(err, errEndTxnUnconfirmed):
+			s.cl.cfg.logger.Log(LogLevelWarn, "failing records buffered across EndTransaction because the last EndTransaction did not learn whether its commit or abort happened", "broker", logID(s.nodeID))
+			s.cl.failBufferedRecords(err)
 		default:
 			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", logID(s.nodeID), "err", err)
 			s.cl.failBufferedRecords(err)
@@ -548,9 +551,8 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 				// decrement inflight twice and could re-drain batches
 				// that are already in flight. Failing the producer ID
 				// delivers this error to all buffered records on the
-				// next drain. The error can be TransactionAbortable
-				// or InvalidProducerEpoch, both potentially
-				// recoverable in EndTransaction.
+				// next drain. The error can be TransactionAbortable,
+				// which is recoverable in EndTransaction.
 				//
 				// We do not fail all buffered records here,
 				// because that can lead to undesirable behavior
@@ -765,7 +767,14 @@ func (s *sink) issueTxnReq(
 			// the subsequent produce fails with the same abortable
 			// error, and the record promises carry it to the user (who
 			// then aborts; recovery happens via EndTransaction).
-			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil && err != kerr.TransactionAbortable {
+			err := kerr.ErrorForCode(partition.ErrorCode)
+			// INVALID_PRODUCER_EPOCH is Kafka's fence below v2, and we
+			// treat INVALID_PRODUCER_EPOCH as PRODUCER_FENCED, as Java
+			// does.
+			if errors.Is(err, kerr.InvalidProducerEpoch) {
+				err = kerr.ProducerFenced
+			}
+			if err != nil && err != kerr.TransactionAbortable {
 				// An errored partition that we did not ask to add must
 				// not strip a batch nor fail the producer ID: it could
 				// name a partition added by an earlier request of this
@@ -1216,7 +1225,12 @@ func (s *sink) handleReqRespBatch(
 		// epoch rather than resending under its old one (see tryAddBatch).
 		batch.pinned = false
 
-		if batch.owner.lastAckedOffset >= 0 && rp.LogStartOffset > batch.owner.lastAckedOffset {
+		// A transactional producer cannot reload its producer ID
+		// mid-transaction: the reload's InitProducerID aborts the open
+		// transaction and what the transaction already produced, and
+		// later produces would join a new transaction. The producer ID
+		// is failed below instead.
+		if s.cl.cfg.txnID == nil && batch.owner.lastAckedOffset >= 0 && rp.LogStartOffset > batch.owner.lastAckedOffset {
 			s.cl.cfg.logger.Log(LogLevelInfo, "partition prefix truncation to after our last produce caused the broker to forget us; no loss occurred, bumping producer epoch and resetting sequence numbers",
 				"broker", logID(s.nodeID),
 				"topic", topic,

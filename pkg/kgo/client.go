@@ -708,6 +708,11 @@ func (cl *Client) Ping(ctx context.Context) error {
 // anymore. You may want to flush buffered records before purging if records
 // for a topic you are purging are currently in flight.
 //
+// Do not purge topics that are in active transactions. Doing so may result in
+// EndTransaction returning without ending the transaction or, against Kafka
+// 4.0+, in EndTransaction(TryCommit) aborting the transaction and returning
+// nil.
+//
 // For consuming, this removes all concept of the topic from being consumed.
 // This is different from PauseFetchTopics, which literally pauses the fetching
 // of topics but keeps the topic information around for resuming fetching
